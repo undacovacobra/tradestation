@@ -163,19 +163,104 @@ export class TradovateExecutor implements Executor {
     await this.snapshot(`switched-${account.tradovateLabel}`);
   }
 
-  /** Open a position. Symbol + quantity come from what you've set on the UI. */
+  /**
+   * Open a position. The symbol comes from whatever contract you've set on the
+   * Tradovate chart (one fixed ticker), but the QUANTITY is set from the alert:
+   * we type order.quantity into the size box before clicking Buy/Sell.
+   */
   async placeOrder(account: AccountSpec, order: OrderRequest): Promise<void> {
     await this.switchAccount(account);
     try {
+      await this.setQuantity(order.quantity);
       const label = order.action === "buy" ? TXT.buy : TXT.sell;
       await this.p.getByText(label, { exact: true }).first().click({ timeout: 10_000 });
       await this.confirmIfPrompted();
-      await this.snapshot(`order-${order.action}-${account.tradovateLabel}`);
-      log.trade(`Clicked ${label} on ${account.name} [${account.tradovateLabel}]`);
+      await this.snapshot(`order-${order.action}-${order.quantity}-${account.tradovateLabel}`);
+      log.trade(`Clicked ${label} x${order.quantity} on ${account.name} [${account.tradovateLabel}]`);
     } catch (err) {
       await this.snapshot(`order-failed-${account.tradovateLabel}`);
       throw new Error(`Order placement failed on ${account.name}: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * Type the order size into the quantity box next to Buy/Sell. The box is an
+   * editable combobox (shows e.g. "1" with a dropdown of presets), so we find
+   * the small numeric <input> in the top order toolbar, clear it, and type the
+   * requested size. We then read the value back to confirm it took.
+   *
+   * Throws if it can't set/confirm the size — better to skip the trade than to
+   * fire an order with the wrong number of contracts.
+   */
+  private async setQuantity(quantity: number): Promise<void> {
+    const target = String(quantity);
+    log.info(`Setting order size to ${target}…`);
+
+    // Locate the quantity input: a visible <input> in the top toolbar whose
+    // current value is all digits (the size box shows e.g. "1"). Tradovate's
+    // React class names are auto-generated, so we match by shape/position, not class.
+    const handle = await this.p.evaluateHandle(() => {
+      const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+      const candidates = inputs.filter((el) => {
+        const r = el.getBoundingClientRect();
+        const onScreen = r.width > 0 && r.height > 0 && r.top >= 0 && r.top < 320;
+        return onScreen && /^\d+$/.test((el.value || "").trim());
+      });
+      return candidates[0] ?? null;
+    });
+
+    const el = handle.asElement();
+    if (!el) {
+      await handle.dispose();
+      await this.snapshot(`qty-input-not-found-${target}`);
+      throw new Error(
+        "Could not find the order size box (the small number box next to Buy/Sell). Check screenshots/.",
+      );
+    }
+
+    try {
+      await el.fill(target);
+      await el.press("Enter").catch(() => {});
+      await this.p.waitForTimeout(300);
+      const now = (await el.inputValue().catch(() => "")).trim();
+      if (now !== target) {
+        await this.snapshot(`qty-mismatch-${target}`);
+        throw new Error(`Order size box shows "${now}" but expected "${target}".`);
+      }
+      log.info(`Order size confirmed at ${now}.`);
+    } finally {
+      await handle.dispose();
+    }
+  }
+
+  /**
+   * SAFE test helper: set the order size box only, place no order. Used by the
+   * size test so we can confirm size-setting works even with the market closed.
+   */
+  async setOrderSize(quantity: number): Promise<void> {
+    await this.setQuantity(quantity);
+    await this.snapshot(`size-test-${quantity}`);
+  }
+
+  /** Diagnostic: log every <input> in the page so we can locate the size box. */
+  async debugToolbarInputs(): Promise<void> {
+    const info = await this.p.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+      return inputs.map((el, i) => {
+        const r = el.getBoundingClientRect();
+        return {
+          i,
+          type: el.type,
+          value: el.value,
+          placeholder: el.placeholder,
+          top: Math.round(r.top),
+          left: Math.round(r.left),
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+        };
+      });
+    });
+    log.info(`Page inputs found:\n${JSON.stringify(info, null, 2)}`);
   }
 
   /** Flatten the open position (the "Exit at Mkt & Cxl" button). */

@@ -10,6 +10,7 @@
     "test": "node --import tsx --test test/**/*.test.ts",
     "calibrate": "tsx src/executor/calibrate.ts",
     "switchtest": "tsx src/switchtest.ts",
+    "sizetest": "tsx src/sizetest.ts",
     "smoketest": "tsx src/smoketest.ts",
     "testhook": "tsx src/testhook.ts"
   },

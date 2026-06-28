@@ -43,9 +43,16 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
   be careful. Test only on demo / Tradovate "Simulation" mode.
 - **`LFE…` = Evaluation, `LFF…` = Funded.**
 - Demo accounts used in testing: `LFF05079261220001` and `LFE05079261220005`.
-- **The bot does NOT set symbol or quantity** — the user sets the contract and size on
-  the Tradovate screen; the bot only switches account and clicks Buy/Sell/Exit. Keep it
-  this way (far more robust).
+- **The bot does NOT set the symbol** — the user picks ONE fixed contract on the
+  Tradovate chart (e.g. MESU6). The bot does NOT type tickers (robustness choice; the
+  user confirmed they only ever trade one ticker).
+- **The bot DOES set the contract size (quantity) from the alert.** Each TradingView
+  alert carries a `quantity`; before clicking Buy/Sell the bot types that number into the
+  size box next to Buy/Sell. The size box is an **editable combobox** (shows e.g. "1",
+  presets 1/2/3/4/5/10/15/20/25, but accepts any typed number). Implemented in
+  `setQuantity()` in `src/executor/tradovate.ts`: it finds the small numeric `<input>` in
+  the top toolbar, fills it, presses Enter, then reads it back to confirm. If it can't
+  confirm the size it throws (skips the trade rather than sending the wrong size).
 - **Confirmed Tradovate UI labels** (in `src/executor/tradovate.ts`):
   - Login button text: `Login`; environment button: `Start Simulated Trading`
   - Buy: `Buy Mkt`; Sell: `Sell Mkt`; Close/flatten: `Exit at Mkt & Cxl`
@@ -60,7 +67,9 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 - `npm start` — run the webhook server (EXECUTOR=dryrun is safe; tradovate is live)
 - `npm run testhook` — fire sample buy/close alerts at a running server (verify webhook)
 - `npm run switchtest` — SAFE: cycle accounts, no orders (any time, market closed OK)
-- `npm run smoketest` — LIVE: buy→close on each account (needs market open; demo only)
+- `npm run sizetest 3` — SAFE: set the size box to 3, no order (any time, market closed OK)
+- `npm run smoketest [size]` — LIVE: buy→close on each account at `size` (default 1;
+  needs market open; demo only). Use a non-1 size to prove size-from-alert works.
 - `npm run calibrate` — open the trader to log in / inspect the UI
 
 ## Setup on a fresh clone (Windows)
