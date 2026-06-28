@@ -30,9 +30,27 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 - **Live buy → close test PASSED** (2026-06-28) on the live market, demo accounts,
   size 1 — set size → Buy Mkt → Exit → rotate, all working end to end.
 
+- **TradingView → bot link PROVEN** (2026-06-28, dry-run). Path: TradingView alert →
+  Cloudflare quick tunnel → bot. Saw `[DRY-RUN] Would BUY 1x MES1! on Demo 1`. Setup used:
+  - Bot server running (`npm start`, EXECUTOR=dryrun) listening on :3000.
+  - Tunnel: `cloudflared tunnel --url http://localhost:3000` (installed via
+    `winget install Cloudflare.cloudflared`). Gives an https `*.trycloudflare.com` URL.
+    ⚠️ Quick-tunnel URL is EPHEMERAL — changes on every restart; for always-on use a
+    named tunnel + the user's own domain. Health check: GET `<url>/health` → `{"ok":true}`.
+  - WEBHOOK_SECRET was changed from the default placeholder to a real random string.
+  - Test alert message (entry): `{"secret":"<secret>","action":"buy","symbol":"MES1!","quantity":1}`
+    posted to `<url>/webhook`. Note: rotation enforces one open round-trip at a time, so a
+    second entry with no close in between is correctly rejected; clear stuck test state with
+    `Remove-Item data\state.json` then restart.
+
 **Pending:**
-- **Connect TradingView** for real: tunnel (Cloudflare/ngrok) + webhook URL + test alert.
-  This is the next big step — get a live alert to actually reach the running bot.
+- **Wire the user's REAL strategy alerts** (entry + exit) to send this JSON to the webhook.
+  Key gotcha: the bot needs the EXIT to arrive as `action:"close"` (not buy/sell), because
+  `{{strategy.order.action}}` reports the exit as the opposite side. Plan from types.ts =
+  separate entry and exit alerts (or a Pine `alert()`/`alert_message` that emits "close").
+  Entry msg can use `"action":"{{strategy.order.action}}","quantity":{{strategy.order.contracts}}`.
+- **Flip to live** when ready: set `EXECUTOR=tradovate` in .env (drives the real browser).
+- **Stable tunnel** for always-on (named Cloudflare tunnel + domain) so the URL stops changing.
 - **Migration** (mostly moot now): the user RUNS from `C:\Users\tjero\folder-finder\trading-bot`
   (a subfolder of the `undacovacobra/folder-finder` repo). The bot's own repo is
   `undacovacobra/tradestation`. To deliver tradestation code into the running folder we
