@@ -25,14 +25,22 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 - Webhook server (secret-protected, validates payloads, serializes orders).
 - Live Tradovate **account switching** (verified on the user's two demo accounts).
 - **Auto-login** (clicks "Login" → "Start Simulated Trading" → chart), hands-free.
+- **Size-from-alert** — bot types the alert's `quantity` into the size box before
+  Buy/Sell. Verified safe (`npm run sizetest 3`) and confirmed at "Order size confirmed at 3".
+- **Live buy → close test PASSED** (2026-06-28) on the live market, demo accounts,
+  size 1 — set size → Buy Mkt → Exit → rotate, all working end to end.
 
 **Pending:**
-- **Live buy → close test** (`npm run smoketest`) — needs the **futures market open**
-  (~5pm CT / 6pm ET). The user planned to run this on their demo accounts with size 1.
 - **Connect TradingView** for real: tunnel (Cloudflare/ngrok) + webhook URL + test alert.
-- **Migration**: the user wants this bot to live in its own repo `undacovacobra/tradestation`
-  (this code was copied there). They may still have an older clone at
-  `folder-finder/trading-bot` that is fully set up (env, accounts, saved login).
+  This is the next big step — get a live alert to actually reach the running bot.
+- **Migration** (mostly moot now): the user RUNS from `C:\Users\tjero\folder-finder\trading-bot`
+  (a subfolder of the `undacovacobra/folder-finder` repo). The bot's own repo is
+  `undacovacobra/tradestation`. To deliver tradestation code into the running folder we
+  added a git remote `ts` and pulled individual files via
+  `cmd /c "git show ts/<branch>:<path> > <localpath>"` (paths differ: tradestation has
+  src/ at root; folder-finder has trading-bot/src/). Login/accounts/.env live only in the
+  running folder. A clean future migration = fresh clone of tradestation + copy over .env,
+  data/accounts.json, and .tradovate-session.
 
 ## Key facts & decisions
 - **One Tradovate login, many accounts.** Bot switches the active account in the UI.
