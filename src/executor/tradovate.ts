@@ -17,19 +17,21 @@ import { log } from "../logger.js";
  * as a knob to turn, not gospel.
  */
 const SELECTORS = {
-  /** An element that only exists once you're logged in and the trader has loaded. */
-  loggedInMarker: "text=/Buy/i",
-  /** The account selector / dropdown that shows the active account. */
-  accountSelector: '[data-testid="account-selector"], .account-selector, button:has-text("Account")',
-  /** The symbol search/input box. */
-  symbolInput: 'input[placeholder*="Symbol" i], input[name="symbol"]',
-  qtyInput: 'input[name="orderQty"], input[placeholder*="Qty" i]',
-  buyButton: 'button:has-text("Buy")',
-  sellButton: 'button:has-text("Sell")',
+  /** "Buy Mkt" only renders once you're logged in and the trader has loaded. */
+  loggedInMarker: 'text="Buy Mkt"',
+  /** Market buy / sell buttons (confirmed from the live UI). */
+  buyButton: 'button:has-text("Buy Mkt")',
+  sellButton: 'button:has-text("Sell Mkt")',
+  /** Flatten the position + cancel working orders (the "Exit at Mkt & Cxl" button). */
+  closePosition: 'button:has-text("Exit at Mkt")',
   /** Confirmation button if Tradovate shows an order confirmation modal. */
   confirmOrder: 'button:has-text("Place Order"), button:has-text("Confirm")',
-  /** Close/flatten controls for the open position. */
-  closePosition: 'button:has-text("Close"), button:has-text("Flatten")',
+
+  // ── Still to confirm from the live UI (see calibration) ──────────────────
+  /** The account dropdown at the top (shows the current account id). */
+  accountSelector: '[data-testid="account-selector"], .account-selector',
+  /** Quantity field (shows "5" in the screenshot). */
+  qtyInput: 'input[name="orderQty"], input[placeholder*="Qty" i]',
 };
 
 /**
