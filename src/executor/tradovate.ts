@@ -24,6 +24,9 @@ const TXT = {
   sell: "Sell Mkt",
   exit: "Exit at Mkt", // "Exit at Mkt & Cxl" — flatten position + cancel orders
   confirm: /Place Order|Confirm|OK/i, // confirmation modal button, if one appears
+  // Auto-login flow (exact button labels from the live pages).
+  loginButton: "Login",
+  simButton: /Start Simulated Trading/i,
 };
 
 /**
@@ -88,12 +91,14 @@ export class TradovateExecutor implements Executor {
 
   /** Best-effort automatic login: click Login, then the Simulated button. */
   private async tryAutoLogin(): Promise<void> {
-    const loginBtn = this.p.getByRole("button", { name: /log\s?in|sign\s?in/i }).first();
+    // 1. Click the blue "Login" button (username/password are pre-filled).
+    const loginBtn = this.p.getByText(TXT.loginButton, { exact: true }).first();
     if (await loginBtn.isVisible({ timeout: 8_000 }).catch(() => false)) {
       await loginBtn.click().catch(() => {});
     }
-    const simBtn = this.p.getByText(/simulat/i).first();
-    if (await simBtn.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    // 2. On the "Select a Trading Mode" page, click "Start Simulated Trading".
+    const simBtn = this.p.getByText(TXT.simButton).first();
+    if (await simBtn.isVisible({ timeout: 15_000 }).catch(() => false)) {
       await simBtn.click().catch(() => {});
     }
     // Give the trader UI a moment to load after the environment is chosen.
