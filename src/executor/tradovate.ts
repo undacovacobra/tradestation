@@ -17,7 +17,9 @@ import { log } from "../logger.js";
  */
 const TXT = {
   loggedInMarker: "Buy Mkt", // only renders once logged in + trader loaded
-  accountLabel: "ACCOUNT", // the top-bar widget that opens the account menu
+  // Tradovate account ids look like LFF05079261220001 / LFE05079261220005.
+  // Clicking the one shown in the top bar opens the account menu.
+  accountIdPattern: /LF[EF]\d{6,}/,
   buy: "Buy Mkt",
   sell: "Sell Mkt",
   exit: "Exit at Mkt", // "Exit at Mkt & Cxl" — flatten position + cancel orders
@@ -81,11 +83,14 @@ export class TradovateExecutor implements Executor {
   private async switchAccount(account: AccountSpec): Promise<void> {
     log.info(`Switching active account to ${account.name} [${account.tradovateLabel}]`);
     try {
-      await this.p.getByText(TXT.accountLabel, { exact: true }).first().click({ timeout: 10_000 });
-      // The id shows both in the top widget and in the menu row; the menu row
-      // renders last, so .last() targets the clickable list item.
+      // Open the account menu by clicking the account id shown in the top bar.
+      // Before the menu opens, an account id (LFE…/LFF…) only appears there, so
+      // .first() reliably hits the dropdown toggle.
+      await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
+      // Now click the target account's row. The id appears in both the top bar
+      // and the menu row; .last() targets the menu list item.
       await this.p
-        .getByText(account.tradovateLabel, { exact: true })
+        .getByText(account.tradovateLabel, { exact: false })
         .last()
         .click({ timeout: 10_000 });
       // Give the trader a moment to repoint at the newly selected account.
