@@ -1,0 +1,19 @@
+{
+  "accounts": [
+    {
+      "name": "Account 1",
+      "tradovateLabel": "DEMO1234567",
+      "enabled": true
+    },
+    {
+      "name": "Account 2",
+      "tradovateLabel": "DEMO2345678",
+      "enabled": true
+    },
+    {
+      "name": "Account 3",
+      "tradovateLabel": "DEMO3456789",
+      "enabled": true
+    }
+  ]
+}
