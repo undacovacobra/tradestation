@@ -98,6 +98,16 @@ export class TradovateExecutor implements Executor {
     }
   }
 
+  /**
+   * Switch to an account WITHOUT placing any order. Safe to run any time
+   * (market open or closed) — used by the switch-only test. Saves a screenshot
+   * so we can confirm the right account became active.
+   */
+  async selectAccount(account: AccountSpec): Promise<void> {
+    await this.switchAccount(account);
+    await this.snapshot(`switched-${account.tradovateLabel}`);
+  }
+
   /** Open a position. Symbol + quantity come from what you've set on the UI. */
   async placeOrder(account: AccountSpec, order: OrderRequest): Promise<void> {
     await this.switchAccount(account);

@@ -9,6 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "test": "node --import tsx --test test/**/*.test.ts",
     "calibrate": "tsx src/executor/calibrate.ts",
+    "switchtest": "tsx src/switchtest.ts",
     "smoketest": "tsx src/smoketest.ts"
   },
   "dependencies": {
