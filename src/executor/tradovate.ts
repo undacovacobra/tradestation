@@ -91,18 +91,38 @@ export class TradovateExecutor implements Executor {
 
   /** Best-effort automatic login: click Login, then the Simulated button. */
   private async tryAutoLogin(): Promise<void> {
-    // 1. Click the blue "Login" button (username/password are pre-filled).
-    const loginBtn = this.p.getByText(TXT.loginButton, { exact: true }).first();
-    if (await loginBtn.isVisible({ timeout: 8_000 }).catch(() => false)) {
-      await loginBtn.click().catch(() => {});
+    log.info(`Auto-login: current page = ${this.p.url()}`);
+    await this.snapshot("autologin-1-loginpage");
+
+    // 1. Click the blue "Login" button. Try several ways since Tradovate's
+    //    buttons are custom elements that getByRole won't always see.
+    const loginCandidates = [
+      this.p.getByText(TXT.loginButton, { exact: true }),
+      this.p.getByRole("button", { name: TXT.loginButton }),
+      this.p.locator('button:has-text("Login"), [role="button"]:has-text("Login")'),
+    ];
+    let clickedLogin = false;
+    for (const cand of loginCandidates) {
+      const el = cand.first();
+      if (await el.isVisible({ timeout: 4_000 }).catch(() => false)) {
+        await el.click({ timeout: 5_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
+        clickedLogin = true;
+        break;
+      }
     }
+    log.info(`Auto-login: clicked Login = ${clickedLogin}`);
+    await this.p.waitForTimeout(2_500).catch(() => {});
+    await this.snapshot("autologin-2-after-login");
+
     // 2. On the "Select a Trading Mode" page, click "Start Simulated Trading".
     const simBtn = this.p.getByText(TXT.simButton).first();
-    if (await simBtn.isVisible({ timeout: 15_000 }).catch(() => false)) {
-      await simBtn.click().catch(() => {});
+    const simVisible = await simBtn.isVisible({ timeout: 15_000 }).catch(() => false);
+    log.info(`Auto-login: 'Start Simulated Trading' visible = ${simVisible}`);
+    if (simVisible) {
+      await simBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Sim click error: ${e.message}`));
     }
-    // Give the trader UI a moment to load after the environment is chosen.
     await this.p.waitForTimeout(2_000).catch(() => {});
+    await this.snapshot("autologin-3-after-sim");
   }
 
   /**
