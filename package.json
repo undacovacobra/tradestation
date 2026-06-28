@@ -8,7 +8,8 @@
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "test": "node --import tsx --test test/**/*.test.ts",
-    "calibrate": "tsx src/executor/calibrate.ts"
+    "calibrate": "tsx src/executor/calibrate.ts",
+    "smoketest": "tsx src/smoketest.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
