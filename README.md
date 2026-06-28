@@ -96,6 +96,16 @@ and private. The server rejects any alert without the correct secret.
 npm test
 ```
 
+## Roadmap (planned, not yet built)
+- **Per-strategy account groups.** Account ids encode their type: `LFE…` =
+  evaluation, `LFF…` = funded. The goal is **two independent rotations running at
+  once** — one strategy cycles only eval accounts, another cycles only funded
+  accounts, each with its own open-trade tracking. Implementation sketch: add a
+  `group` field per account in `accounts.json`, include a `group` (or `strategy`)
+  field in the TradingView alert, and keep a separate `AccountRotation` instance
+  per group keyed off that field.
+- Additional cycling filters (to be specified) layered on top of the rotation.
+
 ## Known limitations
 - Selectors need calibration and can break when Tradovate ships UI changes.
 - "Day" boundary is UTC; futures reset ~17:00 CT — adjust `defaultToday()` in
