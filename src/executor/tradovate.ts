@@ -65,14 +65,39 @@ export class TradovateExecutor implements Executor {
       log.info("Tradovate session is logged in.");
       return;
     }
+
+    // Try to log in automatically: click Login (creds are saved on the page),
+    // then the "Simulated" environment button.
+    log.info("Not logged in — attempting automatic login (Login → Simulated)…");
+    await this.tryAutoLogin();
+    if (await marker.isVisible({ timeout: 4_000 }).catch(() => false)) {
+      log.info("Automatic login succeeded.");
+      return;
+    }
+
+    // Fallback: let the human finish it in the visible window.
     if (!this.config.headed) {
       throw new Error(
-        "Not logged into Tradovate and running headless. Start once with HEADED=true and log in manually.",
+        "Automatic login did not complete and running headless. Start once with HEADED=true and log in manually.",
       );
     }
-    log.warn("Not logged in. Complete login + 2FA in the opened browser window…");
+    log.warn("Could not finish login automatically — please click through it in the browser window…");
     await marker.waitFor({ state: "visible", timeout: 300_000 });
-    log.info("Login detected — session saved for next time.");
+    log.info("Login detected — continuing.");
+  }
+
+  /** Best-effort automatic login: click Login, then the Simulated button. */
+  private async tryAutoLogin(): Promise<void> {
+    const loginBtn = this.p.getByRole("button", { name: /log\s?in|sign\s?in/i }).first();
+    if (await loginBtn.isVisible({ timeout: 8_000 }).catch(() => false)) {
+      await loginBtn.click().catch(() => {});
+    }
+    const simBtn = this.p.getByText(/simulat/i).first();
+    if (await simBtn.isVisible({ timeout: 10_000 }).catch(() => false)) {
+      await simBtn.click().catch(() => {});
+    }
+    // Give the trader UI a moment to load after the environment is chosen.
+    await this.p.waitForTimeout(2_000).catch(() => {});
   }
 
   /**
