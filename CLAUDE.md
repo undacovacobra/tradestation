@@ -69,6 +69,13 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
   be careful. Test only on demo / Tradovate "Simulation" mode.
 - **`LFE…` = Evaluation, `LFF…` = Funded.**
 - Demo accounts used in testing: `LFF05079261220001` and `LFE05079261220005`.
+- **CURRENT ACCOUNT POLICY (user decision 2026-06-28): EVALUATION ONLY.** Only `LFE…`
+  accounts go in `data/accounts.json` (leave `LFF…` out — the bot only touches accounts in
+  that file). For now there's just one eval account (`LFE05079261220005`), and the user
+  wants it **reused on every trigger**, so set **`ONCE_PER_DAY=false`**. Verified in
+  `rotation.ts`: with one account and oncePerDay off, after each close `currentIndex` points
+  back to the same account, so it keeps reusing it. (Adding more `LFE…` accounts later will
+  cycle among just those — no code change needed.)
 - **The bot does NOT set the symbol** — the user picks ONE fixed contract on the
   Tradovate chart (e.g. MESU6). The bot does NOT type tickers (robustness choice; the
   user confirmed they only ever trade one ticker).
@@ -97,6 +104,39 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 - `npm run smoketest [size]` — LIVE: buy→close on each account at `size` (default 1;
   needs market open; demo only). Use a non-1 size to prove size-from-alert works.
 - `npm run calibrate` — open the trader to log in / inspect the UI
+
+## Starting on a fresh computer (paste-in prompt for the user)
+If the user moves to a new Windows PC, they paste this prompt to start a session.
+Keep it in sync with current decisions (eval-only, ONCE_PER_DAY=false, secret):
+
+> Hi — continuing my Tradovate account-cycler bot. Please read CLAUDE.md first, then help me.
+>
+> IMPORTANT about me: I'm non-technical. Go ONE small step at a time, plain language, no big
+> lists or jargon. Exact click-by-click / copy-paste instructions, tell me what a good result
+> looks like, and wait for me to confirm before the next step.
+>
+> MY SITUATION: brand-new Windows computer, nothing set up — maybe no Node, Git, or anything.
+> Get the bot fully working here from scratch, then continue where we left off. Check what's
+> already installed before installing anything.
+>
+> 1. Install if missing: Git, and Node.js (v22+).
+> 2. Get the code: clone "undacovacobra/tradestation", branch "claude/trading-bot-continue-37xi2u".
+> 3. npm install, plus the Playwright Chromium browser.
+> 4. Settings file (.env): EXECUTOR=dryrun (SAFE practice mode), ONCE_PER_DAY=false, and
+>    WEBHOOK_SECRET exactly: QZDB2gliveB1uCGJk3S2BS68Aj6oN75M
+> 5. data/accounts.json: EVALUATION ONLY — just my one LFE account: LFE05079261220005
+>    (do NOT add the LFF funded account). It should reuse this one account on every trigger.
+> 6. Open Tradovate once so I can log in (saved after). My fixed contract is MES (MESU6);
+>    the bot sets the SIZE itself from each alert.
+> 7. Verify with SAFE tests (no real trades): account-switch test, then size test.
+> 8. Re-set up the Cloudflare tunnel (install cloudflared, start tunnel). Remind me the
+>    trycloudflare web address CHANGES each restart, so I must update it in TradingView.
+>
+> Where we left off: pipeline proven in dry-run (TradingView → tunnel → bot → picks account →
+> sets size → pretend buy/close). Next real step is wiring my strategy's entry + exit alerts
+> (exit must arrive as action:"close"), then flipping EXECUTOR=tradovate to go live.
+>
+> Start by checking what's already installed.
 
 ## Setup on a fresh clone (Windows)
 1. `npm install`
