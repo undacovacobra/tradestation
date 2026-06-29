@@ -73,7 +73,7 @@ export class TradovateExecutor implements Executor {
     // then the "Simulated" environment button.
     log.info("Not logged in — attempting automatic login (Login → Simulated)…");
     await this.tryAutoLogin();
-    if (await marker.isVisible({ timeout: 4_000 }).catch(() => false)) {
+    if (await marker.isVisible({ timeout: 15_000 }).catch(() => false)) {
       log.info("Automatic login succeeded.");
       return;
     }
@@ -89,23 +89,59 @@ export class TradovateExecutor implements Executor {
     log.info("Login detected — continuing.");
   }
 
-  /** Best-effort automatic login: click Login, then the Simulated button. */
+  /**
+   * Best-effort automatic login. The browser profile (SESSION_DIR) remembers the
+   * Tradovate username/password and pre-fills them, but browser autofill often
+   * doesn't fire the input events Tradovate's React form needs, so its Login
+   * button stays disabled and a plain click does nothing. So we:
+   *   1. Click the fields (a trusted gesture that also unlocks autofilled values),
+   *      then re-dispatch input/change so the form registers the values.
+   *   2. Submit via Enter AND by clicking the Login button (whichever works).
+   *   3. Click "Start Simulated Trading" on the mode-select page.
+   */
   private async tryAutoLogin(): Promise<void> {
     log.info(`Auto-login: current page = ${this.p.url()}`);
     await this.snapshot("autologin-1-loginpage");
 
-    // 1. Click the blue "Login" button. Try several ways since Tradovate's
-    //    buttons are custom elements that getByRole won't always see.
+    // 1. If a login form is present, commit the pre-filled credentials.
+    const pwd = this.p.locator('input[type="password"]').first();
+    const hasForm = await pwd.isVisible({ timeout: 4_000 }).catch(() => false);
+    if (hasForm) {
+      log.info("Auto-login: login form detected — committing pre-filled credentials.");
+      const user = this.p.locator('input[type="email"], input[type="text"]').first();
+      if (await user.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        await user.click({ timeout: 3_000 }).catch(() => {});
+      }
+      await pwd.click({ timeout: 3_000 }).catch(() => {});
+      // Re-fire input/change on every field so React picks up autofilled values.
+      await this.p
+        .evaluate(() => {
+          const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+          document.querySelectorAll("input").forEach((node) => {
+            const el = node as HTMLInputElement;
+            desc?.set?.call(el, el.value);
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        })
+        .catch(() => {});
+      // Most login forms submit when you press Enter in the password field.
+      await pwd.press("Enter").catch(() => {});
+      await this.p.waitForTimeout(1_500).catch(() => {});
+    }
+
+    // 2. Also click the "Login" button (covers forms that need the button click).
     const loginCandidates = [
+      this.p.getByRole("button", { name: /log\s*in|sign\s*in/i }),
       this.p.getByText(TXT.loginButton, { exact: true }),
-      this.p.getByRole("button", { name: TXT.loginButton }),
+      this.p.locator('button[type="submit"], input[type="submit"]'),
       this.p.locator('button:has-text("Login"), [role="button"]:has-text("Login")'),
     ];
     let clickedLogin = false;
     for (const cand of loginCandidates) {
       const el = cand.first();
-      if (await el.isVisible({ timeout: 4_000 }).catch(() => false)) {
-        await el.click({ timeout: 5_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
+      if (await el.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await el.click({ timeout: 4_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
         clickedLogin = true;
         break;
       }
@@ -114,7 +150,7 @@ export class TradovateExecutor implements Executor {
     await this.p.waitForTimeout(2_500).catch(() => {});
     await this.snapshot("autologin-2-after-login");
 
-    // 2. On the "Select a Trading Mode" page, click "Start Simulated Trading".
+    // 3. On the "Select a Trading Mode" page, click "Start Simulated Trading".
     const simBtn = this.p.getByText(TXT.simButton).first();
     const simVisible = await simBtn.isVisible({ timeout: 15_000 }).catch(() => false);
     log.info(`Auto-login: 'Start Simulated Trading' visible = ${simVisible}`);
