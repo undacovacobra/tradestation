@@ -24,7 +24,13 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
   optional once-per-day). Unit-tested (`npm test`, 4/4 pass).
 - Webhook server (secret-protected, validates payloads, serializes orders).
 - Live Tradovate **account switching** (verified on the user's two demo accounts).
-- **Auto-login** (clicks "Login" → "Start Simulated Trading" → chart), hands-free.
+- **Auto-login — fully hands-free** (verified 2026-06-29 on a fresh PC). The browser
+  profile pre-fills the Tradovate username/password; the bot reads those values, RE-TYPES
+  them (real keystrokes so the React form commits), clicks the EXACT blue "Login" button
+  (not the Google/Apple ones), then "Start Simulated Trading" → chart. Key fix: use
+  `waitFor({state:'visible'})` (helper `visibleWithin`) NOT `isVisible()` — `isVisible()`
+  peeks once and returns instantly, so detection fired ~48ms after load, before the SPA
+  rendered. Now waits up to 25s for the login form, 20s for the mode page.
 - **Size-from-alert** — bot types the alert's `quantity` into the size box before
   Buy/Sell. Verified safe (`npm run sizetest 3`) and confirmed at "Order size confirmed at 3".
 - **Live buy → close test PASSED** (2026-06-28) on the live market, demo accounts,
@@ -69,13 +75,14 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
   be careful. Test only on demo / Tradovate "Simulation" mode.
 - **`LFE…` = Evaluation, `LFF…` = Funded.**
 - Demo accounts used in testing: `LFF05079261220001` and `LFE05079261220005`.
-- **CURRENT ACCOUNT POLICY (user decision 2026-06-28): EVALUATION ONLY.** Only `LFE…`
-  accounts go in `data/accounts.json` (leave `LFF…` out — the bot only touches accounts in
-  that file). For now there's just one eval account (`LFE05079261220005`), and the user
-  wants it **reused on every trigger**, so set **`ONCE_PER_DAY=false`**. Verified in
-  `rotation.ts`: with one account and oncePerDay off, after each close `currentIndex` points
-  back to the same account, so it keeps reusing it. (Adding more `LFE…` accounts later will
-  cycle among just those — no code change needed.)
+- **ACCOUNT POLICY UPDATE (2026-06-29): now FUNDED.** The user PASSED the evals, so they
+  no longer have `LFE…` accounts — they now run **funded `LFF…`** accounts. Current testing
+  uses two funded **demo/sim** accounts (shown as "Demo & Active"): `LFF05079261220001` and
+  `LFF05079261220002`, both in `data/accounts.json`, cycling between them. `ONCE_PER_DAY=false`
+  so it cycles continuously (1→2→1→2…); with a single account it would just reuse that one.
+  (Earlier 2026-06-28 decision was eval-only/one account — superseded now that evals passed.)
+  ⚠️ These funded accounts are REAL money once live — only the SAFE tests (switch/size) and
+  dry-run have been used so far; confirm with the user before any live (EXECUTOR=tradovate) run.
 - **The bot does NOT set the symbol** — the user picks ONE fixed contract on the
   Tradovate chart (e.g. MESU6). The bot does NOT type tickers (robustness choice; the
   user confirmed they only ever trade one ticker).
@@ -124,8 +131,8 @@ Keep it in sync with current decisions (eval-only, ONCE_PER_DAY=false, secret):
 > 3. npm install, plus the Playwright Chromium browser.
 > 4. Settings file (.env): EXECUTOR=dryrun (SAFE practice mode), ONCE_PER_DAY=false, and
 >    WEBHOOK_SECRET exactly: QZDB2gliveB1uCGJk3S2BS68Aj6oN75M
-> 5. data/accounts.json: EVALUATION ONLY — just my one LFE account: LFE05079261220005
->    (do NOT add the LFF funded account). It should reuse this one account on every trigger.
+> 5. data/accounts.json: my two FUNDED demo accounts (I passed my evals): LFF05079261220001
+>    and LFF05079261220002. ONCE_PER_DAY=false so it cycles between them continuously.
 > 6. Open Tradovate once so I can log in (saved after). My fixed contract is MES (MESU6);
 >    the bot sets the SIZE itself from each alert.
 > 7. Verify with SAFE tests (no real trades): account-switch test, then size test.
