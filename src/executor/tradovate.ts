@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page, type Locator } from "playwright";
 import type { Executor } from "./index.js";
 import type { AccountSpec, OrderRequest } from "../types.js";
 import type { Config } from "../config.js";
@@ -62,18 +62,31 @@ export class TradovateExecutor implements Executor {
     return this.page;
   }
 
+  /**
+   * Resolves true if `locator` becomes visible within `ms`. Note: Playwright's
+   * `isVisible()` does NOT wait (it peeks once and returns immediately), which
+   * made the login detection fire before the page had rendered. `waitFor`
+   * actually waits, so we use this helper everywhere we need to wait.
+   */
+  private async visibleWithin(locator: Locator, ms: number): Promise<boolean> {
+    return locator
+      .waitFor({ state: "visible", timeout: ms })
+      .then(() => true)
+      .catch(() => false);
+  }
+
   private async ensureLoggedIn(): Promise<void> {
     const marker = this.p.getByText(TXT.loggedInMarker, { exact: true }).first();
-    if (await marker.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    if (await this.visibleWithin(marker, 8_000)) {
       log.info("Tradovate session is logged in.");
       return;
     }
 
-    // Try to log in automatically: click Login (creds are saved on the page),
-    // then the "Simulated" environment button.
+    // Try to log in automatically: commit the saved creds + click Login, then
+    // the "Simulated" environment button.
     log.info("Not logged in — attempting automatic login (Login → Simulated)…");
     await this.tryAutoLogin();
-    if (await marker.isVisible({ timeout: 15_000 }).catch(() => false)) {
+    if (await this.visibleWithin(marker, 20_000)) {
       log.info("Automatic login succeeded.");
       return;
     }
@@ -103,7 +116,9 @@ export class TradovateExecutor implements Executor {
     await this.snapshot("autologin-1-loginpage");
 
     const pwd = this.p.locator('input[type="password"]').first();
-    const hasForm = await pwd.isVisible({ timeout: 5_000 }).catch(() => false);
+    // WAIT for the login form to render — the SPA needs a few seconds, and a
+    // freshly-loaded page may even be mid-redirect to the login screen.
+    const hasForm = await this.visibleWithin(pwd, 25_000);
     if (hasForm) {
       log.info("Auto-login: login form detected.");
       const user = this.p
@@ -111,7 +126,7 @@ export class TradovateExecutor implements Executor {
         .first();
 
       // Click both fields first: a trusted gesture so we can read autofilled values.
-      if (await user.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      if (await this.visibleWithin(user, 3_000)) {
         await user.click({ timeout: 3_000 }).catch(() => {});
       }
       await pwd.click({ timeout: 3_000 }).catch(() => {});
@@ -151,7 +166,7 @@ export class TradovateExecutor implements Executor {
       // Click the EXACT blue "Login" button (not the Google/Apple sign-in buttons).
       const loginBtn = this.p.getByRole("button", { name: "Login", exact: true }).first();
       let clicked = false;
-      if (await loginBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      if (await this.visibleWithin(loginBtn, 5_000)) {
         await loginBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
         clicked = true;
       } else {
@@ -159,7 +174,7 @@ export class TradovateExecutor implements Executor {
       }
       log.info(`Auto-login: submitted login (clicked Login button = ${clicked}).`);
     } else {
-      log.info("Auto-login: no login form visible — may already be past it.");
+      log.info("Auto-login: no login form appeared within 25s — may already be past it.");
     }
 
     await this.p.waitForTimeout(2_500).catch(() => {});
@@ -170,7 +185,7 @@ export class TradovateExecutor implements Executor {
       .getByRole("button", { name: /Start Simulated Trading/i })
       .or(this.p.getByText(/Start Simulated Trading/i))
       .first();
-    const simVisible = await simBtn.isVisible({ timeout: 20_000 }).catch(() => false);
+    const simVisible = await this.visibleWithin(simBtn, 20_000);
     log.info(`Auto-login: 'Start Simulated Trading' visible = ${simVisible}`);
     if (simVisible) {
       await simBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Sim click error: ${e.message}`));
