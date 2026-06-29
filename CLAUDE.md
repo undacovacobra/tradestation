@@ -18,7 +18,7 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 **browser automation** (Playwright) of the Tradovate web trader. Runs on the user's
 **always-on Windows home PC**. Node 22, TypeScript, Playwright (Chromium).
 
-## Current status (2026-06-28)
+## Current status (2026-06-29)
 **Working & verified:**
 - Rotation logic (cycle accounts, one open round-trip at a time, advance + wrap,
   optional once-per-day). Unit-tested (`npm test`, 4/4 pass).
@@ -49,22 +49,41 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
     second entry with no close in between is correctly rejected; clear stuck test state with
     `Remove-Item data\state.json` then restart.
 
+- **STRATEGY ALERTS WIRED (2026-06-29).** The user's own Pine v6 strategy (multi-session
+  "02:59 / 08:29 / 09:29 / 13:59 / 18:00" reversion + continuation) now emits the bot's JSON
+  directly via Pine `alert()` calls. We edited THEIR script (they can edit it; self-made):
+  - Added helpers after `f_entryAlertMessage`: a `botSecret` const (the real WEBHOOK_SECRET)
+    plus `f_botEntryJson(_action)` and `f_botCloseJson()`. JSON is built with single-quoted
+    Pine string literals so the inner double-quotes are literal, e.g.
+    `'{"secret":"…","action":"buy","symbol":"' + syminfo.ticker + '","quantity":' + str.tostring(int(contractsQty)) + '}'`.
+  - Entries: replaced `alert(longEntryAlertMessage,…)`/`alert(shortEntryAlertMessage,…)` with
+    `alert(f_botEntryJson("buy"/"sell"), alert.freq_once_per_bar_close)`.
+  - Exits: added, right before "Create Long Trade", `if exitSignal: alert(f_botCloseJson(),…)`
+    (covers TP, SL, and session-end) plus `if timeExit: strategy.close_all(...)` so the engine
+    actually flattens at session end (keeps `strategy.position_size` in sync so later entries fire).
+  - **Size** sent to the bot = the strategy's "Contracts / Quantity" input.
+  - TradingView **alert created**: Condition = the strategy → **"alert() function calls only"**,
+    Expiration = Open-ended, Notifications → Webhook URL = `<tunnel>/webhook`. Message box is
+    ignored (the alert() message is used). Use ONE alert of this type only (don't also add
+    order-fill alerts, or it double-fires).
+  - **Verified end-to-end in dry-run (2026-06-29):** `npm run testhook` → bot opened on
+    "Funded 1", closed, rotated to "Funded 2"; tunnel `/health` returned `{"ok":true}`.
+    Not yet seen a *live strategy-generated* alert fire (waiting on a real session signal),
+    but bot side + tunnel + JSON shape all confirmed.
+  - ⚠️ Symbol watch: the user's TradingView chart was **MNQ1!**, but CLAUDE.md/Tradovate notes
+    say MES. The bot ignores the alert symbol and trades whatever contract is on the Tradovate
+    chart — so the Tradovate chart contract MUST match the instrument the strategy runs on.
+
 **Pending:**
-- **Wire the user's REAL strategy alerts** (entry + exit) to send this JSON to the webhook.
-  Key gotcha: the bot needs the EXIT to arrive as `action:"close"` (not buy/sell), because
-  `{{strategy.order.action}}` reports the exit as the opposite side. Plan from types.ts =
-  separate entry and exit alerts (or a Pine `alert()`/`alert_message` that emits "close").
-  Entry msg can use `"action":"{{strategy.order.action}}","quantity":{{strategy.order.contracts}}`.
+- **Watch for the first real strategy-fired alert** during a session window (still dryrun, safe);
+  confirm a `[DRY-RUN] Would BUY/SELL …` line appears in the bot window.
 - **Flip to live** when ready: set `EXECUTOR=tradovate` in .env (drives the real browser).
 - **Stable tunnel** for always-on (named Cloudflare tunnel + domain) so the URL stops changing.
-- **Migration** (mostly moot now): the user RUNS from `C:\Users\tjero\folder-finder\trading-bot`
-  (a subfolder of the `undacovacobra/folder-finder` repo). The bot's own repo is
-  `undacovacobra/tradestation`. To deliver tradestation code into the running folder we
-  added a git remote `ts` and pulled individual files via
-  `cmd /c "git show ts/<branch>:<path> > <localpath>"` (paths differ: tradestation has
-  src/ at root; folder-finder has trading-bot/src/). Login/accounts/.env live only in the
-  running folder. A clean future migration = fresh clone of tradestation + copy over .env,
-  data/accounts.json, and .tradovate-session.
+- **Migration DONE (2026-06-29): the user now runs a clean fresh clone of tradestation at
+  `C:\Users\TheTr\tradestation`** (Windows user = `TheTr`). The old folder-finder subfolder
+  setup is retired — no more `git show ts/<branch>:<path>` file-by-file copying; src/ is at the
+  repo root as normal. Login/accounts/.env still live only in this running folder (not committed).
+  Run commands from there, e.g. `cd "$env:USERPROFILE\tradestation"; npm run testhook`.
 
 ## Key facts & decisions
 - **One Tradovate login, many accounts.** Bot switches the active account in the UI.
