@@ -111,6 +111,11 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 - `npm run smoketest [size]` — LIVE: buy→close on each account at `size` (default 1;
   needs market open; demo only). Use a non-1 size to prove size-from-alert works.
 - `npm run calibrate` — open the trader to log in / inspect the UI
+- **`start-bot.bat`** — one double-click launcher: opens the bot (`npm start`) AND the
+  Cloudflare tunnel (`cloudflared tunnel --url http://localhost:3000`) in two windows.
+  Make a desktop shortcut to it. Needs `cloudflared` installed (winget Cloudflare.cloudflared).
+  Create the shortcut from the repo folder with:
+  `$s=(New-Object -ComObject WScript.Shell).CreateShortcut("$env:USERPROFILE\Desktop\Start Trading Bot.lnk");$s.TargetPath="$PWD\start-bot.bat";$s.WorkingDirectory="$PWD";$s.Save()`
 
 ## Starting on a fresh computer (paste-in prompt for the user)
 If the user moves to a new Windows PC, they paste this prompt to start a session.
