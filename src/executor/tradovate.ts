@@ -91,68 +91,86 @@ export class TradovateExecutor implements Executor {
 
   /**
    * Best-effort automatic login. The browser profile (SESSION_DIR) remembers the
-   * Tradovate username/password and pre-fills them, but browser autofill often
-   * doesn't fire the input events Tradovate's React form needs, so its Login
-   * button stays disabled and a plain click does nothing. So we:
-   *   1. Click the fields (a trusted gesture that also unlocks autofilled values),
-   *      then re-dispatch input/change so the form registers the values.
-   *   2. Submit via Enter AND by clicking the Login button (whichever works).
-   *   3. Click "Start Simulated Trading" on the mode-select page.
+   * Tradovate username/password and pre-fills them, but silent autofill doesn't
+   * fire the events Tradovate's React form needs, so a plain Login click does
+   * nothing. So we click into the fields (a trusted gesture that lets us read
+   * the autofilled values), RE-TYPE those values ourselves (real keystrokes the
+   * form definitely registers), click the exact blue "Login" button (never the
+   * Google/Apple sign-in buttons), then click "Start Simulated Trading".
    */
   private async tryAutoLogin(): Promise<void> {
-    log.info(`Auto-login: current page = ${this.p.url()}`);
+    log.info(`Auto-login v2: current page = ${this.p.url()}`);
     await this.snapshot("autologin-1-loginpage");
 
-    // 1. If a login form is present, commit the pre-filled credentials.
     const pwd = this.p.locator('input[type="password"]').first();
-    const hasForm = await pwd.isVisible({ timeout: 4_000 }).catch(() => false);
+    const hasForm = await pwd.isVisible({ timeout: 5_000 }).catch(() => false);
     if (hasForm) {
-      log.info("Auto-login: login form detected — committing pre-filled credentials.");
-      const user = this.p.locator('input[type="email"], input[type="text"]').first();
+      log.info("Auto-login: login form detected.");
+      const user = this.p
+        .locator('input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])')
+        .first();
+
+      // Click both fields first: a trusted gesture so we can read autofilled values.
       if (await user.isVisible({ timeout: 1_000 }).catch(() => false)) {
         await user.click({ timeout: 3_000 }).catch(() => {});
       }
       await pwd.click({ timeout: 3_000 }).catch(() => {});
-      // Re-fire input/change on every field so React picks up autofilled values.
-      await this.p
+
+      const vals = await this.p
         .evaluate(() => {
-          const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
-          document.querySelectorAll("input").forEach((node) => {
-            const el = node as HTMLInputElement;
-            desc?.set?.call(el, el.value);
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-          });
+          const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+          const p = inputs.find((i) => i.type === "password");
+          const u = inputs.find(
+            (i) => i !== p && !["hidden", "checkbox", "radio", "submit", "button"].includes(i.type),
+          );
+          return { u: u?.value ?? "", p: p?.value ?? "" };
         })
-        .catch(() => {});
-      // Most login forms submit when you press Enter in the password field.
-      await pwd.press("Enter").catch(() => {});
-      await this.p.waitForTimeout(1_500).catch(() => {});
+        .catch(() => ({ u: "", p: "" }));
+
+      if (vals.u && vals.p) {
+        log.info("Auto-login: re-typing pre-filled credentials to commit them.");
+        await user.fill(vals.u).catch(() => {});
+        await pwd.fill(vals.p).catch(() => {});
+      } else {
+        log.info("Auto-login: could not read pre-filled values; firing input events instead.");
+        await this.p
+          .evaluate(() => {
+            const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+            document.querySelectorAll("input").forEach((node) => {
+              const el = node as HTMLInputElement;
+              if (!el.value) return;
+              desc?.set?.call(el, el.value);
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            });
+          })
+          .catch(() => {});
+      }
+      await this.p.waitForTimeout(400).catch(() => {});
+
+      // Click the EXACT blue "Login" button (not the Google/Apple sign-in buttons).
+      const loginBtn = this.p.getByRole("button", { name: "Login", exact: true }).first();
+      let clicked = false;
+      if (await loginBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+        await loginBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
+        clicked = true;
+      } else {
+        await pwd.press("Enter").catch(() => {});
+      }
+      log.info(`Auto-login: submitted login (clicked Login button = ${clicked}).`);
+    } else {
+      log.info("Auto-login: no login form visible — may already be past it.");
     }
 
-    // 2. Also click the "Login" button (covers forms that need the button click).
-    const loginCandidates = [
-      this.p.getByRole("button", { name: /log\s*in|sign\s*in/i }),
-      this.p.getByText(TXT.loginButton, { exact: true }),
-      this.p.locator('button[type="submit"], input[type="submit"]'),
-      this.p.locator('button:has-text("Login"), [role="button"]:has-text("Login")'),
-    ];
-    let clickedLogin = false;
-    for (const cand of loginCandidates) {
-      const el = cand.first();
-      if (await el.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await el.click({ timeout: 4_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
-        clickedLogin = true;
-        break;
-      }
-    }
-    log.info(`Auto-login: clicked Login = ${clickedLogin}`);
     await this.p.waitForTimeout(2_500).catch(() => {});
     await this.snapshot("autologin-2-after-login");
 
-    // 3. On the "Select a Trading Mode" page, click "Start Simulated Trading".
-    const simBtn = this.p.getByText(TXT.simButton).first();
-    const simVisible = await simBtn.isVisible({ timeout: 15_000 }).catch(() => false);
+    // Select a Trading Mode -> Start Simulated Trading.
+    const simBtn = this.p
+      .getByRole("button", { name: /Start Simulated Trading/i })
+      .or(this.p.getByText(/Start Simulated Trading/i))
+      .first();
+    const simVisible = await simBtn.isVisible({ timeout: 20_000 }).catch(() => false);
     log.info(`Auto-login: 'Start Simulated Trading' visible = ${simVisible}`);
     if (simVisible) {
       await simBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Sim click error: ${e.message}`));
