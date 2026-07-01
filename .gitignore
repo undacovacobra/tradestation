@@ -5,3 +5,5 @@ data/accounts.json
 .tradovate-session/
 screenshots/
 *.log
+v2/data/settings.json
+v2/data/state-*.json

@@ -18,7 +18,40 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 **browser automation** (Playwright) of the Tradovate web trader. Runs on the user's
 **always-on Windows home PC**. Node 22, TypeScript, Playwright (Chromium).
 
-## Current status (2026-06-28)
+## ⭐ V2 exists (2026-07-01) — see `v2/`
+The user asked for a big upgrade but **kept separate** from the working V1. V2 lives
+entirely in the `v2/` folder (own package.json, port **3300**); V1 in the repo root is
+untouched and still works. V2 adds:
+- **Web dashboard** (`http://localhost:3300`, vanilla HTML/JS served by the same
+  Express server): start/pause button, Practice↔LIVE switch with a big red warning
+  modal, status pills (running / Tradovate login / mode), live activity feed in plain
+  English, optional password login (`DASHBOARD_PASSWORD` in `v2/.env`).
+- **Two independent lanes**: `POST /webhook/evals` and `POST /webhook/funded`, one
+  `GroupRotation` each (state in `v2/data/state-<group>.json`). Same alert JSON as V1.
+- **Accounts managed on screen** (never by hand): add/remove/reorder/enable per group,
+  stored in `v2/data/settings.json` via `SettingsStore`. Plus **"Scan Tradovate
+  accounts"**: opens the Tradovate account menu, reads all `LF[EF]…` ids, user ticks
+  Evals/Funded (pre-sorted by LFE/LFF prefix).
+- **Rotation is label-keyed, not index-keyed** (`v2/src/rotation.ts`) so it survives
+  account add/remove/reorder mid-rotation. 7 unit tests pass (`npm test` in `v2/`).
+- **Practice mode is the default** and persisted; LIVE requires a confirm flag on the
+  API and a warning modal in the UI. Pause makes webhooks no-ops.
+- Browser automation unchanged from V1 (same confirmed UI labels, one shared
+  serialized queue for both lanes + scans) — still **no API**. Browser is now
+  connected from the dashboard ("Connect browser"), independent of trade mode.
+- **Remote access plan**: ngrok free static domain pointed at port 3300 → one
+  permanent URL for both TradingView webhooks and the phone-accessible dashboard.
+  Documented click-by-click in `v2/README.md`. Not yet set up by the user.
+- Windows: double-click `v2/Start Trading Bot.cmd` starts the server and opens the
+  dashboard.
+
+**V2 verified in this session (practice mode only):** unit tests, type-check, server
+boot, login protection, account add/remove via API, both webhooks (entry/close/
+one-open-rule/bad-secret/paused), live-confirm guard, and dashboard rendering
+(screenshots via Playwright). **Not yet tested:** anything against the real Tradovate
+UI (scan, live clicks) — the confirmed V1 selectors were carried over unchanged.
+
+## Current status of V1 (2026-06-28)
 **Working & verified:**
 - Rotation logic (cycle accounts, one open round-trip at a time, advance + wrap,
   optional once-per-day). Unit-tested (`npm test`, 4/4 pass).

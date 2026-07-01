@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trading Bot Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">🤖</span>
+      <h1>Trading Bot</h1>
+    </div>
+    <div class="pills">
+      <span id="pill-running" class="pill gray"><span class="dot"></span><span class="pill-text">…</span></span>
+      <span id="pill-browser" class="pill gray"><span class="dot"></span><span class="pill-text">…</span></span>
+      <span id="pill-mode" class="pill gray"><span class="pill-text">…</span></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="controls card">
+      <button id="btn-running" class="btn big">…</button>
+      <button id="btn-mode" class="btn big">…</button>
+      <button id="btn-browser" class="btn">Connect browser</button>
+      <button id="btn-scan" class="btn">Scan Tradovate accounts</button>
+    </section>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <section class="groups">
+      <div class="card group" id="group-evals" data-group="evals">
+        <h2>🎓 Evaluation accounts <small>(LFE…)</small></h2>
+        <div class="webhook-row">
+          <span class="webhook-label">Webhook for TradingView:</span>
+          <code class="webhook-url"></code>
+          <button class="btn small copy-webhook">Copy</button>
+        </div>
+        <div class="next-row"></div>
+        <ul class="account-list"></ul>
+        <form class="add-form">
+          <input name="label" placeholder="Account id (e.g. LFE0507…)" required />
+          <input name="name" placeholder="Nickname (optional)" />
+          <button class="btn small" type="submit">Add</button>
+        </form>
+      </div>
+
+      <div class="card group" id="group-funded" data-group="funded">
+        <h2>💰 Funded accounts <small>(LFF…)</small></h2>
+        <div class="webhook-row">
+          <span class="webhook-label">Webhook for TradingView:</span>
+          <code class="webhook-url"></code>
+          <button class="btn small copy-webhook">Copy</button>
+        </div>
+        <div class="next-row"></div>
+        <ul class="account-list"></ul>
+        <form class="add-form">
+          <input name="label" placeholder="Account id (e.g. LFF0507…)" required />
+          <input name="name" placeholder="Nickname (optional)" />
+          <button class="btn small" type="submit">Add</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="card feed">
+      <h2>📜 Activity</h2>
+      <ul id="events"></ul>
+    </section>
+  </main>
+
+  <!-- Password screen (only shows if a dashboard password is set) -->
+  <div id="login-overlay" class="overlay" hidden>
+    <div class="modal">
+      <h2>🔒 Enter password</h2>
+      <p>This dashboard is password-protected.</p>
+      <form id="login-form">
+        <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" />
+        <p id="login-error" class="error-text" hidden>Wrong password — try again.</p>
+        <button class="btn big" type="submit">Open dashboard</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Generic modal (live-mode warning, scan results) -->
+  <div id="modal-overlay" class="overlay" hidden>
+    <div class="modal" id="modal-box"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
