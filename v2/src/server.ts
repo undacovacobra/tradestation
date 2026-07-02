@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { resolve } from "node:path";
 import { config } from "./config.js";
-import { AlertSchema, GROUPS, isGroup, type Group, type OrderRequest } from "./types.js";
+import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Group, type OrderRequest } from "./types.js";
 import { SettingsStore } from "./store.js";
 import { GroupRotation } from "./rotation.js";
 import { TradovateBrowser } from "./browser.js";
@@ -146,9 +146,10 @@ app.post("/webhook/:group", async (req, res) => {
 
   try {
     const message = await enqueue(() => {
-      if (alert.action === "close") return handleClose(group, alert.symbol);
+      if (isCloseAlert(alert)) return handleClose(group, alert.symbol);
+      // Past the close check, this is an entry: action is "buy" or "sell".
       const order: OrderRequest = {
-        action: alert.action,
+        action: alert.action === "sell" ? "sell" : "buy",
         symbol: alert.symbol,
         quantity: alert.quantity ?? 1,
         orderType: alert.orderType,

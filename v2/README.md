@@ -44,12 +44,29 @@ First-time steps on the dashboard:
 
 Each group card on the dashboard shows its own webhook address with a Copy
 button. Point your eval strategy's TradingView alerts at the **evals** URL and
-your funded strategy at the **funded** URL. The alert JSON is the same as V1:
+your funded strategy at the **funded** URL.
+
+**One alert per strategy handles both opening and closing.** Create a single
+TradingView alert on the strategy (fires on every order) with this message:
 
 ```json
-{ "secret": "your-webhook-secret", "action": "buy", "symbol": "MNQ1!", "quantity": 1 }
-{ "secret": "your-webhook-secret", "action": "close", "symbol": "MNQ1!" }
+{
+  "secret": "your-webhook-secret",
+  "action": "{{strategy.order.action}}",
+  "symbol": "{{ticker}}",
+  "quantity": 1,
+  "marketPosition": "{{strategy.market_position}}"
+}
 ```
+
+How it decides open vs close: TradingView says "buy"/"sell" for every order, so
+the bot reads `marketPosition`. When it becomes **`flat`**, the order closed the
+trade → the bot flattens and rotates to the next account. Any other value
+(`long`/`short`) is treated as a new entry.
+
+> This requires a **strategy** alert (so the `{{strategy.*}}` placeholders fill
+> in). The older two-alert style still works too — just send
+> `"action": "close"` for the exit.
 
 Each lane keeps its own rotation and its own one-open-trade-at-a-time rule.
 The browser still only ever does one thing at a time.

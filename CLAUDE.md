@@ -27,7 +27,11 @@ untouched and still works. V2 adds:
   modal, status pills (running / Tradovate login / mode), live activity feed in plain
   English, optional password login (`DASHBOARD_PASSWORD` in `v2/.env`).
 - **Two independent lanes**: `POST /webhook/evals` and `POST /webhook/funded`, one
-  `GroupRotation` each (state in `v2/data/state-<group>.json`). Same alert JSON as V1.
+  `GroupRotation` each (state in `v2/data/state-<group>.json`).
+- **Single alert per strategy** (2026-07-02): one TradingView alert handles both
+  open and close. Payload carries `marketPosition` (`{{strategy.market_position}}`);
+  when it's `flat` the bot closes+rotates, otherwise it opens. `isCloseAlert()` in
+  `v2/src/types.ts`. Old two-alert style (`"action":"close"`) still works.
 - **Accounts managed on screen** (never by hand): add/remove/reorder/enable per group,
   stored in `v2/data/settings.json` via `SettingsStore`. Plus **"Scan Tradovate
   accounts"**: opens the Tradovate account menu, reads all `LF[EF]…` ids, user ticks

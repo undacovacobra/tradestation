@@ -24,8 +24,10 @@ async function send(payload: Record<string, unknown>): Promise<void> {
   console.log(`${payload.action} -> HTTP ${res.status}:`, await res.text());
 }
 
-console.log(`Sending a test BUY then CLOSE to ${url} …`);
-await send({ secret, action: "buy", symbol: "MNQ1!", quantity: 1 });
+// Mimics the single TradingView alert: an opening order (position -> long)
+// followed by the closing order (position -> flat).
+console.log(`Sending a test OPEN then CLOSE (single-alert style) to ${url} …`);
+await send({ secret, action: "buy", symbol: "MNQ1!", quantity: 1, marketPosition: "long" });
 await new Promise((r) => setTimeout(r, 1500));
-await send({ secret, action: "close", symbol: "MNQ1!" });
+await send({ secret, action: "sell", symbol: "MNQ1!", marketPosition: "flat" });
 console.log("Done — check the dashboard Activity feed.");
