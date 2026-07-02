@@ -44,7 +44,11 @@ untouched and still works. V2 adds:
   read just before entry vs. after close (`executeEntry`/`executeClose` return
   balances; `readSettledBalance()` waits ~1.5s post-close). Only meaningful in
   LIVE (practice moves no money → never a win). Force-close on target passes
-  `won:true`. Dashboard shows "😴 WON TODAY" (`restingToday`). 18 tests pass.
+  `won:true`. Dashboard shows "😴 WON TODAY" (`restingToday`).
+- **Trading-day boundary is 6pm ET, not midnight** (`v2/src/tradingDay.ts`,
+  `tradingDayKey`): futures session reset. Configurable via `TRADING_DAY_TZ`
+  (default America/New_York) + `TRADING_DAY_RESET_HOUR` (default 18); server
+  injects `tradingDay()` into both `GroupRotation`s; DST-aware. 22 tests pass.
 - **Practice mode is the default** and persisted; LIVE requires a confirm flag on the
   API and a warning modal in the UI. Pause makes webhooks no-ops.
 - Browser automation unchanged from V1 (same confirmed UI labels, one shared

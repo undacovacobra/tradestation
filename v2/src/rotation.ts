@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Group, OrderRequest, StoredAccount } from "./types.js";
+import { tradingDayKey } from "./tradingDay.js";
 
 export interface OpenTrade {
   tradovateLabel: string;
@@ -60,8 +61,8 @@ export class GroupRotation {
     private readonly statePath: string,
     /** When true, an account that closed a WINNER sits out the rest of the day. */
     private readonly benchWinnersForDay: boolean,
-    /** Injectable clock for tests. Returns YYYY-MM-DD for "today". */
-    private readonly today: () => string = defaultToday,
+    /** Trading-day label for an instant (defaults to now). Injectable for tests. */
+    private readonly today: (at?: Date) => string = defaultToday,
   ) {
     this.state = this.load();
   }
@@ -193,15 +194,14 @@ export class GroupRotation {
     return { closed, next, won, pnl };
   }
 
-  /** How many round-trips this group closed today. */
+  /** How many round-trips this group closed in the current trading day. */
   tradesToday(): number {
     const today = this.today();
-    return this.state.history.filter((h) => h.closedAt.slice(0, 10) === today).length;
+    return this.state.history.filter((h) => this.today(new Date(h.closedAt)) === today).length;
   }
 }
 
-function defaultToday(): string {
-  // NOTE: uses UTC calendar date. Futures "trading day" resets ~17:00 CT, so if
-  // your strategy trades across that boundary you'll want a CT-aware day here.
-  return new Date().toISOString().slice(0, 10);
+/** Fallback trading day: 6pm US/Eastern reset (server injects the configured one). */
+function defaultToday(at: Date = new Date()): string {
+  return tradingDayKey(at, "America/New_York", 18);
 }

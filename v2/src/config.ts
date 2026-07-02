@@ -19,6 +19,11 @@ export const config = {
   sessionDir: resolve(ROOT, process.env.SESSION_DIR ?? ".tradovate-session"),
   tradovateUrl: process.env.TRADOVATE_URL ?? "https://trader.tradovate.com",
   oncePerDay: (process.env.ONCE_PER_DAY ?? "true") === "true",
+  // Futures "trading day" rolls over in the evening, not at midnight. Default:
+  // 6pm US/Eastern (the CME session reopen). Change TRADING_DAY_TZ to
+  // "America/Chicago" for Central, or TRADING_DAY_RESET_HOUR for a different hour.
+  tradingDayTz: process.env.TRADING_DAY_TZ ?? "America/New_York",
+  tradingDayResetHour: Math.min(23, Math.max(0, Number(process.env.TRADING_DAY_RESET_HOUR ?? 18))),
   // Remote access (ngrok) — managed from the dashboard's "Remote access" button.
   ngrokAuthtoken: process.env.NGROK_AUTHTOKEN ?? "",
   ngrokDomain: process.env.NGROK_DOMAIN ?? "",

@@ -82,7 +82,11 @@ account's balance (EQUITY) read just before the entry vs. just after the close,
 so this only takes effect in **LIVE** mode — in Practice no real money moves, so
 nothing counts as a win and every account keeps cycling. If a balance can't be
 read, the trade is treated as "not a win" (the account stays in the cycle).
-Reset is at midnight UTC.
+
+The "day" follows the **futures session**, not the calendar: it rolls over at
+**6pm US/Eastern** by default (the CME session reopen), so a winner from the
+afternoon is benched until the next session starts that evening. Change it with
+`TRADING_DAY_TZ` (e.g. `America/Chicago`) and `TRADING_DAY_RESET_HOUR`.
 
 ## Balances, the $53,000 eval target, and the Passed column
 

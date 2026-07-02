@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Group, type OrderRequest } from "./types.js";
 import { SettingsStore } from "./store.js";
 import { GroupRotation } from "./rotation.js";
+import { tradingDayKey } from "./tradingDay.js";
 import { TradovateBrowser } from "./browser.js";
 import { Monitor } from "./monitor.js";
 import { connectTunnel, disconnectTunnel, tunnelStatus, autoStartTunnel } from "./tunnel.js";
@@ -13,9 +14,11 @@ import { log } from "./logger.js";
 
 const store = new SettingsStore(config.settingsPath);
 const browser = new TradovateBrowser(config);
+// The trading day rolls over in the evening (default 6pm ET), not at midnight.
+const tradingDay = (at: Date = new Date()) => tradingDayKey(at, config.tradingDayTz, config.tradingDayResetHour);
 const rotations: Record<Group, GroupRotation> = {
-  evals: new GroupRotation("evals", resolve(config.dataDir, "state-evals.json"), config.oncePerDay),
-  funded: new GroupRotation("funded", resolve(config.dataDir, "state-funded.json"), config.oncePerDay),
+  evals: new GroupRotation("evals", resolve(config.dataDir, "state-evals.json"), config.oncePerDay, tradingDay),
+  funded: new GroupRotation("funded", resolve(config.dataDir, "state-funded.json"), config.oncePerDay, tradingDay),
 };
 
 /**
