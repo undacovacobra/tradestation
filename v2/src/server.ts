@@ -46,13 +46,16 @@ async function executeEntry(label: string, name: string, order: OrderRequest, gr
     return undefined;
   }
   await browser.switchAccount(label);
-  const before = await browser.readSelectedAccount().catch(() => null);
   // Set + verify the size FIRST; setQuantity throws if it can't confirm, so we
   // never click Buy/Sell with the wrong number of contracts.
   await browser.setQuantity(qty);
   await browser.clickOrder(order.action, label);
   pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${qty} ${order.symbol} on ${name} (${label}).`, group);
-  return before?.balance ?? undefined;
+  // Read the entry balance AFTER firing the order so it never delays the fill.
+  // A just-opened position has ~0 P&L, so this equals the pre-trade balance for
+  // win/loss purposes.
+  const after = await browser.readSelectedAccount().catch(() => null);
+  return after?.balance ?? undefined;
 }
 
 /** Flatten the position. Returns the balance read just after closing (live)
@@ -372,6 +375,27 @@ api.post("/test-quantity", async (req, res) => {
     pushEvent("warn", `Contract-size test failed: ${(err as Error).message}`, group);
     res.status(500).json({ ok: false, error: (err as Error).message });
   }
+});
+
+api.post("/next", (req, res) => {
+  const group = req.body?.group;
+  const label = typeof req.body?.label === "string" ? req.body.label : "";
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  const rotation = rotations[group];
+  if (!rotation.isFlat) {
+    return res.status(400).json({
+      ok: false,
+      error: "There's an open trade — the next account is chosen automatically when it closes.",
+    });
+  }
+  const ok = rotation.setNext(label, store.accountsIn(group));
+  if (ok) {
+    const acct = store.find(label);
+    pushEvent("info", `Next ${group} trade will go to ${acct?.name ?? label}.`, group);
+  }
+  res.json({ ok });
 });
 
 api.post("/accounts/reactivate", (req, res) => {

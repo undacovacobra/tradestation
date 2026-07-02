@@ -144,7 +144,7 @@ export class TradovateBrowser {
       await this.p.waitForTimeout(300);
       return [...labels].sort();
     } catch (err) {
-      await this.snapshot("scan-accounts-failed");
+      await this.snapshot("scan-accounts-failed", true);
       await this.p.keyboard.press("Escape").catch(() => {});
       throw new Error(`Could not read the account menu: ${(err as Error).message}`);
     }
@@ -179,7 +179,7 @@ export class TradovateBrowser {
       .catch(() => "");
 
     const balance = extractEquity(raw);
-    if (balance === null) await this.snapshot("equity-not-parsed");
+    if (balance === null) await this.snapshot("equity-not-parsed", true);
     return { label, balance };
   }
 
@@ -221,7 +221,7 @@ export class TradovateBrowser {
       }
     }
     if (out.length > 0 && out.every((b) => b.balance === null)) {
-      await this.snapshot("balances-not-visible");
+      await this.snapshot("balances-not-visible", true);
     }
     return out;
   }
@@ -242,9 +242,9 @@ export class TradovateBrowser {
       // the menu list item.
       await this.p.getByText(label, { exact: false }).last().click({ timeout: 10_000 });
       // Give the trader a moment to repoint at the newly selected account.
-      await this.p.waitForTimeout(750);
+      await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
     } catch (err) {
-      await this.snapshot(`switch-account-failed-${label}`);
+      await this.snapshot(`switch-account-failed-${label}`, true);
       throw new Error(
         `Could not select account "${label}". Check it still exists in the Tradovate account menu. Cause: ${(err as Error).message}`,
       );
@@ -265,54 +265,80 @@ export class TradovateBrowser {
   }
 
   /**
-   * Locate the order-ticket quantity control: the small element showing just
-   * the current size, to the right of "Sell Mkt". Uses Playwright locators for
-   * the whole scan — the SAME mechanism that reliably finds the Buy/Sell
-   * buttons — so it sees into shadow-DOM components that a raw DOM query
-   * misses. Considers both inputs (value) and text elements.
+   * Locate the order-ticket quantity control (the small size box to the right of
+   * "Sell Mkt"). Runs the ENTIRE scan inside one page.evaluate that walks the
+   * DOM *including shadow roots* — so it's both shadow-DOM aware (raw
+   * querySelectorAll isn't) AND fast (one round-trip instead of hundreds of
+   * per-element boundingBox calls, which is what made the order path slow).
+   * Considers inputs (by value) and leaf elements (by text).
    */
   private async findQtyControl(): Promise<{ x: number; y: number; value: number; isInput: boolean } | null> {
     const sb = await this.visibleSellBox();
     if (!sb) return null;
-    const bandTop = sb.y - 8;
-    const bandBottom = sb.y + sb.height + 8;
-    const xMin = sb.x + sb.width - 2;
-    const xMax = sb.x + sb.width + 320;
-    const inBand = (b: { x: number; y: number; width: number; height: number }) => {
-      const cy = b.y + b.height / 2;
-      return cy >= bandTop && cy <= bandBottom && b.x >= xMin && b.x <= xMax && b.width > 0 && b.width <= 160;
-    };
+    // NOTE: no nested named functions inside evaluate — the TS compiler injects
+    // a __name helper for them that doesn't exist in the page, which throws.
+    return await this.p
+      .evaluate((s) => {
+        const bandTop = s.y - 8;
+        const bandBottom = s.y + s.height + 8;
+        const xMin = s.x + s.width - 2;
+        const xMax = s.x + s.width + 320;
+        let best: { x: number; y: number; value: number; isInput: boolean; left: number } | null = null;
+        const stack: (Document | ShadowRoot)[] = [document];
+        while (stack.length) {
+          const root = stack.pop()!;
+          for (const el of Array.from(root.querySelectorAll("*"))) {
+            if ((el as HTMLElement).shadowRoot) stack.push((el as HTMLElement).shadowRoot!);
+            let value: number | null = null;
+            let isInput = false;
+            if (el.tagName === "INPUT") {
+              const v = ((el as HTMLInputElement).value || "").trim();
+              if (/^\d{1,4}$/.test(v)) {
+                value = Number(v);
+                isInput = true;
+              }
+            } else if (el.children.length === 0) {
+              const t = (el.textContent || "").trim();
+              if (/^\d{1,4}$/.test(t)) value = Number(t);
+            }
+            if (value === null) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0 || r.width > 160) continue;
+            const cy = r.top + r.height / 2;
+            if (cy < bandTop || cy > bandBottom || r.left < xMin || r.left > xMax) continue;
+            if (!best || r.left < best.left) {
+              best = { x: r.left + r.width / 2, y: cy, value, isInput, left: r.left };
+            }
+          }
+        }
+        const f = best as { x: number; y: number; value: number; isInput: boolean } | null;
+        return f ? { x: f.x, y: f.y, value: f.value, isInput: f.isInput } : null;
+      }, { x: sb.x, y: sb.y, width: sb.width, height: sb.height })
+      .catch(() => null);
+  }
 
-    let best: { x: number; y: number; value: number; isInput: boolean; left: number } | null = null;
-    const offer = (b: { x: number; y: number; width: number; height: number }, value: number, isInput: boolean) => {
-      if (!best || b.x < best.left) {
-        best = { x: b.x + b.width / 2, y: b.y + b.height / 2, value, isInput, left: b.x };
-      }
-    };
-
-    // 1. Inputs anywhere on the page whose VALUE is a small number.
-    const inputs = this.p.locator("input");
-    const ni = Math.min(await inputs.count().catch(() => 0), 300);
-    for (let i = 0; i < ni; i++) {
-      const el = inputs.nth(i);
-      const b = await el.boundingBox().catch(() => null);
-      if (!b || !inBand(b)) continue;
-      const v = (await el.inputValue().catch(() => "")).trim();
-      if (/^\d{1,4}$/.test(v)) offer(b, Number(v), true);
-    }
-
-    // 2. Elements whose TEXT is exactly a small number (shadow-DOM piercing).
-    const texts = this.p.getByText(/^\s*\d{1,4}\s*$/);
-    const nt = Math.min(await texts.count().catch(() => 0), 300);
-    for (let i = 0; i < nt; i++) {
-      const el = texts.nth(i);
-      const b = await el.boundingBox().catch(() => null);
-      if (!b || !inBand(b)) continue;
-      const t = ((await el.textContent().catch(() => "")) ?? "").trim();
-      if (/^\d{1,4}$/.test(t)) offer(b, Number(t), false);
-    }
-
-    return best;
+  /** Find a dropdown option with exact text `target` sitting below the box. */
+  private async findQtyOption(target: number, sx: number, sy: number): Promise<{ x: number; y: number } | null> {
+    return await this.p
+      .evaluate((a) => {
+        let best: { x: number; y: number; top: number } | null = null;
+        const stack: (Document | ShadowRoot)[] = [document];
+        while (stack.length) {
+          const root = stack.pop()!;
+          for (const el of Array.from(root.querySelectorAll("*"))) {
+            if ((el as HTMLElement).shadowRoot) stack.push((el as HTMLElement).shadowRoot!);
+            if (el.children.length !== 0) continue;
+            if ((el.textContent || "").trim() !== String(a.t)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            const cx = r.left + r.width / 2;
+            if (Math.abs(cx - a.sx) > 180 || r.top <= a.sy + 4 || r.top > a.sy + 540) continue;
+            if (!best || r.top < best.top) best = { x: cx, y: r.top + r.height / 2, top: r.top };
+          }
+        }
+        return best ? { x: best.x, y: best.y } : null;
+      }, { t: target, sx, sy })
+      .catch(() => null);
   }
 
   /**
@@ -328,7 +354,7 @@ export class TradovateBrowser {
 
     let ctrl = await this.findQtyControl();
     if (!ctrl) {
-      await this.snapshot("set-quantity-no-box");
+      await this.snapshot("set-quantity-no-box", true);
       const sellVisible = (await this.visibleSellBox()) !== null;
       throw new Error(
         sellVisible
@@ -343,9 +369,9 @@ export class TradovateBrowser {
     if (ctrl.isInput) {
       await this.p.mouse.click(ctrl.x, ctrl.y);
       await this.p.keyboard.press("Control+A").catch(() => {});
-      await this.p.keyboard.type(String(target), { delay: 40 }).catch(() => {});
+      await this.p.keyboard.type(String(target)).catch(() => {});
       await this.p.keyboard.press("Enter").catch(() => {});
-      await this.p.waitForTimeout(500);
+      await this.p.waitForTimeout(120);
       ctrl = await this.findQtyControl();
       if (ctrl?.value === target) {
         await this.p.keyboard.press("Escape").catch(() => {}); // close any menu left open
@@ -355,27 +381,14 @@ export class TradovateBrowser {
 
     // Attempt 2: open the dropdown and click the preset option below the box.
     await this.p.keyboard.press("Escape").catch(() => {});
-    await this.p.waitForTimeout(250);
     const spot = (await this.findQtyControl()) ?? ctrl;
     if (spot) {
       await this.p.mouse.click(spot.x, spot.y);
-      await this.p.waitForTimeout(450);
-      // Find the menu option whose exact text is the target, sitting under the
-      // box — via Playwright locators, so shadow-DOM menus are seen too.
-      const options = this.p.getByText(String(target), { exact: true });
-      const count = Math.min(await options.count().catch(() => 0), 100);
-      let opt: { x: number; y: number; top: number } | null = null;
-      for (let i = 0; i < count; i++) {
-        const b = await options.nth(i).boundingBox().catch(() => null);
-        if (!b || b.width === 0) continue;
-        const cx = b.x + b.width / 2;
-        if (Math.abs(cx - spot.x) > 180) continue; // must be in the menu under the box
-        if (b.y <= spot.y + 4 || b.y > spot.y + 540) continue;
-        if (!opt || b.y < opt.top) opt = { x: cx, y: b.y + b.height / 2, top: b.y };
-      }
+      await this.p.waitForTimeout(200);
+      const opt = await this.findQtyOption(target, spot.x, spot.y);
       if (opt) {
         await this.p.mouse.click(opt.x, opt.y);
-        await this.p.waitForTimeout(350);
+        await this.p.waitForTimeout(150);
       }
       const after = await this.findQtyControl();
       if (after?.value === target) return target;
@@ -383,7 +396,7 @@ export class TradovateBrowser {
 
     // Fail safe: close any open menu and refuse to trade the wrong size.
     await this.p.keyboard.press("Escape").catch(() => {});
-    await this.snapshot("set-quantity-failed");
+    await this.snapshot("set-quantity-failed", true);
     throw new Error(
       `Couldn't set the size to ${target} on Tradovate, so NO order was placed. ` +
         `A screenshot named set-quantity-failed was saved — send it to me and I'll fix the aim.`,
@@ -405,10 +418,16 @@ export class TradovateBrowser {
     await this.snapshot(`close-${label}`);
   }
 
-  /** Click a confirmation modal button if Tradovate shows one. */
+  /**
+   * Click a confirmation modal button if Tradovate shows one. Most fast-trading
+   * setups have order confirmation OFF, so this waits only a short, configurable
+   * window (ORDER_CONFIRM_WAIT_MS) instead of a fixed 1.5s on every order.
+   */
   private async confirmIfPrompted(): Promise<void> {
+    const wait = Math.max(0, this.config.orderConfirmWaitMs);
+    if (wait === 0) return;
     const confirm = this.p.getByRole("button", { name: TXT.confirm }).first();
-    if (await confirm.isVisible({ timeout: 1_500 }).catch(() => false)) {
+    if (await confirm.isVisible({ timeout: wait }).catch(() => false)) {
       await confirm.click().catch(() => {});
     }
   }
@@ -421,8 +440,14 @@ export class TradovateBrowser {
     }
   }
 
-  private async snapshot(name: string): Promise<void> {
+  /**
+   * Save a screenshot. Success snapshots are skipped unless SCREENSHOTS=true
+   * (they add latency to the order path); pass force=true for failure captures,
+   * which are always saved so we can debug.
+   */
+  private async snapshot(name: string, force = false): Promise<void> {
     if (!this.page) return;
+    if (!force && !this.config.captureShots) return;
     const path = resolve(this.shotDir, `${Date.now()}-${name}.png`);
     await this.page.screenshot({ path }).catch(() => {});
   }

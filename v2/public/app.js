@@ -168,6 +168,7 @@ function renderGroup(group) {
         ${balanceLine(acct, group === "evals")}
       </div>
       ${sparklineSvg(acct.history)}
+      ${acct.enabled && !isNext ? '<button class="icon-btn nextbtn" title="Make this the next account to trade" data-act="next">⏭</button>' : ""}
       <button class="icon-btn" title="Move up" data-act="up">▲</button>
       <button class="icon-btn" title="Move down" data-act="down">▼</button>
       <button class="icon-btn" title="${acct.enabled ? "Turn off (skip this account)" : "Turn on"}" data-act="toggle">${acct.enabled ? "✅" : "🚫"}</button>
@@ -300,6 +301,8 @@ async function accountAction(act, acct) {
       await api("/accounts/remove", { label: acct.tradovateLabel });
     } else if (act === "toggle") {
       await api("/accounts/toggle", { label: acct.tradovateLabel });
+    } else if (act === "next") {
+      await api("/next", { group: acct.group, label: acct.tradovateLabel });
     } else {
       await api("/accounts/move", { label: acct.tradovateLabel, direction: act });
     }

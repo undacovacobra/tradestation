@@ -45,6 +45,20 @@ untouched and still works. V2 adds:
   balances; `readSettledBalance()` waits ~1.5s post-close). Only meaningful in
   LIVE (practice moves no money → never a win). Force-close on target passes
   `won:true`. Dashboard shows "😴 WON TODAY" (`restingToday`).
+- **Order path sped up + reliable qty control** (2026-07-02): the ~2s fill lag
+  was from (a) a 1.5s confirm-modal wait every order, (b) hundreds of per-element
+  boundingBox round-trips in the qty scan, (c) a pre-order balance read, (d)
+  success screenshots. Fixes: `confirmIfPrompted` waits `ORDER_CONFIRM_WAIT_MS`
+  (350); `findQtyControl`/`findQtyOption` are ONE shadow-piercing `page.evaluate`
+  each; entry-balance read moved AFTER clickOrder; success screenshots gated by
+  `SCREENSHOTS` (failures always shot, `snapshot(name,true)`); switch settle =
+  `SWITCH_SETTLE_MS` (300). **⚠️ esbuild/tsx `__name` gotcha**: NO nested named
+  functions inside `page.evaluate` (esbuild injects a `__name` helper absent in
+  the page → throws, was swallowed by `.catch`). Real-browser regression test
+  `test/quantity.browser.test.ts` + `test/fixtures/mock-ticket.html` (shadow DOM)
+  guards it; skips if no Chromium.
+- **Manual next-account pick** (2026-07-02): `⏭` button per account →
+  `POST /api/next` → `rotation.setNext(label)` (only when flat).
 - **Bot now SETS position size** (2026-07-02): per-group "Contracts per trade"
   on the dashboard (`settings.contracts.{evals,funded}`, default 1). Live entry
   calls `browser.setQuantity(n)` which fills Tradovate's order-ticket qty field

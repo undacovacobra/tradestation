@@ -16,6 +16,12 @@ export const config = {
   dashboardPassword: process.env.DASHBOARD_PASSWORD ?? "",
   port: Number(process.env.PORT ?? 3300),
   headed: (process.env.HEADED ?? "true") === "true",
+  // Speed knobs for the order path. Defaults favour fast fills; raise if your
+  // machine/connection is slow or Tradovate shows an order-confirm popup.
+  orderConfirmWaitMs: Number(process.env.ORDER_CONFIRM_WAIT_MS ?? 350),
+  switchSettleMs: Number(process.env.SWITCH_SETTLE_MS ?? 300),
+  // Save success screenshots (slower). Failures always screenshot regardless.
+  captureShots: (process.env.SCREENSHOTS ?? "false") === "true",
   sessionDir: resolve(ROOT, process.env.SESSION_DIR ?? ".tradovate-session"),
   tradovateUrl: process.env.TRADOVATE_URL ?? "https://trader.tradovate.com",
   oncePerDay: (process.env.ONCE_PER_DAY ?? "true") === "true",

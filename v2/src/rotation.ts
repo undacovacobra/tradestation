@@ -101,6 +101,18 @@ export class GroupRotation {
   }
 
   /**
+   * Manually choose which account takes the next entry. Only allowed while flat
+   * (with a trade open the next account is decided automatically on close).
+   */
+  setNext(label: string, accounts: StoredAccount[]): boolean {
+    if (this.state.openTrade) return false;
+    if (!accounts.some((a) => a.tradovateLabel === label)) return false;
+    this.state.nextLabel = label;
+    this.save();
+    return true;
+  }
+
+  /**
    * Decide which account should take the next entry, or explain why none can.
    * Starts at the remembered next account (falling back to the top of the list
    * if it was removed), skips accounts that already WON today, and scans at

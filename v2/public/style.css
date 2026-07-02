@@ -206,6 +206,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 }
 .icon-btn:hover { background: #f0f2f7; }
 .icon-btn.remove { color: var(--red); }
+.icon-btn.nextbtn { color: var(--blue); border-color: #c9d6f5; }
 
 .add-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .add-form input {
