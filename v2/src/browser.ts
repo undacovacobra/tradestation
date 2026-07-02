@@ -2,6 +2,8 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { Config } from "./config.js";
+import type { AccountBalance } from "./types.js";
+import { extractAccountBalances } from "./balanceParse.js";
 import { log } from "./logger.js";
 
 /**
@@ -143,6 +145,48 @@ export class TradovateBrowser {
       await this.snapshot("scan-accounts-failed");
       await this.p.keyboard.press("Escape").catch(() => {});
       throw new Error(`Could not read the account menu: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Read every account id AND the balance shown next to it in the Tradovate
+   * account menu. Opens the menu, captures each row's text, closes the menu.
+   * Places no orders. Balances come back null when the menu doesn't show a
+   * recognizable dollar amount next to that account.
+   */
+  async listAccountBalances(): Promise<AccountBalance[]> {
+    await this.requireLoggedIn();
+    try {
+      await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
+      await this.p.waitForTimeout(750);
+      const els = await this.p.getByText(TXT.accountIdPattern).all();
+      const rowTexts: string[] = [];
+      for (const el of els) {
+        const txt = await el
+          .evaluate((node: Element) => {
+            // Walk up to the menu row so the text includes the balance cell.
+            const row =
+              node.closest('tr, li, [role="row"], [role="option"], [role="menuitem"]') ??
+              node.parentElement?.parentElement ??
+              node.parentElement ??
+              node;
+            return row.textContent ?? "";
+          })
+          .catch(() => "");
+        if (txt) rowTexts.push(txt);
+      }
+      await this.p.keyboard.press("Escape").catch(() => {});
+      await this.p.waitForTimeout(300);
+      const balances = extractAccountBalances(rowTexts);
+      if (balances.length > 0 && balances.every((b) => b.balance === null)) {
+        // Menu opened but no dollars found — keep a screenshot to calibrate from.
+        await this.snapshot("balances-not-visible");
+      }
+      return balances;
+    } catch (err) {
+      await this.snapshot("balance-read-failed");
+      await this.p.keyboard.press("Escape").catch(() => {});
+      throw new Error(`Could not read balances from the account menu: ${(err as Error).message}`);
     }
   }
 

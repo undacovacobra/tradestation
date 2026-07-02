@@ -23,8 +23,12 @@ export const config = {
   ngrokAuthtoken: process.env.NGROK_AUTHTOKEN ?? "",
   ngrokDomain: process.env.NGROK_DOMAIN ?? "",
   ngrokAutostart: (process.env.NGROK_AUTOSTART ?? "true") === "true",
+  // How often (seconds) the bot re-reads the Tradovate account menu to update
+  // balances, spot new accounts, and enforce the eval profit target.
+  monitorSeconds: Math.max(30, Number(process.env.MONITOR_SECONDS ?? 60)),
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
+  balancesPath: resolve(ROOT, "data", "balances.json"),
   screenshotDir: resolve(ROOT, "screenshots"),
   publicDir: resolve(ROOT, "public"),
 };

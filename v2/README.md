@@ -71,6 +71,36 @@ trade → the bot flattens and rotates to the next account. Any other value
 Each lane keeps its own rotation and its own one-open-trade-at-a-time rule.
 The browser still only ever does one thing at a time.
 
+## Balances, the $53,000 eval target, and the Passed column
+
+While the Tradovate browser is connected and logged in, the bot re-reads the
+account menu on an interval (`MONITOR_SECONDS`, default every 60s). One read
+powers three things:
+
+- **Balances on the dashboard** — each account row shows its latest balance, a
+  small balance-history chart, and (for evals) how many dollars remain to the
+  target. History is kept in `data/balances.json`.
+- **Auto-adding new accounts** — any LFE…/LFF… id that appears in Tradovate but
+  isn't in the bot gets added automatically (LFE → Evals, LFF → Funded).
+- **The eval profit target** (default **$53,000**, `evalTarget` in
+  `data/settings.json`) — an eval at/above the target is retired to the
+  **🏆 Passed** column and never traded again (a "Put back in rotation" button
+  exists if it was retired by mistake). If the target is hit **while that
+  account holds the open trade, the bot flattens it immediately** without
+  waiting for a TradingView alert. There's also an entry-time guard so a
+  passed-level account can never take a new trade.
+
+Honest limits of the target stop: it reacts on the monitor interval (not
+tick-by-tick), it needs the bot running with the browser logged in, and it
+closes at market price — so the final balance will be near, not exactly at,
+the moment it crossed the target. If Tradovate's account menu doesn't show
+dollar amounts, balances stay blank and the bot says so in the Activity feed
+(a screenshot of the open menu lets us calibrate the reader).
+
+The open-trade banner also shows how many contracts the **alert** asked for —
+the actual size is whatever is set on the Tradovate screen, which the bot
+doesn't control by design.
+
 ## Reaching it from anywhere (ngrok) — built into the dashboard
 
 The PC must stay on and logged in — that's where the clicking happens. But the

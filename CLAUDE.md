@@ -55,6 +55,22 @@ untouched and still works. V2 adds:
   window and opens the dashboard; remote access comes up on its own. Only the
   initial double-click is unavoidable (can't start a program from a web button
   that isn't running yet).
+- **Account monitor** (2026-07-02, `v2/src/monitor.ts`): while the browser is
+  logged in, re-reads the Tradovate account menu every `MONITOR_SECONDS` (60s
+  default; one menu-open yields all ids + balances via `listAccountBalances()`
+  + pure parser `v2/src/balanceParse.ts`). Powers: (a) balance + history per
+  account (`data/balances.json`) with sparkline, "$X to go", shown on the
+  dashboard; (b) auto-adding accounts that appear in Tradovate (LFE→evals,
+  LFF→funded); (c) **eval profit target** (`evalTarget` in settings.json,
+  default $53,000): at/above target → account retired to `status:"passed"`
+  (new 🏆 Passed column, excluded from rotation, "Put back in rotation" undo),
+  and if it held the open trade the bot **force-flattens without a webhook**
+  (`forceClose` in server.ts) + entry-time guard in `handleEntry`. Open-trade
+  banner shows the alert's contract count (actual size = Tradovate screen).
+  **⚠️ Balance READING is unverified against the real Tradovate UI** — parser
+  is heuristic (row text near `LF[EF]…` ids); if the menu shows no dollars the
+  bot pushes a warn event and saves a `balances-not-visible` screenshot for
+  calibration. 14 unit tests pass (rotation + parser + monitor force-close).
 - Login is tolerant of tunnel hiccups (one 401 retry before showing the password
   screen) so the dashboard doesn't flicker over ngrok.
 - Windows: double-click `v2/Start Trading Bot.cmd` starts the server and opens the

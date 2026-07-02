@@ -62,6 +62,19 @@ export interface StoredAccount {
   name: string;
   group: Group;
   enabled: boolean;
+  /**
+   * "active" accounts rotate normally. "passed" = an eval that hit the profit
+   * target; it is retired from trading and shown in the Passed column until
+   * the user reactivates or removes it.
+   */
+  status: "active" | "passed";
+}
+
+/** One account's balance as read from the Tradovate account menu. */
+export interface AccountBalance {
+  label: string;
+  /** Dollars, or null when the menu row didn't show a parsable amount. */
+  balance: number | null;
 }
 
 /** A normalized order the executor knows how to act on. */

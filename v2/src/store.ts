@@ -8,6 +8,7 @@ const AccountSchema = z.object({
   name: z.string().min(1),
   group: z.enum(["evals", "funded"]),
   enabled: z.boolean().default(true),
+  status: z.enum(["active", "passed"]).default("active"),
 });
 
 const SettingsSchema = z.object({
@@ -15,6 +16,8 @@ const SettingsSchema = z.object({
   running: z.boolean().default(true),
   /** practice = log only, never touches the broker. live = clicks real buttons. */
   mode: z.enum(["practice", "live"]).default("practice"),
+  /** Eval profit target in dollars — an eval at/above this is retired ("passed"). */
+  evalTarget: z.number().positive().default(53_000),
   accounts: z.array(AccountSchema).default([]),
 });
 
@@ -59,14 +62,41 @@ export class SettingsStore {
     return this.settings.accounts;
   }
 
-  /** Enabled accounts of one group, in rotation order. */
-  accountsIn(group: Group): StoredAccount[] {
-    return this.settings.accounts.filter((a) => a.group === group && a.enabled);
+  get evalTarget(): number {
+    return this.settings.evalTarget;
   }
 
-  /** All accounts of one group (including disabled), in rotation order. */
+  /** Tradeable accounts of one group, in rotation order (enabled + not passed). */
+  accountsIn(group: Group): StoredAccount[] {
+    return this.settings.accounts.filter((a) => a.group === group && a.enabled && a.status === "active");
+  }
+
+  /** All non-passed accounts of one group (including disabled), in rotation order. */
   allAccountsIn(group: Group): StoredAccount[] {
-    return this.settings.accounts.filter((a) => a.group === group);
+    return this.settings.accounts.filter((a) => a.group === group && a.status === "active");
+  }
+
+  /** Retired accounts (hit the eval target), any group. */
+  passedAccounts(): StoredAccount[] {
+    return this.settings.accounts.filter((a) => a.status === "passed");
+  }
+
+  /** Retire an account from trading (eval target reached). */
+  markPassed(label: string): boolean {
+    const acct = this.find(label);
+    if (!acct || acct.status === "passed") return false;
+    acct.status = "passed";
+    this.save();
+    return true;
+  }
+
+  /** Put a passed account back into its group's rotation. */
+  reactivate(label: string): boolean {
+    const acct = this.find(label);
+    if (!acct || acct.status !== "passed") return false;
+    acct.status = "active";
+    this.save();
+    return true;
   }
 
   find(label: string): StoredAccount | undefined {
@@ -97,6 +127,7 @@ export class SettingsStore {
       name: name?.trim() || label,
       group,
       enabled: true,
+      status: "active",
     };
     this.settings.accounts.push(account);
     this.save();

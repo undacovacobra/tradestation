@@ -116,6 +116,7 @@ function render() {
   }
 
   for (const group of ["evals", "funded"]) renderGroup(group);
+  renderPassed();
   renderEvents();
 }
 
@@ -133,7 +134,10 @@ function renderGroup(group) {
     ? `Next trade goes to: <strong>${esc(info.next)}</strong>`
     : `<span style="color:var(--muted)">No account is ready for the next trade.</span>`;
   if (info.openTrade) {
-    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}</span>`;
+    const qty = info.openTrade.quantity
+      ? ` · ${info.openTrade.quantity} contract${info.openTrade.quantity > 1 ? "s" : ""} (per the alert)`
+      : "";
+    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}${esc(qty)}</span>`;
   }
   html += `<div style="color:var(--muted);font-size:13px;margin-top:4px">Round-trips finished today: ${info.tradesToday}</div>`;
   nextRow.innerHTML = html;
@@ -154,7 +158,9 @@ function renderGroup(group) {
         <span class="nick">${esc(acct.name)}</span>
         ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
         <span class="label">${esc(acct.tradovateLabel)}</span>
+        ${balanceLine(acct, group === "evals")}
       </div>
+      ${sparklineSvg(acct.history)}
       <button class="icon-btn" title="Move up" data-act="up">▲</button>
       <button class="icon-btn" title="Move down" data-act="down">▼</button>
       <button class="icon-btn" title="${acct.enabled ? "Turn off (skip this account)" : "Turn on"}" data-act="toggle">${acct.enabled ? "✅" : "🚫"}</button>
@@ -162,6 +168,80 @@ function renderGroup(group) {
     for (const btn of $$(".icon-btn", li)) {
       btn.addEventListener("click", () => accountAction(btn.dataset.act, acct));
     }
+    list.appendChild(li);
+  }
+}
+
+function money(n) {
+  return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Balance + "$ to go" line under an account's name. Text only — no color-coded meaning. */
+function balanceLine(acct, isEval) {
+  if (acct.balance == null) {
+    return `<span class="balance-row muted">Balance: — (shows once the browser is connected)</span>`;
+  }
+  let extra = "";
+  if (isEval && acct.toTarget != null) {
+    extra =
+      acct.toTarget <= 0
+        ? ` · 🏆 target reached`
+        : ` · <strong>${money(acct.toTarget)}</strong> to go to ${money(status.evalTarget || 53000)}`;
+  }
+  return `<span class="balance-row">Balance: <strong>${money(acct.balance)}</strong>${extra}</span>`;
+}
+
+/**
+ * Tiny single-series line chart of the account's balance history.
+ * One quiet hue, 2px stroke, no axes (the numbers live in the text beside it);
+ * a native tooltip carries the exact range for hover.
+ */
+function sparklineSvg(history) {
+  if (!history || history.length < 2) return `<span class="spark spark-empty"></span>`;
+  const W = 110;
+  const H = 30;
+  const P = 3;
+  const vals = history.map((p) => p.b);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const pts = history
+    .map((p, i) => {
+      const x = P + (i / (history.length - 1)) * (W - 2 * P);
+      const y = H - P - ((p.b - min) / span) * (H - 2 * P);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const first = history[0];
+  const last = history[history.length - 1];
+  const title = `${money(first.b)} → ${money(last.b)}`;
+  return `<span class="spark" title="${esc(title)}"><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Balance history: ${esc(title)}"><polyline points="${pts}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+}
+
+function renderPassed() {
+  const card = $("#passed-card");
+  const list = $("#passed-list");
+  const passed = status.passed || [];
+  card.hidden = passed.length === 0;
+  list.innerHTML = "";
+  for (const acct of passed) {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <div class="acct-name">
+        <span class="nick">🏆 ${esc(acct.name)}</span>
+        <span class="label">${esc(acct.tradovateLabel)}</span>
+        ${acct.balance != null ? `<span class="balance-row">Balance: <strong>${money(acct.balance)}</strong></span>` : ""}
+      </div>
+      ${sparklineSvg(acct.history)}
+      <button class="btn small" data-act="reactivate">Put back in rotation</button>
+      <button class="icon-btn remove" title="Remove" data-act="remove">✕</button>`;
+    $('[data-act="reactivate"]', li).addEventListener("click", () =>
+      doAction(async () => {
+        if (!confirm(`Put ${acct.name} back into the ${acct.group} rotation? It will be traded again.`)) return;
+        await api("/accounts/reactivate", { label: acct.tradovateLabel });
+      }),
+    );
+    $('[data-act="remove"]', li).addEventListener("click", () => accountAction("remove", acct));
     list.appendChild(li);
   }
 }

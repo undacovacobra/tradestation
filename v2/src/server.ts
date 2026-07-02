@@ -6,6 +6,7 @@ import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Group, type OrderReque
 import { SettingsStore } from "./store.js";
 import { GroupRotation } from "./rotation.js";
 import { TradovateBrowser } from "./browser.js";
+import { Monitor } from "./monitor.js";
 import { connectTunnel, disconnectTunnel, tunnelStatus, autoStartTunnel } from "./tunnel.js";
 import { pushEvent, listEvents } from "./events.js";
 import { log } from "./logger.js";
@@ -55,7 +56,23 @@ async function executeClose(label: string, name: string, symbol: string, group: 
 
 async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
   const rotation = rotations[group];
-  const choice = rotation.selectAccountForEntry(store.accountsIn(group));
+  let choice = rotation.selectAccountForEntry(store.accountsIn(group));
+
+  // Belt-and-braces target guard: never OPEN a trade on an eval that's already
+  // at/above the profit target, even if the monitor hasn't retired it yet.
+  let guard = 0;
+  while (!("error" in choice) && group === "evals" && guard++ < 100) {
+    const bal = monitor.balanceOf(choice.account.tradovateLabel);
+    if (bal === null || bal < store.evalTarget) break;
+    pushEvent(
+      "info",
+      `${choice.account.name} is already at $${bal.toLocaleString()} (target reached) — skipping it and retiring it.`,
+      group,
+    );
+    store.markPassed(choice.account.tradovateLabel);
+    choice = rotation.selectAccountForEntry(store.accountsIn(group));
+  }
+
   if ("error" in choice) {
     pushEvent("warn", `Entry skipped: ${choice.error}`, group);
     return choice.error;
@@ -79,6 +96,30 @@ async function handleClose(group: Group, symbol: string): Promise<string> {
   pushEvent("info", `Round-trip finished on ${closed.accountName}. ${nextMsg}`, group);
   return `Closed ${closed.symbol} on ${closed.accountName}. ${nextMsg}`;
 }
+
+/**
+ * Close a group's open trade WITHOUT a webhook (used by the monitor when an
+ * eval hits the profit target). Flattens at market and advances the rotation.
+ */
+async function forceClose(group: Group, reason: string): Promise<void> {
+  const rotation = rotations[group];
+  if (rotation.isFlat) return;
+  const open = rotation.getState().openTrade!;
+  await enqueue(() => executeClose(open.tradovateLabel, open.accountName, open.symbol, group));
+  const { closed, next } = rotation.recordClose(store.accountsIn(group));
+  const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
+  pushEvent("warn", `${reason} Closed the open trade on ${closed.accountName} automatically. ${nextMsg}`, group);
+}
+
+const monitor = new Monitor({
+  store,
+  rotations,
+  isBrowserReady: () => browser.status().loggedIn,
+  readBalances: () => enqueue(() => browser.listAccountBalances()),
+  forceClose,
+  balancesPath: config.balancesPath,
+  intervalSeconds: config.monitorSeconds,
+});
 
 // ---------------------------------------------------------------------------
 // App + dashboard authentication
@@ -176,6 +217,17 @@ const api = express.Router();
 api.use(requireAuth);
 
 api.get("/status", (_req, res) => {
+  const balances = monitor.snapshot();
+  const withBalance = (a: { tradovateLabel: string; group: string }) => {
+    const b = balances[a.tradovateLabel];
+    return {
+      ...a,
+      balance: b?.balance ?? null,
+      balanceUpdatedAt: b?.updatedAt ?? null,
+      history: b?.history ?? [],
+      toTarget: a.group === "evals" && b ? Math.max(0, store.evalTarget - b.balance) : null,
+    };
+  };
   const groups: Record<string, unknown> = {};
   for (const group of GROUPS) {
     const rotation = rotations[group];
@@ -183,7 +235,7 @@ api.get("/status", (_req, res) => {
     const state = rotation.getState();
     groups[group] = {
       webhookPath: `/webhook/${group}`,
-      accounts: store.allAccountsIn(group),
+      accounts: store.allAccountsIn(group).map(withBalance),
       next: rotation.peekNext(enabled)?.name ?? null,
       openTrade: state.openTrade,
       tradesToday: rotation.tradesToday(),
@@ -195,9 +247,11 @@ api.get("/status", (_req, res) => {
     running: store.running,
     mode: store.mode,
     oncePerDay: config.oncePerDay,
+    evalTarget: store.evalTarget,
     browser: browser.status(),
     tunnel: tunnelStatus(),
     groups,
+    passed: store.passedAccounts().map(withBalance),
     events: listEvents(60),
   });
 });
@@ -258,6 +312,13 @@ api.post("/accounts/move", (req, res) => {
   res.json({ ok: store.moveAccount(label, direction) });
 });
 
+api.post("/accounts/reactivate", (req, res) => {
+  const label = typeof req.body?.label === "string" ? req.body.label : "";
+  const ok = store.reactivate(label);
+  if (ok) pushEvent("info", `${label} was moved back into its rotation from the Passed column.`);
+  res.json({ ok });
+});
+
 api.post("/browser/connect", async (_req, res) => {
   try {
     const status = await enqueue(() => browser.connect());
@@ -314,6 +375,9 @@ async function main() {
     // Bring remote access up automatically if it's configured, so a fresh
     // double-click of the startup shortcut needs no extra steps.
     autoStartTunnel();
+    // Balance / new-account / eval-target monitor (idles until the Tradovate
+    // browser is connected and logged in).
+    monitor.start();
   });
 }
 

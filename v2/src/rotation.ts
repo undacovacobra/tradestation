@@ -7,6 +7,8 @@ export interface OpenTrade {
   accountName: string;
   symbol: string;
   action: "buy" | "sell";
+  /** Contracts the ALERT asked for (actual size is whatever is set on Tradovate). */
+  quantity?: number;
   tradeId?: string;
   openedAt: string;
 }
@@ -120,6 +122,7 @@ export class GroupRotation {
       accountName: account.name,
       symbol: order.symbol,
       action: order.action,
+      quantity: order.quantity,
       tradeId: order.tradeId,
       openedAt: new Date().toISOString(),
     };

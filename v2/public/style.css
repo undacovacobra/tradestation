@@ -151,6 +151,11 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .account-list .acct-name .nick { font-weight: 600; }
 .account-list .acct-name .label { display: block; color: var(--muted); font-size: 12.5px; word-break: break-all; }
 .account-list li.disabled .acct-name { opacity: 0.45; text-decoration: line-through; }
+.balance-row { display: block; font-size: 13px; margin-top: 2px; }
+.balance-row.muted { color: var(--muted); }
+.spark { flex: 0 0 auto; line-height: 0; }
+.spark-empty { width: 110px; }
+@media (max-width: 560px) { .spark, .spark-empty { display: none; } }
 .account-list li.next-up { background: var(--green-soft); border-radius: 8px; }
 .next-tag {
   background: var(--green);

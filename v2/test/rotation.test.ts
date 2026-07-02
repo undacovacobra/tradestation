@@ -9,7 +9,7 @@ import type { OrderRequest, StoredAccount } from "../src/types.js";
 const order: OrderRequest = { action: "buy", symbol: "MNQ1!", quantity: 1, orderType: "market" };
 
 function acct(label: string): StoredAccount {
-  return { tradovateLabel: label, name: label, group: "evals", enabled: true };
+  return { tradovateLabel: label, name: label, group: "evals", enabled: true, status: "active" };
 }
 
 function tempPath(): { path: string; cleanup: () => void } {
