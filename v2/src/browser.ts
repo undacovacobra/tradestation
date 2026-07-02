@@ -252,42 +252,72 @@ export class TradovateBrowser {
   }
 
   /**
-   * Set the contract quantity on the Tradovate order ticket, then read it back
-   * to CONFIRM. Throws (so the caller can refuse to trade) if it can't set and
-   * verify the exact number — we never want to place a wrong-sized order.
-   * Returns the confirmed quantity.
+   * Locate the order-ticket quantity box. It's a small element showing just the
+   * current size (a pure number), sitting just to the right of the "Sell Mkt"
+   * button. We find it geometrically (scan a few points right of Sell Mkt for a
+   * pure-number element) so we don't depend on Tradovate's unstable classes.
+   * Returns the on-screen point and the currently displayed quantity.
+   */
+  private async findQtyBox(): Promise<{ x: number; y: number; value: number } | null> {
+    const sell = this.p.getByText(TXT.sell, { exact: true }).first();
+    const box = await sell.boundingBox().catch(() => null);
+    if (!box) return null;
+    const y = box.y + box.height / 2;
+    for (const dx of [45, 60, 80, 100, 120, 150]) {
+      const x = box.x + box.width + dx;
+      const text = await this.p
+        .evaluate((p) => (document.elementFromPoint(p.x, p.y)?.textContent ?? "").trim(), { x, y })
+        .catch(() => "");
+      if (/^\d{1,3}$/.test(text)) return { x, y, value: Number(text) };
+    }
+    return null;
+  }
+
+  /**
+   * Set the contract quantity on the Tradovate order ticket (a preset dropdown:
+   * 1,2,3,4,5,10,15,20,25), then read it back to CONFIRM. Throws (so the caller
+   * refuses to trade) if it can't set and verify the exact number, so a
+   * wrong-sized order can never fire. Returns the confirmed quantity.
    */
   async setQuantity(qty: number): Promise<number> {
     await this.requireLoggedIn();
     const target = Math.max(1, Math.floor(qty));
-    const candidates = [
-      this.p.getByRole("spinbutton"),
-      this.p.locator('input[type="number"]'),
-      // The qty box sits between "Sell Mkt" and "Exit at Mkt" in the ticket.
-      this.p.locator('input[class*="qty" i], input[name*="qty" i], input[aria-label*="quantity" i]'),
-      this.p.locator('input[inputmode="numeric"]'),
-    ];
-    for (const cand of candidates) {
-      const el = cand.first();
-      if (!(await el.isVisible({ timeout: 1_500 }).catch(() => false))) continue;
-      try {
-        await el.click({ timeout: 3_000 });
-        await el.press("Control+A").catch(() => {});
-        await el.fill(String(target)).catch(async () => {
-          await el.type(String(target));
-        });
-        await this.p.waitForTimeout(200);
-        const raw = await el.inputValue().catch(() => "");
-        const n = parseInt(raw.replace(/[^\d]/g, ""), 10);
-        if (n === target) return target;
-      } catch {
-        // try the next candidate
+
+    const spot = await this.findQtyBox();
+    if (!spot) {
+      await this.snapshot("set-quantity-no-box");
+      throw new Error(
+        `Couldn't find the quantity box on the Tradovate ticket, so NO order was placed. ` +
+          `Send me a screenshot of the Buy/Sell area.`,
+      );
+    }
+    if (spot.value === target) return target; // already correct
+
+    // Open the dropdown, then click the option whose exact text is the target,
+    // choosing the match that sits in the menu just below the box.
+    await this.p.mouse.click(spot.x, spot.y);
+    await this.p.waitForTimeout(350);
+    const options = this.p.getByText(String(target), { exact: true });
+    const count = await options.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const b = await options.nth(i).boundingBox().catch(() => null);
+      if (b && Math.abs(b.x - spot.x) < 160 && b.y > spot.y + 4 && b.y < spot.y + 460) {
+        await options.nth(i).click({ timeout: 3_000 }).catch(() => {});
+        break;
       }
     }
+    await this.p.waitForTimeout(300);
+
+    const after = await this.findQtyBox();
+    if (after?.value === target) return target;
+
+    // The target wasn't a selectable preset (or the click missed). Close any
+    // open menu and fail safe rather than trade the wrong size.
+    await this.p.keyboard.press("Escape").catch(() => {});
     await this.snapshot("set-quantity-failed");
     throw new Error(
-      `Could not set the contract quantity to ${target} on Tradovate, so NO order was placed. ` +
-        `Send me a screenshot of the Buy/Sell area and I'll fix the quantity box.`,
+      `Couldn't set the size to ${target} on Tradovate (its dropdown offers 1,2,3,4,5,10,15,20,25), ` +
+        `so NO order was placed. Pick one of those sizes, or send me a screenshot.`,
     );
   }
 
