@@ -184,6 +184,15 @@ export class TradovateBrowser {
   }
 
   /**
+   * Read the selected account's balance after a short settle delay, so a
+   * just-closed position's realized profit/loss is reflected in EQUITY.
+   */
+  async readSettledBalance(): Promise<AccountBalance | null> {
+    await this.p.waitForTimeout(1_500).catch(() => {});
+    return this.readSelectedAccount();
+  }
+
+  /**
    * Switch to `label`, then read its balance from the top bar. Used to read an
    * account that isn't currently selected.
    */

@@ -151,12 +151,14 @@ function renderGroup(group) {
   for (const acct of info.accounts) {
     const li = document.createElement("li");
     if (!acct.enabled) li.classList.add("disabled");
+    if (acct.restingToday) li.classList.add("resting");
     const isNext = info.next && acct.name === info.next && acct.enabled;
     if (isNext) li.classList.add("next-up");
     li.innerHTML = `
       <div class="acct-name">
         <span class="nick">${esc(acct.name)}</span>
         ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
+        ${acct.restingToday ? '<span class="rest-tag" title="Won a trade today — sitting out until tomorrow">😴 WON TODAY</span>' : ""}
         <span class="label">${esc(acct.tradovateLabel)}</span>
         ${balanceLine(acct, group === "evals")}
       </div>

@@ -34,24 +34,32 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 // Trade handling
 // ---------------------------------------------------------------------------
 
-async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<void> {
+/** Open a position. Returns the account balance read just before the order
+ *  (live mode) so we can later judge win/loss; undefined in practice. */
+async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<number | undefined> {
   if (store.mode === "practice") {
     pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
-    return;
+    return undefined;
   }
   await browser.switchAccount(label);
+  const before = await browser.readSelectedAccount().catch(() => null);
   await browser.clickOrder(order.action, label);
   pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} for ${order.symbol} on ${name} (${label}).`, group);
+  return before?.balance ?? undefined;
 }
 
-async function executeClose(label: string, name: string, symbol: string, group: Group): Promise<void> {
+/** Flatten the position. Returns the balance read just after closing (live)
+ *  so win/loss can be measured; undefined in practice. */
+async function executeClose(label: string, name: string, symbol: string, group: Group): Promise<number | undefined> {
   if (store.mode === "practice") {
     pushEvent("trade", `PRACTICE — would CLOSE ${symbol} on ${name} (${label}). No real order placed.`, group);
-    return;
+    return undefined;
   }
   await browser.switchAccount(label);
   await browser.clickExit(label);
+  const after = await browser.readSettledBalance().catch(() => null);
   pushEvent("trade", `LIVE — closed ${symbol} on ${name} (${label}).`, group);
+  return after?.balance ?? undefined;
 }
 
 async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
@@ -78,8 +86,8 @@ async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
     return choice.error;
   }
   const acct = choice.account;
-  await executeEntry(acct.tradovateLabel, acct.name, order, group);
-  rotation.recordOpen(acct, order);
+  const entryBalance = await executeEntry(acct.tradovateLabel, acct.name, order, group);
+  rotation.recordOpen(acct, order, entryBalance);
   return `Opened ${order.action} ${order.symbol} on ${acct.name}`;
 }
 
@@ -90,11 +98,17 @@ async function handleClose(group: Group, symbol: string): Promise<string> {
     return "No open trade to close.";
   }
   const open = rotation.getState().openTrade!;
-  await executeClose(open.tradovateLabel, open.accountName, symbol, group);
-  const { closed, next } = rotation.recordClose(store.accountsIn(group));
+  const exitBalance = await executeClose(open.tradovateLabel, open.accountName, symbol, group);
+  const { closed, next, won, pnl } = rotation.recordClose(store.accountsIn(group), { exitBalance });
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
-  pushEvent("info", `Round-trip finished on ${closed.accountName}. ${nextMsg}`, group);
-  return `Closed ${closed.symbol} on ${closed.accountName}. ${nextMsg}`;
+  const resultMsg =
+    pnl != null
+      ? won
+        ? ` WON +$${pnl.toLocaleString()} — ${closed.accountName} is done for today.`
+        : ` Result ${pnl >= 0 ? "+" : ""}$${pnl.toLocaleString()} (not a win) — it stays in the cycle.`
+      : "";
+  pushEvent(won ? "trade" : "info", `Round-trip finished on ${closed.accountName}.${resultMsg} ${nextMsg}`, group);
+  return `Closed ${closed.symbol} on ${closed.accountName}.${resultMsg} ${nextMsg}`;
 }
 
 /**
@@ -105,8 +119,9 @@ async function forceClose(group: Group, reason: string): Promise<void> {
   const rotation = rotations[group];
   if (rotation.isFlat) return;
   const open = rotation.getState().openTrade!;
-  await enqueue(() => executeClose(open.tradovateLabel, open.accountName, open.symbol, group));
-  const { closed, next } = rotation.recordClose(store.accountsIn(group));
+  const exitBalance = await enqueue(() => executeClose(open.tradovateLabel, open.accountName, open.symbol, group));
+  // Hitting the profit target is by definition a win for that account.
+  const { closed, next } = rotation.recordClose(store.accountsIn(group), { won: true, exitBalance });
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
   pushEvent("warn", `${reason} Closed the open trade on ${closed.accountName} automatically. ${nextMsg}`, group);
 }
@@ -238,7 +253,10 @@ api.get("/status", (_req, res) => {
     const state = rotation.getState();
     groups[group] = {
       webhookPath: `/webhook/${group}`,
-      accounts: store.allAccountsIn(group).map(withBalance),
+      accounts: store.allAccountsIn(group).map((a) => ({
+        ...withBalance(a),
+        restingToday: rotation.isBenchedToday(a.tradovateLabel), // won already today
+      })),
       next: rotation.peekNext(enabled)?.name ?? null,
       openTrade: state.openTrade,
       tradesToday: rotation.tradesToday(),

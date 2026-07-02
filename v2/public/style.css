@@ -165,6 +165,15 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
   border-radius: 6px;
   padding: 2px 7px;
 }
+.rest-tag {
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+.account-list li.resting { background: #fbfaf5; }
 .icon-btn {
   border: 1px solid var(--line);
   background: #fff;

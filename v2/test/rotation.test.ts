@@ -49,20 +49,67 @@ test("refuses a second entry while a trade is open", () => {
   }
 });
 
-test("once-per-day skips accounts already traded today", () => {
+test("accounts that all won today have none available", () => {
   const { path, cleanup } = tempPath();
   try {
     const rot = new GroupRotation("evals", path, true, () => "2026-01-01");
     const accounts = [acct("A"), acct("B")];
+    // Both accounts WIN their first trade -> both benched for the day.
     for (const expected of ["A", "B"]) {
       const choice = rot.selectAccountForEntry(accounts);
       assert.ok("account" in choice);
       assert.equal(choice.account.tradovateLabel, expected);
-      rot.recordOpen(choice.account, order);
-      rot.recordClose(accounts);
+      rot.recordOpen(choice.account, order, 50_000);
+      rot.recordClose(accounts, { exitBalance: 50_250 }); // +250 = win
     }
     const third = rot.selectAccountForEntry(accounts);
-    assert.ok("error" in third, "all accounts traded today -> no entry");
+    assert.ok("error" in third, "both accounts won today -> none available");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a LOSING account stays in the cycle; a WINNER is benched for the day", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = new GroupRotation("evals", path, true, () => "2026-01-01");
+    const accounts = [acct("A"), acct("B")];
+
+    // A trades and LOSES -> stays available.
+    let choice = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in choice && choice.account.tradovateLabel === "A");
+    rot.recordOpen(choice.account, order, 50_000);
+    const r1 = rot.recordClose(accounts, { exitBalance: 49_800 }); // -200 = loss
+    assert.equal(r1.won, false);
+
+    // B trades and WINS -> benched.
+    choice = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in choice && choice.account.tradovateLabel === "B");
+    rot.recordOpen(choice.account, order, 50_000);
+    const r2 = rot.recordClose(accounts, { exitBalance: 50_400 }); // +400 = win
+    assert.equal(r2.won, true);
+
+    // Next selection: B is resting, so it must be A again (the loser cycles on).
+    const next = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in next);
+    assert.equal(next.account.tradovateLabel, "A", "loser A keeps cycling; winner B rests");
+    assert.equal(rot.isBenchedToday("B"), true);
+    assert.equal(rot.isBenchedToday("A"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an explicit won flag benches even without balance numbers", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = new GroupRotation("evals", path, true, () => "2026-01-01");
+    const accounts = [acct("A"), acct("B")];
+    const choice = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in choice);
+    rot.recordOpen(choice.account, order);
+    rot.recordClose(accounts, { won: true }); // e.g. profit-target force close
+    assert.equal(rot.isBenchedToday("A"), true);
   } finally {
     cleanup();
   }

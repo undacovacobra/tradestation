@@ -11,6 +11,8 @@ export interface OpenTrade {
   quantity?: number;
   tradeId?: string;
   openedAt: string;
+  /** Account balance (EQUITY) read just before the entry, to judge win/loss. */
+  entryBalance?: number;
 }
 
 export interface GroupState {
@@ -18,8 +20,11 @@ export interface GroupState {
   nextLabel: string | null;
   /** The currently open round-trip, or null if flat. */
   openTrade: OpenTrade | null;
-  /** Map of tradovateLabel -> last calendar day (YYYY-MM-DD) it was traded. */
-  lastTradedDay: Record<string, string>;
+  /**
+   * Map of tradovateLabel -> calendar day (YYYY-MM-DD) it last closed a WINNING
+   * trade. A winner sits out the rest of that day; losers keep cycling.
+   */
+  lastWonDay: Record<string, string>;
   history: Array<{
     accountName: string;
     tradovateLabel: string;
@@ -27,13 +32,15 @@ export interface GroupState {
     action: string;
     openedAt: string;
     closedAt: string;
+    won?: boolean;
+    pnl?: number;
   }>;
 }
 
 const emptyState = (): GroupState => ({
   nextLabel: null,
   openTrade: null,
-  lastTradedDay: {},
+  lastWonDay: {},
   history: [],
 });
 
@@ -51,7 +58,8 @@ export class GroupRotation {
   constructor(
     readonly group: Group,
     private readonly statePath: string,
-    private readonly oncePerDay: boolean,
+    /** When true, an account that closed a WINNER sits out the rest of the day. */
+    private readonly benchWinnersForDay: boolean,
     /** Injectable clock for tests. Returns YYYY-MM-DD for "today". */
     private readonly today: () => string = defaultToday,
   ) {
@@ -86,11 +94,16 @@ export class GroupRotation {
     return "error" in choice ? null : choice.account;
   }
 
+  /** True when this account won a trade earlier today and is benched for the day. */
+  isBenchedToday(label: string): boolean {
+    return this.benchWinnersForDay && this.state.lastWonDay[label] === this.today();
+  }
+
   /**
    * Decide which account should take the next entry, or explain why none can.
    * Starts at the remembered next account (falling back to the top of the list
-   * if it was removed), skips accounts already traded today when oncePerDay is
-   * on, and scans at most one full loop.
+   * if it was removed), skips accounts that already WON today, and scans at
+   * most one full loop.
    */
   selectAccountForEntry(accounts: StoredAccount[]): { account: StoredAccount } | { error: string } {
     if (this.state.openTrade) {
@@ -107,16 +120,14 @@ export class GroupRotation {
     );
     for (let step = 0; step < n; step++) {
       const acct = accounts[(startIdx + step) % n]!;
-      if (this.oncePerDay && this.state.lastTradedDay[acct.tradovateLabel] === this.today()) {
-        continue;
-      }
+      if (this.isBenchedToday(acct.tradovateLabel)) continue;
       return { account: acct };
     }
-    return { error: "Every account in this group has already traded today (once-per-day is on)." };
+    return { error: "Every account here already won a trade today, so they're all resting until tomorrow." };
   }
 
   /** Record that an entry was placed on the given account. */
-  recordOpen(account: StoredAccount, order: OrderRequest): OpenTrade {
+  recordOpen(account: StoredAccount, order: OrderRequest, entryBalance?: number): OpenTrade {
     const open: OpenTrade = {
       tradovateLabel: account.tradovateLabel,
       accountName: account.name,
@@ -125,22 +136,34 @@ export class GroupRotation {
       quantity: order.quantity,
       tradeId: order.tradeId,
       openedAt: new Date().toISOString(),
+      entryBalance,
     };
     this.state.openTrade = open;
     this.state.nextLabel = account.tradovateLabel;
-    this.state.lastTradedDay[account.tradovateLabel] = this.today();
     this.save();
     return open;
   }
 
   /**
    * Record that the open round-trip closed, then advance to the account AFTER
-   * the one just traded (in the current list order). Returns the closed trade
-   * and the account that will take the next entry (null if the list is empty).
+   * the one just traded (in the current list order). If the trade won (`won`
+   * true, or `exitBalance` above the recorded entry balance), that account is
+   * benched for the rest of the day. Returns the closed trade, whether it won,
+   * and the account that takes the next entry (null if the list is empty).
    */
-  recordClose(accounts: StoredAccount[]): { closed: OpenTrade; next: StoredAccount | null } {
+  recordClose(
+    accounts: StoredAccount[],
+    opts: { won?: boolean; exitBalance?: number } = {},
+  ): { closed: OpenTrade; next: StoredAccount | null; won: boolean; pnl?: number } {
     const closed = this.state.openTrade;
     if (!closed) throw new Error("recordClose called with no open trade");
+
+    let pnl: number | undefined;
+    if (closed.entryBalance != null && opts.exitBalance != null) {
+      pnl = Math.round((opts.exitBalance - closed.entryBalance) * 100) / 100;
+    }
+    // A win is an explicit flag, or a measured profit above the entry balance.
+    const won = opts.won === true || (pnl != null && pnl > 0);
 
     this.state.history.push({
       accountName: closed.accountName,
@@ -149,10 +172,13 @@ export class GroupRotation {
       action: closed.action,
       openedAt: closed.openedAt,
       closedAt: new Date().toISOString(),
+      won,
+      pnl,
     });
     if (this.state.history.length > 500) {
       this.state.history.splice(0, this.state.history.length - 500);
     }
+    if (won) this.state.lastWonDay[closed.tradovateLabel] = this.today();
     this.state.openTrade = null;
 
     let next: StoredAccount | null = null;
@@ -164,7 +190,7 @@ export class GroupRotation {
     }
     this.state.nextLabel = next?.tradovateLabel ?? null;
     this.save();
-    return { closed, next };
+    return { closed, next, won, pnl };
   }
 
   /** How many round-trips this group closed today. */

@@ -37,7 +37,14 @@ untouched and still works. V2 adds:
   accounts"**: opens the Tradovate account menu, reads all `LF[EF]…` ids, user ticks
   Evals/Funded (pre-sorted by LFE/LFF prefix).
 - **Rotation is label-keyed, not index-keyed** (`v2/src/rotation.ts`) so it survives
-  account add/remove/reorder mid-rotation. 7 unit tests pass (`npm test` in `v2/`).
+  account add/remove/reorder mid-rotation.
+- **Daily rule is WIN-based, not trade-based** (2026-07-02): `ONCE_PER_DAY` now
+  means an account that closes a WINNER sits out the rest of the (UTC) day
+  (`lastWonDay` + `isBenchedToday`); losers/breakeven keep cycling. Win = EQUITY
+  read just before entry vs. after close (`executeEntry`/`executeClose` return
+  balances; `readSettledBalance()` waits ~1.5s post-close). Only meaningful in
+  LIVE (practice moves no money → never a win). Force-close on target passes
+  `won:true`. Dashboard shows "😴 WON TODAY" (`restingToday`). 18 tests pass.
 - **Practice mode is the default** and persisted; LIVE requires a confirm flag on the
   API and a warning modal in the UI. Pause makes webhooks no-ops.
 - Browser automation unchanged from V1 (same confirmed UI labels, one shared

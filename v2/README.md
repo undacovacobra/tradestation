@@ -71,6 +71,19 @@ trade → the bot flattens and rotates to the next account. Any other value
 Each lane keeps its own rotation and its own one-open-trade-at-a-time rule.
 The browser still only ever does one thing at a time.
 
+### The daily win rule
+
+Accounts cycle one round-trip at a time and loop back to the first. When
+`ONCE_PER_DAY=true` (default), an account that closes a **winning** trade is
+benched for the rest of the day (shown as "😴 WON TODAY" and skipped in the
+rotation); an account that **loses or breaks even stays in the cycle** and gets
+traded again when its turn comes back around. Win/loss is measured from the
+account's balance (EQUITY) read just before the entry vs. just after the close,
+so this only takes effect in **LIVE** mode — in Practice no real money moves, so
+nothing counts as a win and every account keeps cycling. If a balance can't be
+read, the trade is treated as "not a win" (the account stays in the cycle).
+Reset is at midnight UTC.
+
 ## Balances, the $53,000 eval target, and the Passed column
 
 While the Tradovate browser is connected and logged in, the bot re-reads the
