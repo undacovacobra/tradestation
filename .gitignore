@@ -7,3 +7,7 @@ screenshots/
 *.log
 v2/data/settings.json
 v2/data/state-*.json
+
+# test env files should never be committed
+.env.test
+v2/.env

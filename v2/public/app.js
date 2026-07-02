@@ -82,6 +82,12 @@ function render() {
     b.loggedIn ? "green" : b.connected ? "amber" : "gray",
     b.loggedIn ? "Tradovate: logged in" : b.connected ? "Tradovate: not logged in" : "Tradovate: not connected",
   );
+  const t = status.tunnel || {};
+  setPill(
+    "pill-tunnel",
+    t.state === "on" ? "green" : t.state === "connecting" ? "amber" : t.state === "error" ? "red" : "gray",
+    t.state === "on" ? "Remote access: on" : t.state === "connecting" ? "Remote access: connecting…" : t.state === "error" ? "Remote access: problem" : "Remote access: off",
+  );
   setPill("pill-mode", status.mode === "live" ? "red" : "green", status.mode === "live" ? "LIVE MODE" : "Practice mode", false);
 
   // Big buttons
@@ -94,6 +100,10 @@ function render() {
   btnMode.className = "btn big " + (status.mode === "live" ? "success" : "danger");
 
   $("#btn-browser").textContent = b.connected ? "🌐 Reconnect browser" : "🌐 Connect browser";
+
+  const btnTunnel = $("#btn-tunnel");
+  btnTunnel.textContent = t.state === "on" ? "📡 Turn off remote access" : "📡 Turn on remote access";
+  btnTunnel.className = "btn " + (t.state === "on" ? "success" : "");
 
   // Live-mode banner
   const banner = $("#banner");
@@ -267,6 +277,21 @@ $("#btn-scan").addEventListener("click", () =>
     }
   }),
 );
+
+$("#btn-tunnel").addEventListener("click", () => {
+  if (!status) return;
+  const on = (status.tunnel || {}).state === "on";
+  doAction(async () => {
+    const btn = $("#btn-tunnel");
+    btn.disabled = true;
+    btn.textContent = on ? "Turning off…" : "Turning on…";
+    try {
+      await api(on ? "/tunnel/disconnect" : "/tunnel/connect", {});
+    } finally {
+      btn.disabled = false;
+    }
+  });
+});
 
 function showScanModal(labels) {
   if (!labels || labels.length === 0) {

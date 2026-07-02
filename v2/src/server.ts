@@ -6,6 +6,7 @@ import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Group, type OrderReque
 import { SettingsStore } from "./store.js";
 import { GroupRotation } from "./rotation.js";
 import { TradovateBrowser } from "./browser.js";
+import { connectTunnel, disconnectTunnel, tunnelStatus, autoStartTunnel } from "./tunnel.js";
 import { pushEvent, listEvents } from "./events.js";
 import { log } from "./logger.js";
 
@@ -195,6 +196,7 @@ api.get("/status", (_req, res) => {
     mode: store.mode,
     oncePerDay: config.oncePerDay,
     browser: browser.status(),
+    tunnel: tunnelStatus(),
     groups,
     events: listEvents(60),
   });
@@ -278,6 +280,16 @@ api.post("/browser/disconnect", async (_req, res) => {
   res.json({ ok: true });
 });
 
+api.post("/tunnel/connect", async (_req, res) => {
+  const status = await connectTunnel();
+  res.json({ ok: status.state !== "error", tunnel: status, error: status.state === "error" ? status.error : undefined });
+});
+
+api.post("/tunnel/disconnect", async (_req, res) => {
+  const status = await disconnectTunnel();
+  res.json({ ok: true, tunnel: status });
+});
+
 api.post("/scan", async (_req, res) => {
   try {
     const labels = await enqueue(() => browser.listAccounts());
@@ -299,11 +311,15 @@ async function main() {
     log.info(`Dashboard + webhooks listening on http://localhost:${config.port}`);
     log.info(`Webhooks: /webhook/evals and /webhook/funded | mode=${store.mode} | running=${store.running}`);
     pushEvent("info", `Bot server started. Mode: ${store.mode.toUpperCase()}. Open the dashboard to manage it.`);
+    // Bring remote access up automatically if it's configured, so a fresh
+    // double-click of the startup shortcut needs no extra steps.
+    autoStartTunnel();
   });
 }
 
 const shutdown = async () => {
   log.info("Shutting down…");
+  await disconnectTunnel().catch(() => {});
   await browser.disconnect();
   process.exit(0);
 };

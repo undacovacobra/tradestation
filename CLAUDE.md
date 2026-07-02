@@ -43,9 +43,20 @@ untouched and still works. V2 adds:
 - Browser automation unchanged from V1 (same confirmed UI labels, one shared
   serialized queue for both lanes + scans) — still **no API**. Browser is now
   connected from the dashboard ("Connect browser"), independent of trade mode.
-- **Remote access plan**: ngrok free static domain pointed at port 3300 → one
-  permanent URL for both TradingView webhooks and the phone-accessible dashboard.
-  Documented click-by-click in `v2/README.md`. Not yet set up by the user.
+- **Remote access built in** (2026-07-02): dashboard **"Remote access"** button
+  turns the ngrok tunnel on/off in-process via the official `@ngrok/ngrok` SDK
+  (`v2/src/tunnel.ts`), no separate ngrok window/command. Configured by
+  `NGROK_AUTHTOKEN` + `NGROK_DOMAIN` in `.env`; auto-starts on boot
+  (`NGROK_AUTOSTART`, default true). SDK is an **optionalDependency** loaded
+  lazily, so a failed/absent install never breaks the bot (button just reports
+  unavailable; CLI ngrok remains a fallback). User's domain:
+  `antennae-compress-panning.ngrok-free.dev`.
+- **Friendlier startup**: `Start Trading Bot.cmd` launches the bot in its own
+  window and opens the dashboard; remote access comes up on its own. Only the
+  initial double-click is unavoidable (can't start a program from a web button
+  that isn't running yet).
+- Login is tolerant of tunnel hiccups (one 401 retry before showing the password
+  screen) so the dashboard doesn't flicker over ngrok.
 - Windows: double-click `v2/Start Trading Bot.cmd` starts the server and opens the
   dashboard.
 

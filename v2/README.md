@@ -71,24 +71,41 @@ trade → the bot flattens and rotates to the next account. Any other value
 Each lane keeps its own rotation and its own one-open-trade-at-a-time rule.
 The browser still only ever does one thing at a time.
 
-## Reaching it from anywhere (ngrok)
+## Reaching it from anywhere (ngrok) — built into the dashboard
 
 The PC must stay on and logged in — that's where the clicking happens. But the
-dashboard and the webhooks can get one permanent public address with ngrok:
+dashboard and webhooks get one permanent public address with ngrok, and the bot
+now manages the tunnel itself via a **"Remote access"** button (no separate
+ngrok window/command needed).
 
-1. Sign up free at ngrok.com, then claim your **free static domain**
-   (Dashboard → Domains). It looks like `your-name.ngrok-free.app`.
-2. Install ngrok on the bot PC and run:
+One-time setup:
+1. Sign up free at ngrok.com, claim your **free static domain**
+   (Dashboard → Domains), e.g. `your-name.ngrok-free.dev`.
+2. Copy your **authtoken** (ngrok dashboard → Your Authtoken).
+3. In `v2/.env` set:
    ```
-   ngrok http --url=your-name.ngrok-free.app 3300
+   NGROK_AUTHTOKEN=<your token>
+   NGROK_DOMAIN=your-name.ngrok-free.dev
    ```
-3. Now, forever:
-   - TradingView webhook URLs: `https://your-name.ngrok-free.app/webhook/evals`
-     and `…/webhook/funded`
-   - Dashboard from your phone or any computer:
-     `https://your-name.ngrok-free.app` (it will ask for your dashboard password)
+4. Restart the bot. Remote access turns on automatically (`NGROK_AUTOSTART=true`),
+   or toggle it any time with the dashboard's **Remote access** button.
+
+Then, forever:
+- TradingView webhook URLs: `https://your-name.ngrok-free.dev/webhook/evals`
+  and `…/webhook/funded`
+- Dashboard from your phone or any computer: `https://your-name.ngrok-free.dev`
+  (it asks for your dashboard password)
+
+The tunnel uses the official `@ngrok/ngrok` SDK (an **optional** dependency
+running in-process). If it isn't installed the bot still runs — the Remote
+access button just reports it's unavailable, and you can fall back to the ngrok
+CLI (`ngrok http --url=your-name.ngrok-free.dev 3300`).
 
 Set `DASHBOARD_PASSWORD` in `.env` **before** exposing the dashboard.
+
+Only one computer can hold the tunnel at a time. If a second one tries, ngrok
+reports the address is already online — turn the bot off on the other computer
+(or stop its agent from dashboard.ngrok.com), then hit Remote access again.
 
 ## Commands
 

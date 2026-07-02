@@ -19,6 +19,10 @@ export const config = {
   sessionDir: resolve(ROOT, process.env.SESSION_DIR ?? ".tradovate-session"),
   tradovateUrl: process.env.TRADOVATE_URL ?? "https://trader.tradovate.com",
   oncePerDay: (process.env.ONCE_PER_DAY ?? "true") === "true",
+  // Remote access (ngrok) — managed from the dashboard's "Remote access" button.
+  ngrokAuthtoken: process.env.NGROK_AUTHTOKEN ?? "",
+  ngrokDomain: process.env.NGROK_DOMAIN ?? "",
+  ngrokAutostart: (process.env.NGROK_AUTOSTART ?? "true") === "true",
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
   screenshotDir: resolve(ROOT, "screenshots"),
