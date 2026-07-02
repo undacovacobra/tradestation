@@ -252,72 +252,120 @@ export class TradovateBrowser {
   }
 
   /**
-   * Locate the order-ticket quantity box. It's a small element showing just the
-   * current size (a pure number), sitting just to the right of the "Sell Mkt"
-   * button. We find it geometrically (scan a few points right of Sell Mkt for a
-   * pure-number element) so we don't depend on Tradovate's unstable classes.
-   * Returns the on-screen point and the currently displayed quantity.
+   * Locate the order-ticket quantity control: the small element showing just
+   * the current size, to the right of "Sell Mkt". It may be an INPUT (number
+   * lives in .value) or a plain element (number lives in its text), so we scan
+   * the whole row band for BOTH — no reliance on Tradovate's unstable classes.
    */
-  private async findQtyBox(): Promise<{ x: number; y: number; value: number } | null> {
+  private async findQtyControl(): Promise<{ x: number; y: number; value: number; isInput: boolean } | null> {
     const sell = this.p.getByText(TXT.sell, { exact: true }).first();
-    const box = await sell.boundingBox().catch(() => null);
-    if (!box) return null;
-    const y = box.y + box.height / 2;
-    for (const dx of [45, 60, 80, 100, 120, 150]) {
-      const x = box.x + box.width + dx;
-      const text = await this.p
-        .evaluate((p) => (document.elementFromPoint(p.x, p.y)?.textContent ?? "").trim(), { x, y })
-        .catch(() => "");
-      if (/^\d{1,3}$/.test(text)) return { x, y, value: Number(text) };
-    }
-    return null;
+    const sb = await sell.boundingBox().catch(() => null);
+    if (!sb) return null;
+    return await this.p
+      .evaluate((s) => {
+        const bandTop = s.y - 6;
+        const bandBottom = s.y + s.height + 6;
+        const xMin = s.x + s.width - 2;
+        const xMax = s.x + s.width + 300;
+        let best: { x: number; y: number; value: number; isInput: boolean; left: number } | null = null;
+        const consider = (el: Element, raw: string | null | undefined, isInput: boolean) => {
+          const t = (raw ?? "").trim();
+          if (!/^\d{1,4}$/.test(t)) return;
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || r.width > 150) return;
+          const cy = r.top + r.height / 2;
+          if (cy < bandTop || cy > bandBottom) return;
+          if (r.left < xMin || r.left > xMax) return;
+          if (!best || r.left < best.left) {
+            best = { x: r.left + r.width / 2, y: cy, value: Number(t), isInput, left: r.left };
+          }
+        };
+        for (const el of Array.from(document.querySelectorAll("input"))) {
+          consider(el, (el as HTMLInputElement).value, true);
+        }
+        for (const el of Array.from(document.querySelectorAll("*"))) {
+          if (el.tagName === "INPUT" || el.children.length > 0) continue;
+          consider(el, el.textContent, false);
+        }
+        // (cast: TS can't see the assignments made inside `consider`)
+        const found = best as { x: number; y: number; value: number; isInput: boolean; left: number } | null;
+        return found ? { x: found.x, y: found.y, value: found.value, isInput: found.isInput } : null;
+      }, { x: sb.x, y: sb.y, width: sb.width, height: sb.height })
+      .catch(() => null);
   }
 
   /**
-   * Set the contract quantity on the Tradovate order ticket (a preset dropdown:
-   * 1,2,3,4,5,10,15,20,25), then read it back to CONFIRM. Throws (so the caller
-   * refuses to trade) if it can't set and verify the exact number, so a
-   * wrong-sized order can never fire. Returns the confirmed quantity.
+   * Set the contract quantity on the Tradovate order ticket, then read it back
+   * to CONFIRM. Tries typing into the box first (it's usually an editable
+   * input), then falls back to opening its preset dropdown and clicking the
+   * matching option. Throws — placing NO order — if the final read-back doesn't
+   * match, so a wrong-sized order can never fire.
    */
   async setQuantity(qty: number): Promise<number> {
     await this.requireLoggedIn();
     const target = Math.max(1, Math.floor(qty));
 
-    const spot = await this.findQtyBox();
-    if (!spot) {
+    let ctrl = await this.findQtyControl();
+    if (!ctrl) {
       await this.snapshot("set-quantity-no-box");
       throw new Error(
         `Couldn't find the quantity box on the Tradovate ticket, so NO order was placed. ` +
           `Send me a screenshot of the Buy/Sell area.`,
       );
     }
-    if (spot.value === target) return target; // already correct
+    if (ctrl.value === target) return target; // already correct
 
-    // Open the dropdown, then click the option whose exact text is the target,
-    // choosing the match that sits in the menu just below the box.
-    await this.p.mouse.click(spot.x, spot.y);
-    await this.p.waitForTimeout(350);
-    const options = this.p.getByText(String(target), { exact: true });
-    const count = await options.count().catch(() => 0);
-    for (let i = 0; i < count; i++) {
-      const b = await options.nth(i).boundingBox().catch(() => null);
-      if (b && Math.abs(b.x - spot.x) < 160 && b.y > spot.y + 4 && b.y < spot.y + 460) {
-        await options.nth(i).click({ timeout: 3_000 }).catch(() => {});
-        break;
+    // Attempt 1: type the number straight into the box.
+    if (ctrl.isInput) {
+      await this.p.mouse.click(ctrl.x, ctrl.y);
+      await this.p.keyboard.press("Control+A").catch(() => {});
+      await this.p.keyboard.type(String(target), { delay: 40 }).catch(() => {});
+      await this.p.keyboard.press("Enter").catch(() => {});
+      await this.p.waitForTimeout(500);
+      ctrl = await this.findQtyControl();
+      if (ctrl?.value === target) {
+        await this.p.keyboard.press("Escape").catch(() => {}); // close any menu left open
+        return target;
       }
     }
-    await this.p.waitForTimeout(300);
 
-    const after = await this.findQtyBox();
-    if (after?.value === target) return target;
+    // Attempt 2: open the dropdown and click the preset option below the box.
+    await this.p.keyboard.press("Escape").catch(() => {});
+    await this.p.waitForTimeout(250);
+    const spot = (await this.findQtyControl()) ?? ctrl;
+    if (spot) {
+      await this.p.mouse.click(spot.x, spot.y);
+      await this.p.waitForTimeout(450);
+      const opt = await this.p
+        .evaluate(({ t, sx, sy }) => {
+          let best: { x: number; y: number; top: number } | null = null;
+          for (const el of Array.from(document.querySelectorAll("*"))) {
+            if (el.children.length > 0) continue;
+            if ((el.textContent ?? "").trim() !== String(t)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            const cx = r.left + r.width / 2;
+            if (Math.abs(cx - sx) > 180) continue; // must be in the menu under the box
+            if (r.top <= sy + 4 || r.top > sy + 540) continue;
+            if (!best || r.top < best.top) best = { x: cx, y: r.top + r.height / 2, top: r.top };
+          }
+          return best;
+        }, { t: target, sx: spot.x, sy: spot.y })
+        .catch(() => null);
+      if (opt) {
+        await this.p.mouse.click(opt.x, opt.y);
+        await this.p.waitForTimeout(350);
+      }
+      const after = await this.findQtyControl();
+      if (after?.value === target) return target;
+    }
 
-    // The target wasn't a selectable preset (or the click missed). Close any
-    // open menu and fail safe rather than trade the wrong size.
+    // Fail safe: close any open menu and refuse to trade the wrong size.
     await this.p.keyboard.press("Escape").catch(() => {});
     await this.snapshot("set-quantity-failed");
     throw new Error(
-      `Couldn't set the size to ${target} on Tradovate (its dropdown offers 1,2,3,4,5,10,15,20,25), ` +
-        `so NO order was placed. Pick one of those sizes, or send me a screenshot.`,
+      `Couldn't set the size to ${target} on Tradovate, so NO order was placed. ` +
+        `A screenshot named set-quantity-failed was saved — send it to me and I'll fix the aim.`,
     );
   }
 
