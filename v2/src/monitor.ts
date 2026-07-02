@@ -44,7 +44,10 @@ export interface MonitorDeps {
   /** Flatten the group's open trade and advance the rotation. */
   forceClose: (group: Group, reason: string) => Promise<void>;
   balancesPath: string;
+  /** Relaxed cadence (seconds) when no trade is open. */
   intervalSeconds: number;
+  /** Fast cadence (seconds) while any trade is open. */
+  activeIntervalSeconds: number;
 }
 
 const HISTORY_MAX = 288; // at one point/5min that's ~24h of chart
@@ -53,6 +56,7 @@ const HISTORY_MIN_GAP_MS = 5 * 60 * 1000;
 export class Monitor {
   private balances: Record<string, BalanceRecord> = {};
   private sweeping = false;
+  private running = false;
   private timer: NodeJS.Timeout | null = null;
   private warnedNoBalances = false;
 
@@ -88,16 +92,35 @@ export class Monitor {
   }
 
   start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => void this.sweep(), this.deps.intervalSeconds * 1000);
-    // First sweep shortly after boot so the dashboard fills in fast.
-    setTimeout(() => void this.sweep(), 5_000);
-    log.info(`Account monitor started (every ${this.deps.intervalSeconds}s when the browser is logged in).`);
+    if (this.running) return;
+    this.running = true;
+    // First sweep shortly after boot so the dashboard fills in fast, then the
+    // loop re-schedules itself at a cadence that depends on whether a trade is
+    // open (fast) or not (relaxed).
+    this.timer = setTimeout(() => void this.tick(), 5_000);
+    log.info(
+      `Account monitor started (every ${this.deps.intervalSeconds}s idle, every ${this.deps.activeIntervalSeconds}s while a trade is open, when logged in).`,
+    );
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
+    this.running = false;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  /** True when either lane is holding an open trade right now. */
+  private anyTradeOpen(): boolean {
+    return Object.values(this.deps.rotations).some((r) => !r.isFlat);
+  }
+
+  private async tick(): Promise<void> {
+    if (!this.running) return;
+    await this.sweep();
+    if (!this.running) return;
+    // Watch the live account every few seconds; relax when nothing is open.
+    const seconds = this.anyTradeOpen() ? this.deps.activeIntervalSeconds : this.deps.intervalSeconds;
+    this.timer = setTimeout(() => void this.tick(), seconds * 1000);
   }
 
   /** One full pass: read the menu, then apply the three jobs. */
@@ -114,12 +137,13 @@ export class Monitor {
     }
   }
 
-  /** Split from sweep() so tests can feed fake menu rows without a browser. */
-  async applyRows(rows: AccountBalance[]): Promise<void> {
-    const { store, rotations, forceClose } = this.deps;
+  /**
+   * Record balances + history from a menu read, and warn once if we can see
+   * accounts but no dollar amounts. Used by both the periodic sweep and the
+   * "Scan Tradovate accounts" button (so balances fill in the moment you scan).
+   */
+  recordBalances(rows: AccountBalance[]): void {
     const now = new Date().toISOString();
-
-    // (1) Record balances + history.
     let sawDollars = false;
     for (const { label, balance } of rows) {
       if (balance === null) continue;
@@ -145,6 +169,20 @@ export class Monitor {
         "I can see the accounts in Tradovate but no dollar amounts next to them, so balances (and the auto-stop at the target) can't work yet. A screenshot of the open account menu will let us fix this.",
       );
     }
+  }
+
+  /** Record balances from a manual scan and persist right away. */
+  scanIngest(rows: AccountBalance[]): void {
+    this.recordBalances(rows);
+    this.save();
+  }
+
+  /** Split from sweep() so tests can feed fake menu rows without a browser. */
+  async applyRows(rows: AccountBalance[]): Promise<void> {
+    const { store, rotations, forceClose } = this.deps;
+
+    // (1) Record balances + history.
+    this.recordBalances(rows);
 
     // (2) Auto-add accounts that are new in Tradovate.
     for (const { label } of rows) {

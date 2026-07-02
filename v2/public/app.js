@@ -349,8 +349,8 @@ $("#btn-scan").addEventListener("click", () =>
     btn.disabled = true;
     btn.textContent = "Scanning…";
     try {
-      const { labels } = await api("/scan", {});
-      showScanModal(labels);
+      const { labels, balances } = await api("/scan", {});
+      showScanModal(labels, balances || []);
     } finally {
       btn.disabled = false;
       btn.textContent = "Scan Tradovate accounts";
@@ -373,7 +373,7 @@ $("#btn-tunnel").addEventListener("click", () => {
   });
 });
 
-function showScanModal(labels) {
+function showScanModal(labels, balances) {
   if (!labels || labels.length === 0) {
     showModal(`<h2>No accounts found</h2>
       <p>The scan didn't find any LFE… / LFF… accounts in the Tradovate menu.
@@ -381,6 +381,9 @@ function showScanModal(labels) {
       <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
     return;
   }
+  const balByLabel = {};
+  for (const b of balances || []) balByLabel[b.label] = b.balance;
+  const anyDollars = (balances || []).some((b) => b.balance != null);
   const known = new Set(
     [...status.groups.evals.accounts, ...status.groups.funded.accounts].map((a) => a.tradovateLabel),
   );
@@ -388,8 +391,11 @@ function showScanModal(labels) {
     .map((label, i) => {
       const suggested = label.startsWith("LFE") ? "evals" : label.startsWith("LFF") ? "funded" : "skip";
       const already = known.has(label);
+      const bal = balByLabel[label];
+      const balTxt = bal != null ? `<span class="scan-bal">${money(bal)}</span>` : "";
       return `<li>
         <code>${esc(label)}</code>
+        ${balTxt}
         ${already ? '<span style="font-size:12px;color:var(--muted)">(already added)</span>' : ""}
         <label><input type="radio" name="scan-${i}" value="evals" ${suggested === "evals" && !already ? "checked" : ""}/> Evals</label>
         <label><input type="radio" name="scan-${i}" value="funded" ${suggested === "funded" && !already ? "checked" : ""}/> Funded</label>
@@ -397,9 +403,13 @@ function showScanModal(labels) {
       </li>`;
     })
     .join("");
+  const balNote = anyDollars
+    ? ""
+    : `<p style="color:var(--amber);font-size:13px">No dollar balances showed up in the menu — the account numbers still work, but balances will read “—”. If that's unexpected, send a screenshot of your open Tradovate account menu.</p>`;
   showModal(`
     <h2>🔍 Accounts found in Tradovate</h2>
     <p>Tick where each account belongs. LFE… are pre-set to Evals, LFF… to Funded.</p>
+    ${balNote}
     <ul class="scan-list">${rows}</ul>
     <div class="modal-actions">
       <button class="btn" data-close>Cancel</button>

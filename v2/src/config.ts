@@ -24,8 +24,12 @@ export const config = {
   ngrokDomain: process.env.NGROK_DOMAIN ?? "",
   ngrokAutostart: (process.env.NGROK_AUTOSTART ?? "true") === "true",
   // How often (seconds) the bot re-reads the Tradovate account menu to update
-  // balances, spot new accounts, and enforce the eval profit target.
+  // balances, spot new accounts, and enforce the eval profit target — when NO
+  // trade is open (the relaxed cadence).
   monitorSeconds: Math.max(30, Number(process.env.MONITOR_SECONDS ?? 60)),
+  // Faster cadence used while a trade is OPEN, so the profit-target stop reacts
+  // quickly on the one account that's live.
+  monitorActiveSeconds: Math.max(3, Number(process.env.MONITOR_ACTIVE_SECONDS ?? 5)),
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
   balancesPath: resolve(ROOT, "data", "balances.json"),

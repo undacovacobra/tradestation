@@ -119,6 +119,7 @@ const monitor = new Monitor({
   forceClose,
   balancesPath: config.balancesPath,
   intervalSeconds: config.monitorSeconds,
+  activeIntervalSeconds: config.monitorActiveSeconds,
 });
 
 // ---------------------------------------------------------------------------
@@ -353,9 +354,15 @@ api.post("/tunnel/disconnect", async (_req, res) => {
 
 api.post("/scan", async (_req, res) => {
   try {
-    const labels = await enqueue(() => browser.listAccounts());
-    pushEvent("info", `Scanned Tradovate: found ${labels.length} account(s).`);
-    res.json({ ok: true, labels });
+    const rows = await enqueue(() => browser.listAccountBalances());
+    // Fill balances/charts in immediately instead of waiting for the next sweep.
+    monitor.scanIngest(rows);
+    const withDollars = rows.filter((r) => r.balance !== null).length;
+    pushEvent(
+      "info",
+      `Scanned Tradovate: found ${rows.length} account(s)${withDollars ? `, ${withDollars} with balances` : ""}.`,
+    );
+    res.json({ ok: true, labels: rows.map((r) => r.label), balances: rows });
   } catch (err) {
     pushEvent("error", `Account scan failed: ${(err as Error).message}`);
     res.status(500).json({ ok: false, error: (err as Error).message });

@@ -59,6 +59,7 @@ function makeWorld() {
     },
     balancesPath: join(dir, "balances.json"),
     intervalSeconds: 3600,
+    activeIntervalSeconds: 5,
   });
   return { dir, store, rotations, monitor, closed, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -125,6 +126,20 @@ test("funded accounts are never auto-retired by the eval target", async () => {
     w.store.upsertAccount("LFF222222", "funded");
     await w.monitor.applyRows([{ label: "LFF222222", balance: 99_999 }]);
     assert.equal(w.store.find("LFF222222")?.status, "active");
+  } finally {
+    w.cleanup();
+  }
+});
+
+test("scanIngest records balances immediately without touching rotation/target", async () => {
+  const w = makeWorld();
+  try {
+    w.store.upsertAccount("LFE111111", "evals");
+    // A scan of an account already over target should still just record the
+    // balance — retiring is the periodic sweep's job, not the scan's.
+    w.monitor.scanIngest([{ label: "LFE111111", balance: 53_500 }]);
+    assert.equal(w.monitor.balanceOf("LFE111111"), 53_500);
+    assert.equal(w.store.find("LFE111111")?.status, "active");
   } finally {
     w.cleanup();
   }

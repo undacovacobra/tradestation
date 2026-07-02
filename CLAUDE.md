@@ -56,9 +56,12 @@ untouched and still works. V2 adds:
   initial double-click is unavoidable (can't start a program from a web button
   that isn't running yet).
 - **Account monitor** (2026-07-02, `v2/src/monitor.ts`): while the browser is
-  logged in, re-reads the Tradovate account menu every `MONITOR_SECONDS` (60s
-  default; one menu-open yields all ids + balances via `listAccountBalances()`
-  + pure parser `v2/src/balanceParse.ts`). Powers: (a) balance + history per
+  logged in, re-reads the Tradovate account menu on an **adaptive cadence** —
+  `MONITOR_SECONDS` (60s) idle, `MONITOR_ACTIVE_SECONDS` (5s) while any trade is
+  open (self-scheduling `tick()`), so the target stop reacts fast on the live
+  account. One menu-open yields all ids + balances via `listAccountBalances()`
+  + pure parser `v2/src/balanceParse.ts`. **Scan** now uses `listAccountBalances`
+  and calls `monitor.scanIngest()` so balances populate immediately on scan. Powers: (a) balance + history per
   account (`data/balances.json`) with sparkline, "$X to go", shown on the
   dashboard; (b) auto-adding accounts that appear in Tradovate (LFE→evals,
   LFF→funded); (c) **eval profit target** (`evalTarget` in settings.json,

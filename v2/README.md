@@ -74,12 +74,16 @@ The browser still only ever does one thing at a time.
 ## Balances, the $53,000 eval target, and the Passed column
 
 While the Tradovate browser is connected and logged in, the bot re-reads the
-account menu on an interval (`MONITOR_SECONDS`, default every 60s). One read
-powers three things:
+account menu on an interval. That cadence is **adaptive**: `MONITOR_SECONDS`
+(default 60s) when nothing is open, and the faster `MONITOR_ACTIVE_SECONDS`
+(default 5s) whenever a trade is open — so the profit-target stop reacts
+quickly on the live account. One read powers three things:
 
 - **Balances on the dashboard** — each account row shows its latest balance, a
   small balance-history chart, and (for evals) how many dollars remain to the
-  target. History is kept in `data/balances.json`.
+  target. History is kept in `data/balances.json`. **Scan Tradovate accounts**
+  also reads balances, so they populate the moment you scan instead of waiting
+  for the next sweep.
 - **Auto-adding new accounts** — any LFE…/LFF… id that appears in Tradovate but
   isn't in the bot gets added automatically (LFE → Evals, LFF → Funded).
 - **The eval profit target** (default **$53,000**, `evalTarget` in
