@@ -12,8 +12,24 @@ let busy = false; // true while a button action is in flight
 // Server helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * A slow/flaky tunnel connection (e.g. ngrok free tier from off-network) can
+ * cause an occasional dropped request. Rather than bounce the user to the
+ * login screen on a single hiccup, require two 401s in a row — with a short
+ * pause between — before concluding the session really did expire.
+ */
+async function fetchAuthed(path, init) {
+  const attempt = () => fetch(path, init);
+  let res = await attempt();
+  if (res.status === 401) {
+    await new Promise((r) => setTimeout(r, 500));
+    res = await attempt();
+  }
+  return res;
+}
+
 async function api(path, body) {
-  const res = await fetch("/api" + path, {
+  const res = await fetchAuthed("/api" + path, {
     method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -29,7 +45,7 @@ async function api(path, body) {
 
 async function refresh() {
   try {
-    const res = await fetch("/api/status");
+    const res = await fetchAuthed("/api/status");
     if (res.status === 401) return showLogin(false);
     const data = await res.json();
     hideLogin();
