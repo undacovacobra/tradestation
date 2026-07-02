@@ -83,7 +83,10 @@ quickly on the live account. One read powers three things:
   small balance-history chart, and (for evals) how many dollars remain to the
   target. History is kept in `data/balances.json`. **Scan Tradovate accounts**
   also reads balances, so they populate the moment you scan instead of waiting
-  for the next sweep.
+  for the next sweep. Balance = Tradovate's **EQUITY** figure from the top bar
+  (the account menu itself shows no dollars), read by switching to each account;
+  while a trade is open the live account is already selected, so its balance is
+  read straight from the top bar every few seconds with no switching.
 - **Auto-adding new accounts** — any LFE…/LFF… id that appears in Tradovate but
   isn't in the bot gets added automatically (LFE → Evals, LFF → Funded).
 - **The eval profit target** (default **$53,000**, `evalTarget` in

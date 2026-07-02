@@ -59,9 +59,14 @@ untouched and still works. V2 adds:
   logged in, re-reads the Tradovate account menu on an **adaptive cadence** —
   `MONITOR_SECONDS` (60s) idle, `MONITOR_ACTIVE_SECONDS` (5s) while any trade is
   open (self-scheduling `tick()`), so the target stop reacts fast on the live
-  account. One menu-open yields all ids + balances via `listAccountBalances()`
-  + pure parser `v2/src/balanceParse.ts`. **Scan** now uses `listAccountBalances`
-  and calls `monitor.scanIngest()` so balances populate immediately on scan. Powers: (a) balance + history per
+  account. **Balance = Tradovate's top-bar "EQUITY"** for the SELECTED account
+  (confirmed 2026-07-02 from user screenshots — the account MENU shows no
+  dollars, only "Demo & Active"). `readSelectedAccount()` reads the top bar
+  (cheap, used during a trade since the live account is already selected);
+  `readAllBalances()` cycles every account (menu ids → switch → read top bar,
+  idle cadence + Scan); `extractEquity()` parses the number after "EQUITY".
+  **Scan** uses `readAllBalances` + `monitor.scanIngest()` so balances populate
+  immediately on scan. Powers: (a) balance + history per
   account (`data/balances.json`) with sparkline, "$X to go", shown on the
   dashboard; (b) auto-adding accounts that appear in Tradovate (LFE→evals,
   LFF→funded); (c) **eval profit target** (`evalTarget` in settings.json,

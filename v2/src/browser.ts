@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { Config } from "./config.js";
 import type { AccountBalance } from "./types.js";
-import { extractAccountBalances } from "./balanceParse.js";
+import { extractEquity } from "./balanceParse.js";
 import { log } from "./logger.js";
 
 /**
@@ -28,6 +28,8 @@ const TXT = {
   // Auto-login flow (exact button labels from the live pages).
   loginButton: "Login",
   simButton: /Start Simulated Trading/i,
+  // Top bar shows the selected account's balance as "EQUITY  50,320.00 USD".
+  equity: /EQUITY/i,
 };
 
 export interface BrowserStatus {
@@ -149,45 +151,70 @@ export class TradovateBrowser {
   }
 
   /**
-   * Read every account id AND the balance shown next to it in the Tradovate
-   * account menu. Opens the menu, captures each row's text, closes the menu.
-   * Places no orders. Balances come back null when the menu doesn't show a
-   * recognizable dollar amount next to that account.
+   * Read the SELECTED account's id + balance straight from the top bar
+   * ("ACCOUNT  LFE…" and "EQUITY  50,320.00 USD"). No menu, no switching — so
+   * it's cheap and safe to call every few seconds while a trade is open (the
+   * account in the trade is the selected one). Returns null if nothing parses.
    */
-  async listAccountBalances(): Promise<AccountBalance[]> {
+  async readSelectedAccount(): Promise<AccountBalance | null> {
     await this.requireLoggedIn();
-    try {
-      await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
-      await this.p.waitForTimeout(750);
-      const els = await this.p.getByText(TXT.accountIdPattern).all();
-      const rowTexts: string[] = [];
-      for (const el of els) {
-        const txt = await el
-          .evaluate((node: Element) => {
-            // Walk up to the menu row so the text includes the balance cell.
-            const row =
-              node.closest('tr, li, [role="row"], [role="option"], [role="menuitem"]') ??
-              node.parentElement?.parentElement ??
-              node.parentElement ??
-              node;
-            return row.textContent ?? "";
-          })
-          .catch(() => "");
-        if (txt) rowTexts.push(txt);
+    const idText = await this.p.getByText(TXT.accountIdPattern).first().textContent().catch(() => null);
+    const label = idText?.match(/LF[EF]\d{6,}/)?.[0] ?? null;
+    if (!label) return null;
+
+    // Grab the smallest top-bar container that holds the word EQUITY and a
+    // dollar figure, then pull the number right after "EQUITY".
+    const raw = await this.p
+      .getByText(TXT.equity)
+      .first()
+      .evaluate((node: Element) => {
+        let el: Element | null = node;
+        for (let i = 0; i < 6 && el; i++) {
+          const t = el.textContent ?? "";
+          if (/EQUITY/i.test(t) && /\d[\d,]*\.\d{2}/.test(t)) return t;
+          el = el.parentElement;
+        }
+        return node.parentElement?.textContent ?? node.textContent ?? "";
+      })
+      .catch(() => "");
+
+    const balance = extractEquity(raw);
+    if (balance === null) await this.snapshot("equity-not-parsed");
+    return { label, balance };
+  }
+
+  /**
+   * Switch to `label`, then read its balance from the top bar. Used to read an
+   * account that isn't currently selected.
+   */
+  async readAccount(label: string): Promise<AccountBalance> {
+    await this.switchAccount(label);
+    const r = await this.readSelectedAccount();
+    // switchAccount guarantees `label` is selected; trust it over a mis-read id.
+    return { label, balance: r?.balance ?? null };
+  }
+
+  /**
+   * Read every account's balance by cycling through them: list the ids from the
+   * menu, then switch to each and read its EQUITY. Also surfaces brand-new
+   * accounts (the ids), so the monitor can auto-add them. Heavier than a single
+   * read — used on the relaxed idle cadence and by "Scan Tradovate accounts".
+   */
+  async readAllBalances(): Promise<AccountBalance[]> {
+    await this.requireLoggedIn();
+    const ids = await this.listAccounts();
+    const out: AccountBalance[] = [];
+    for (const id of ids) {
+      try {
+        out.push(await this.readAccount(id));
+      } catch {
+        out.push({ label: id, balance: null });
       }
-      await this.p.keyboard.press("Escape").catch(() => {});
-      await this.p.waitForTimeout(300);
-      const balances = extractAccountBalances(rowTexts);
-      if (balances.length > 0 && balances.every((b) => b.balance === null)) {
-        // Menu opened but no dollars found — keep a screenshot to calibrate from.
-        await this.snapshot("balances-not-visible");
-      }
-      return balances;
-    } catch (err) {
-      await this.snapshot("balance-read-failed");
-      await this.p.keyboard.press("Escape").catch(() => {});
-      throw new Error(`Could not read balances from the account menu: ${(err as Error).message}`);
     }
+    if (out.length > 0 && out.every((b) => b.balance === null)) {
+      await this.snapshot("balances-not-visible");
+    }
+    return out;
   }
 
   /**

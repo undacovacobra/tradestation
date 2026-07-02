@@ -39,8 +39,12 @@ export interface MonitorDeps {
   rotations: Record<Group, GroupRotation>;
   /** Is the browser connected + logged in right now? */
   isBrowserReady: () => boolean;
-  /** Read the account menu (already serialized with trades by the caller). */
-  readBalances: () => Promise<AccountBalance[]>;
+  /** Read the currently-SELECTED account's balance from the top bar (cheap). */
+  readSelected: () => Promise<AccountBalance | null>;
+  /** Switch to a specific account and read its balance. */
+  readAccount: (label: string) => Promise<AccountBalance | null>;
+  /** Cycle every account and read each balance (heavier; idle cadence + scan). */
+  readAll: () => Promise<AccountBalance[]>;
   /** Flatten the group's open trade and advance the rotation. */
   forceClose: (group: Group, reason: string) => Promise<void>;
   balancesPath: string;
@@ -123,18 +127,59 @@ export class Monitor {
     this.timer = setTimeout(() => void this.tick(), seconds * 1000);
   }
 
-  /** One full pass: read the menu, then apply the three jobs. */
+  /**
+   * One pass. While a trade is open we only read the LIVE account (its balance
+   * is in the top bar because it's the selected one) — fast and non-disruptive.
+   * When idle we cycle every account to refresh all balances and catch new ones.
+   */
   async sweep(): Promise<void> {
     if (this.sweeping || !this.deps.isBrowserReady()) return;
     this.sweeping = true;
     try {
-      const rows = await this.deps.readBalances();
-      await this.applyRows(rows);
+      if (this.anyTradeOpen()) {
+        await this.sweepLiveAccount();
+      } else {
+        await this.applyRows(await this.deps.readAll());
+      }
     } catch (err) {
       log.warn(`Balance sweep failed: ${(err as Error).message}`);
     } finally {
       this.sweeping = false;
     }
+  }
+
+  /**
+   * Fast path used while a trade is open: read only the account holding the
+   * open eval trade (the one with a hard profit-target stop), or otherwise
+   * whatever account is selected. Enforces the target on the eval trade account.
+   */
+  private async sweepLiveAccount(): Promise<void> {
+    const { store, rotations, forceClose } = this.deps;
+    const evalOpen = rotations.evals.getState().openTrade;
+
+    let reading = await this.deps.readSelected();
+    if (evalOpen && (!reading || reading.label !== evalOpen.tradovateLabel)) {
+      // Selected account drifted from the eval trade account — read it directly.
+      reading = await this.deps.readAccount(evalOpen.tradovateLabel);
+    }
+    if (!reading || reading.balance === null) return;
+    this.recordBalances([reading]);
+    this.save();
+
+    // Target check for the eval account that's live right now.
+    if (!evalOpen || reading.label !== evalOpen.tradovateLabel) return;
+    const acct = store.find(reading.label);
+    if (!acct || acct.group !== "evals" || acct.status !== "active") return;
+    if (reading.balance < store.evalTarget) return;
+
+    pushEvent(
+      "trade",
+      `🏆 ${acct.name} reached $${reading.balance.toLocaleString()} — at/above the $${store.evalTarget.toLocaleString()} target!`,
+      "evals",
+    );
+    await forceClose("evals", `${acct.name} hit the $${store.evalTarget.toLocaleString()} target.`);
+    store.markPassed(acct.tradovateLabel);
+    pushEvent("info", `${acct.name} moved to the Passed column — it will not be traded anymore.`, "evals");
   }
 
   /**

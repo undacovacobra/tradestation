@@ -115,7 +115,9 @@ const monitor = new Monitor({
   store,
   rotations,
   isBrowserReady: () => browser.status().loggedIn,
-  readBalances: () => enqueue(() => browser.listAccountBalances()),
+  readSelected: () => enqueue(() => browser.readSelectedAccount()),
+  readAccount: (label) => enqueue(() => browser.readAccount(label)),
+  readAll: () => enqueue(() => browser.readAllBalances()),
   forceClose,
   balancesPath: config.balancesPath,
   intervalSeconds: config.monitorSeconds,
@@ -354,7 +356,7 @@ api.post("/tunnel/disconnect", async (_req, res) => {
 
 api.post("/scan", async (_req, res) => {
   try {
-    const rows = await enqueue(() => browser.listAccountBalances());
+    const rows = await enqueue(() => browser.readAllBalances());
     // Fill balances/charts in immediately instead of waiting for the next sweep.
     monitor.scanIngest(rows);
     const withDollars = rows.filter((r) => r.balance !== null).length;

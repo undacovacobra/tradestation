@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractBalance, extractAccountBalances } from "../src/balanceParse.js";
+import { extractEquity } from "../src/balanceParse.js";
 import { Monitor } from "../src/monitor.js";
 import { SettingsStore } from "../src/store.js";
 import { GroupRotation } from "../src/rotation.js";
@@ -13,26 +13,16 @@ import type { Group } from "../src/types.js";
 // Balance parsing
 // ---------------------------------------------------------------------------
 
-test("extractBalance finds money next to an account id, not the id itself", () => {
-  assert.equal(extractBalance("Eval 1 LFE05079261220005 $50,123.45"), 50123.45);
-  assert.equal(extractBalance("LFF05079261220001  52,900.00 USD"), 52900);
-  assert.equal(extractBalance("LFE05079261220006 -$120.50"), -120.5);
-  // A bare integer is ambiguous (could be anything) -> null
-  assert.equal(extractBalance("LFE05079261220006 50000"), null);
-  assert.equal(extractBalance("LFE05079261220006"), null);
-});
-
-test("extractAccountBalances dedupes labels and keeps the row with dollars", () => {
-  const rows = [
-    "LFE05079261220005", // top-bar hit, no balance
-    "Eval 1 LFE05079261220005 $50,123.45", // menu row with balance
-    "Funded 1 LFF05079261220001 $52,001.10",
-  ];
-  const out = extractAccountBalances(rows);
-  assert.deepEqual(out, [
-    { label: "LFE05079261220005", balance: 50123.45 },
-    { label: "LFF05079261220001", balance: 52001.1 },
-  ]);
+test("extractEquity reads the top-bar EQUITY, not the account id or OPEN P/L", () => {
+  // The real top bar, as seen on the user's screen.
+  assert.equal(
+    extractEquity("ACCOUNT LFE05079261220007 EQUITY 50,320.00 USD OPEN P/L 0.00 USD"),
+    50320,
+  );
+  assert.equal(extractEquity("ACCOUNT LFE05079261220006 EQUITY 49,502.50 USD OPEN P/L 0.00 USD"), 49502.5);
+  assert.equal(extractEquity("EQUITY $53,105.75 USD"), 53105.75);
+  assert.equal(extractEquity("EQUITY -120.50 USD"), -120.5);
+  assert.equal(extractEquity("no numbers here"), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -47,11 +37,14 @@ function makeWorld() {
     funded: new GroupRotation("funded", join(dir, "state-funded.json"), false),
   };
   const closed: string[] = [];
+  let selected: { label: string; balance: number | null } | null = null;
   const monitor = new Monitor({
     store,
     rotations,
     isBrowserReady: () => true,
-    readBalances: async () => [],
+    readSelected: async () => selected,
+    readAccount: async (label) => (selected && selected.label === label ? selected : { label, balance: null }),
+    readAll: async () => [],
     forceClose: async (group, reason) => {
       closed.push(`${group}:${reason}`);
       // Mirror what the real forceClose does to rotation state.
@@ -61,7 +54,15 @@ function makeWorld() {
     intervalSeconds: 3600,
     activeIntervalSeconds: 5,
   });
-  return { dir, store, rotations, monitor, closed, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return {
+    dir,
+    store,
+    rotations,
+    monitor,
+    closed,
+    setSelected: (r: { label: string; balance: number | null } | null) => (selected = r),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 test("auto-adds new accounts by prefix (LFE->evals, LFF->funded)", async () => {
@@ -115,6 +116,46 @@ test("target hit WHILE its trade is open force-closes that trade", async () => {
     assert.match(w.closed[0]!, /^evals:/);
     assert.equal(w.rotations.evals.isFlat, true);
     assert.equal(w.store.find("LFE111111")?.status, "passed");
+  } finally {
+    w.cleanup();
+  }
+});
+
+test("live sweep reads the selected account and force-closes at the target", async () => {
+  const w = makeWorld();
+  try {
+    w.store.upsertAccount("LFE111111", "evals");
+    const choice = w.rotations.evals.selectAccountForEntry(w.store.accountsIn("evals"));
+    assert.ok("account" in choice);
+    w.rotations.evals.recordOpen(choice.account, { action: "buy", symbol: "MNQ1!", quantity: 1, orderType: "market" });
+
+    // Top bar now shows this account over target; a live sweep should act.
+    w.setSelected({ label: "LFE111111", balance: 53_010.25 });
+    await w.monitor.sweep(); // anyTradeOpen -> sweepLiveAccount -> readSelected
+
+    assert.equal(w.closed.length, 1, "the live trade must be force-closed");
+    assert.equal(w.rotations.evals.isFlat, true);
+    assert.equal(w.store.find("LFE111111")?.status, "passed");
+    assert.equal(w.monitor.balanceOf("LFE111111"), 53_010.25);
+  } finally {
+    w.cleanup();
+  }
+});
+
+test("live sweep leaves an under-target open trade alone", async () => {
+  const w = makeWorld();
+  try {
+    w.store.upsertAccount("LFE111111", "evals");
+    const choice = w.rotations.evals.selectAccountForEntry(w.store.accountsIn("evals"));
+    assert.ok("account" in choice);
+    w.rotations.evals.recordOpen(choice.account, { action: "buy", symbol: "MNQ1!", quantity: 1, orderType: "market" });
+
+    w.setSelected({ label: "LFE111111", balance: 52_400 });
+    await w.monitor.sweep();
+
+    assert.equal(w.closed.length, 0, "under target -> trade stays open");
+    assert.equal(w.rotations.evals.isFlat, false);
+    assert.equal(w.store.find("LFE111111")?.status, "active");
   } finally {
     w.cleanup();
   }
