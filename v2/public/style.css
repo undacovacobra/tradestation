@@ -127,6 +127,26 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
   min-width: 160px;
 }
 
+.contracts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: #f3f6ff;
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.contracts-input {
+  font: inherit;
+  width: 64px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
 .next-row { margin-bottom: 12px; font-size: 15px; }
 .next-row .open-trade {
   display: block;

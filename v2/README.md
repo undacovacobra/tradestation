@@ -121,9 +121,20 @@ the moment it crossed the target. If Tradovate's account menu doesn't show
 dollar amounts, balances stay blank and the bot says so in the Activity feed
 (a screenshot of the open menu lets us calibrate the reader).
 
-The open-trade banner also shows how many contracts the **alert** asked for —
-the actual size is whatever is set on the Tradovate screen, which the bot
-doesn't control by design.
+## Contracts per trade (position size)
+
+Each group card has a **"Contracts per trade"** box. That number — not the
+alert — decides the size: right before clicking Buy/Sell in LIVE mode the bot
+types it into Tradovate's order ticket **and reads it back to confirm**. If it
+can't set and verify the exact number it refuses to trade and says so, so a
+wrong-sized order can't slip through. Any `quantity` in the alert JSON is
+ignored for sizing.
+
+Use **"Test size on Tradovate"** (browser connected, any mode) to set the number
+on the order ticket without placing a trade — a safe way to confirm it works.
+Because setting the size drives the real order-ticket field, this is another
+spot that may need a one-time calibration against your live screen; the test
+button surfaces that immediately (and saves a `set-quantity-failed` screenshot).
 
 ## Reaching it from anywhere (ngrok) — built into the dashboard
 

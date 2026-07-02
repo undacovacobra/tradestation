@@ -251,7 +251,47 @@ export class TradovateBrowser {
     }
   }
 
-  /** Click Buy Mkt / Sell Mkt. Symbol + quantity come from what's set on the UI. */
+  /**
+   * Set the contract quantity on the Tradovate order ticket, then read it back
+   * to CONFIRM. Throws (so the caller can refuse to trade) if it can't set and
+   * verify the exact number — we never want to place a wrong-sized order.
+   * Returns the confirmed quantity.
+   */
+  async setQuantity(qty: number): Promise<number> {
+    await this.requireLoggedIn();
+    const target = Math.max(1, Math.floor(qty));
+    const candidates = [
+      this.p.getByRole("spinbutton"),
+      this.p.locator('input[type="number"]'),
+      // The qty box sits between "Sell Mkt" and "Exit at Mkt" in the ticket.
+      this.p.locator('input[class*="qty" i], input[name*="qty" i], input[aria-label*="quantity" i]'),
+      this.p.locator('input[inputmode="numeric"]'),
+    ];
+    for (const cand of candidates) {
+      const el = cand.first();
+      if (!(await el.isVisible({ timeout: 1_500 }).catch(() => false))) continue;
+      try {
+        await el.click({ timeout: 3_000 });
+        await el.press("Control+A").catch(() => {});
+        await el.fill(String(target)).catch(async () => {
+          await el.type(String(target));
+        });
+        await this.p.waitForTimeout(200);
+        const raw = await el.inputValue().catch(() => "");
+        const n = parseInt(raw.replace(/[^\d]/g, ""), 10);
+        if (n === target) return target;
+      } catch {
+        // try the next candidate
+      }
+    }
+    await this.snapshot("set-quantity-failed");
+    throw new Error(
+      `Could not set the contract quantity to ${target} on Tradovate, so NO order was placed. ` +
+        `Send me a screenshot of the Buy/Sell area and I'll fix the quantity box.`,
+    );
+  }
+
+  /** Click Buy Mkt / Sell Mkt. The quantity must already be set via setQuantity. */
   async clickOrder(action: "buy" | "sell", label: string): Promise<void> {
     const btn = action === "buy" ? TXT.buy : TXT.sell;
     await this.p.getByText(btn, { exact: true }).first().click({ timeout: 10_000 });

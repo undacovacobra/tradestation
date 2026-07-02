@@ -40,14 +40,18 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 /** Open a position. Returns the account balance read just before the order
  *  (live mode) so we can later judge win/loss; undefined in practice. */
 async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<number | undefined> {
+  const qty = order.quantity ?? 1;
   if (store.mode === "practice") {
-    pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
+    pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${qty} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
     return undefined;
   }
   await browser.switchAccount(label);
   const before = await browser.readSelectedAccount().catch(() => null);
+  // Set + verify the size FIRST; setQuantity throws if it can't confirm, so we
+  // never click Buy/Sell with the wrong number of contracts.
+  await browser.setQuantity(qty);
   await browser.clickOrder(order.action, label);
-  pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} for ${order.symbol} on ${name} (${label}).`, group);
+  pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${qty} ${order.symbol} on ${name} (${label}).`, group);
   return before?.balance ?? undefined;
 }
 
@@ -89,9 +93,12 @@ async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
     return choice.error;
   }
   const acct = choice.account;
+  // The dashboard's per-group "Contracts per trade" is the source of truth for
+  // size — not the alert — so the bot sets exactly this many on Tradovate.
+  order.quantity = store.contractsFor(group);
   const entryBalance = await executeEntry(acct.tradovateLabel, acct.name, order, group);
   rotation.recordOpen(acct, order, entryBalance);
-  return `Opened ${order.action} ${order.symbol} on ${acct.name}`;
+  return `Opened ${order.action} ${order.quantity} ${order.symbol} on ${acct.name}`;
 }
 
 async function handleClose(group: Group, symbol: string): Promise<string> {
@@ -272,6 +279,7 @@ api.get("/status", (_req, res) => {
     mode: store.mode,
     oncePerDay: config.oncePerDay,
     evalTarget: store.evalTarget,
+    contracts: { evals: store.contractsFor("evals"), funded: store.contractsFor("funded") },
     browser: browser.status(),
     tunnel: tunnelStatus(),
     groups,
@@ -334,6 +342,36 @@ api.post("/accounts/move", (req, res) => {
   const label = typeof req.body?.label === "string" ? req.body.label : "";
   const direction = req.body?.direction === "up" ? "up" : "down";
   res.json({ ok: store.moveAccount(label, direction) });
+});
+
+api.post("/contracts", (req, res) => {
+  const group = req.body?.group;
+  const contracts = Number(req.body?.contracts);
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  if (!Number.isFinite(contracts) || contracts < 1) {
+    return res.status(400).json({ ok: false, error: "contracts must be a whole number of at least 1" });
+  }
+  store.setContracts(group, contracts);
+  pushEvent("info", `Contracts per trade for ${group} set to ${store.contractsFor(group)}.`, group);
+  res.json({ ok: true, contracts: store.contractsFor(group) });
+});
+
+api.post("/test-quantity", async (req, res) => {
+  const group = req.body?.group;
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  const want = store.contractsFor(group);
+  try {
+    const confirmed = await enqueue(() => browser.setQuantity(want));
+    pushEvent("info", `Contract-size test OK — Tradovate now shows ${confirmed} on the order ticket (no order placed).`, group);
+    res.json({ ok: true, confirmed });
+  } catch (err) {
+    pushEvent("warn", `Contract-size test failed: ${(err as Error).message}`, group);
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
 });
 
 api.post("/accounts/reactivate", (req, res) => {

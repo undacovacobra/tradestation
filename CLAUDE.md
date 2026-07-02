@@ -45,6 +45,15 @@ untouched and still works. V2 adds:
   balances; `readSettledBalance()` waits ~1.5s post-close). Only meaningful in
   LIVE (practice moves no money → never a win). Force-close on target passes
   `won:true`. Dashboard shows "😴 WON TODAY" (`restingToday`).
+- **Bot now SETS position size** (2026-07-02): per-group "Contracts per trade"
+  on the dashboard (`settings.contracts.{evals,funded}`, default 1). Live entry
+  calls `browser.setQuantity(n)` which fills Tradovate's order-ticket qty field
+  and **reads it back to verify** — throws (→ no order) if it can't confirm, so
+  a wrong size can't fire. Alert `quantity` is ignored for sizing (handleEntry
+  overrides `order.quantity = store.contractsFor(group)`). "Test size on
+  Tradovate" button (`/api/test-quantity`) sets+verifies with no order. ⚠️
+  `setQuantity` selector is heuristic/unverified (getByRole spinbutton →
+  number input → qty-ish attrs); saves `set-quantity-failed` screenshot on miss.
 - **Trading-day boundary is 6pm ET, not midnight** (`v2/src/tradingDay.ts`,
   `tradingDayKey`): futures session reset. Configurable via `TRADING_DAY_TZ`
   (default America/New_York) + `TRADING_DAY_RESET_HOUR` (default 18); server

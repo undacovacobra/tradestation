@@ -128,6 +128,11 @@ function renderGroup(group) {
   const url = new URL(info.webhookPath, window.location.origin).href;
   $(".webhook-url", card).textContent = url;
 
+  // Keep the contracts box in sync unless the user is mid-edit.
+  const cInput = $(".contracts-input", card);
+  const cVal = (status.contracts || {})[group];
+  if (cVal != null && document.activeElement !== cInput) cInput.value = cVal;
+
   // Next-up + open trade
   const nextRow = $(".next-row", card);
   let html = info.next
@@ -135,7 +140,7 @@ function renderGroup(group) {
     : `<span style="color:var(--muted)">No account is ready for the next trade.</span>`;
   if (info.openTrade) {
     const qty = info.openTrade.quantity
-      ? ` · ${info.openTrade.quantity} contract${info.openTrade.quantity > 1 ? "s" : ""} (per the alert)`
+      ? ` · ${info.openTrade.quantity} contract${info.openTrade.quantity > 1 ? "s" : ""}`
       : "";
     html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}${esc(qty)}</span>`;
   }
@@ -440,6 +445,35 @@ for (const form of $$(".add-form")) {
     doAction(async () => {
       await api("/accounts/add", { label, name, group });
       form.reset();
+    });
+  });
+}
+
+for (const btn of $$(".save-contracts")) {
+  btn.addEventListener("click", () => {
+    const card = btn.closest(".group");
+    const group = card.dataset.group;
+    const contracts = Number($(".contracts-input", card).value);
+    doAction(() => api("/contracts", { group, contracts }));
+  });
+}
+
+for (const btn of $$(".test-contracts")) {
+  btn.addEventListener("click", () => {
+    const card = btn.closest(".group");
+    const group = card.dataset.group;
+    doAction(async () => {
+      btn.disabled = true;
+      btn.textContent = "Testing…";
+      try {
+        // Save whatever's typed first, then test that value on Tradovate.
+        await api("/contracts", { group, contracts: Number($(".contracts-input", card).value) });
+        const { confirmed } = await api("/test-quantity", { group });
+        alert(`✅ Tradovate now shows ${confirmed} contract(s) on the order ticket. No order was placed.`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Test size on Tradovate";
+      }
     });
   });
 }

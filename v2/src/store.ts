@@ -18,6 +18,10 @@ const SettingsSchema = z.object({
   mode: z.enum(["practice", "live"]).default("practice"),
   /** Eval profit target in dollars — an eval at/above this is retired ("passed"). */
   evalTarget: z.number().positive().default(53_000),
+  /** Contracts the bot sets on Tradovate before each Buy/Sell, per group. */
+  contracts: z
+    .object({ evals: z.number().int().positive(), funded: z.number().int().positive() })
+    .default({ evals: 1, funded: 1 }),
   accounts: z.array(AccountSchema).default([]),
 });
 
@@ -64,6 +68,15 @@ export class SettingsStore {
 
   get evalTarget(): number {
     return this.settings.evalTarget;
+  }
+
+  contractsFor(group: Group): number {
+    return this.settings.contracts[group];
+  }
+
+  setContracts(group: Group, contracts: number): void {
+    this.settings.contracts[group] = Math.max(1, Math.floor(contracts));
+    this.save();
   }
 
   /** Tradeable accounts of one group, in rotation order (enabled + not passed). */
