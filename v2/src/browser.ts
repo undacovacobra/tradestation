@@ -251,47 +251,68 @@ export class TradovateBrowser {
     }
   }
 
+  /** Bounding box of the first VISIBLE "Sell Mkt" (skips hidden duplicates). */
+  private async visibleSellBox(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    const sells = this.p.getByText(TXT.sell, { exact: true });
+    const n = await sells.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const el = sells.nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const b = await el.boundingBox().catch(() => null);
+      if (b && b.width > 0) return b;
+    }
+    return null;
+  }
+
   /**
    * Locate the order-ticket quantity control: the small element showing just
-   * the current size, to the right of "Sell Mkt". It may be an INPUT (number
-   * lives in .value) or a plain element (number lives in its text), so we scan
-   * the whole row band for BOTH — no reliance on Tradovate's unstable classes.
+   * the current size, to the right of "Sell Mkt". Uses Playwright locators for
+   * the whole scan — the SAME mechanism that reliably finds the Buy/Sell
+   * buttons — so it sees into shadow-DOM components that a raw DOM query
+   * misses. Considers both inputs (value) and text elements.
    */
   private async findQtyControl(): Promise<{ x: number; y: number; value: number; isInput: boolean } | null> {
-    const sell = this.p.getByText(TXT.sell, { exact: true }).first();
-    const sb = await sell.boundingBox().catch(() => null);
+    const sb = await this.visibleSellBox();
     if (!sb) return null;
-    return await this.p
-      .evaluate((s) => {
-        const bandTop = s.y - 6;
-        const bandBottom = s.y + s.height + 6;
-        const xMin = s.x + s.width - 2;
-        const xMax = s.x + s.width + 300;
-        let best: { x: number; y: number; value: number; isInput: boolean; left: number } | null = null;
-        const consider = (el: Element, raw: string | null | undefined, isInput: boolean) => {
-          const t = (raw ?? "").trim();
-          if (!/^\d{1,4}$/.test(t)) return;
-          const r = el.getBoundingClientRect();
-          if (r.width === 0 || r.height === 0 || r.width > 150) return;
-          const cy = r.top + r.height / 2;
-          if (cy < bandTop || cy > bandBottom) return;
-          if (r.left < xMin || r.left > xMax) return;
-          if (!best || r.left < best.left) {
-            best = { x: r.left + r.width / 2, y: cy, value: Number(t), isInput, left: r.left };
-          }
-        };
-        for (const el of Array.from(document.querySelectorAll("input"))) {
-          consider(el, (el as HTMLInputElement).value, true);
-        }
-        for (const el of Array.from(document.querySelectorAll("*"))) {
-          if (el.tagName === "INPUT" || el.children.length > 0) continue;
-          consider(el, el.textContent, false);
-        }
-        // (cast: TS can't see the assignments made inside `consider`)
-        const found = best as { x: number; y: number; value: number; isInput: boolean; left: number } | null;
-        return found ? { x: found.x, y: found.y, value: found.value, isInput: found.isInput } : null;
-      }, { x: sb.x, y: sb.y, width: sb.width, height: sb.height })
-      .catch(() => null);
+    const bandTop = sb.y - 8;
+    const bandBottom = sb.y + sb.height + 8;
+    const xMin = sb.x + sb.width - 2;
+    const xMax = sb.x + sb.width + 320;
+    const inBand = (b: { x: number; y: number; width: number; height: number }) => {
+      const cy = b.y + b.height / 2;
+      return cy >= bandTop && cy <= bandBottom && b.x >= xMin && b.x <= xMax && b.width > 0 && b.width <= 160;
+    };
+
+    let best: { x: number; y: number; value: number; isInput: boolean; left: number } | null = null;
+    const offer = (b: { x: number; y: number; width: number; height: number }, value: number, isInput: boolean) => {
+      if (!best || b.x < best.left) {
+        best = { x: b.x + b.width / 2, y: b.y + b.height / 2, value, isInput, left: b.x };
+      }
+    };
+
+    // 1. Inputs anywhere on the page whose VALUE is a small number.
+    const inputs = this.p.locator("input");
+    const ni = Math.min(await inputs.count().catch(() => 0), 300);
+    for (let i = 0; i < ni; i++) {
+      const el = inputs.nth(i);
+      const b = await el.boundingBox().catch(() => null);
+      if (!b || !inBand(b)) continue;
+      const v = (await el.inputValue().catch(() => "")).trim();
+      if (/^\d{1,4}$/.test(v)) offer(b, Number(v), true);
+    }
+
+    // 2. Elements whose TEXT is exactly a small number (shadow-DOM piercing).
+    const texts = this.p.getByText(/^\s*\d{1,4}\s*$/);
+    const nt = Math.min(await texts.count().catch(() => 0), 300);
+    for (let i = 0; i < nt; i++) {
+      const el = texts.nth(i);
+      const b = await el.boundingBox().catch(() => null);
+      if (!b || !inBand(b)) continue;
+      const t = ((await el.textContent().catch(() => "")) ?? "").trim();
+      if (/^\d{1,4}$/.test(t)) offer(b, Number(t), false);
+    }
+
+    return best;
   }
 
   /**
@@ -308,9 +329,12 @@ export class TradovateBrowser {
     let ctrl = await this.findQtyControl();
     if (!ctrl) {
       await this.snapshot("set-quantity-no-box");
+      const sellVisible = (await this.visibleSellBox()) !== null;
       throw new Error(
-        `Couldn't find the quantity box on the Tradovate ticket, so NO order was placed. ` +
-          `Send me a screenshot of the Buy/Sell area.`,
+        sellVisible
+          ? `Found the Sell Mkt button but no number box next to it, so NO order was placed. ` +
+            `Make sure the order ticket (Buy Mkt / Sell Mkt row) is fully visible in the bot's browser window, then try again.`
+          : `Couldn't see the Buy/Sell buttons at all — is the trading screen open in the bot's browser? NO order was placed.`,
       );
     }
     if (ctrl.value === target) return target; // already correct
@@ -336,22 +360,19 @@ export class TradovateBrowser {
     if (spot) {
       await this.p.mouse.click(spot.x, spot.y);
       await this.p.waitForTimeout(450);
-      const opt = await this.p
-        .evaluate(({ t, sx, sy }) => {
-          let best: { x: number; y: number; top: number } | null = null;
-          for (const el of Array.from(document.querySelectorAll("*"))) {
-            if (el.children.length > 0) continue;
-            if ((el.textContent ?? "").trim() !== String(t)) continue;
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            const cx = r.left + r.width / 2;
-            if (Math.abs(cx - sx) > 180) continue; // must be in the menu under the box
-            if (r.top <= sy + 4 || r.top > sy + 540) continue;
-            if (!best || r.top < best.top) best = { x: cx, y: r.top + r.height / 2, top: r.top };
-          }
-          return best;
-        }, { t: target, sx: spot.x, sy: spot.y })
-        .catch(() => null);
+      // Find the menu option whose exact text is the target, sitting under the
+      // box — via Playwright locators, so shadow-DOM menus are seen too.
+      const options = this.p.getByText(String(target), { exact: true });
+      const count = Math.min(await options.count().catch(() => 0), 100);
+      let opt: { x: number; y: number; top: number } | null = null;
+      for (let i = 0; i < count; i++) {
+        const b = await options.nth(i).boundingBox().catch(() => null);
+        if (!b || b.width === 0) continue;
+        const cx = b.x + b.width / 2;
+        if (Math.abs(cx - spot.x) > 180) continue; // must be in the menu under the box
+        if (b.y <= spot.y + 4 || b.y > spot.y + 540) continue;
+        if (!opt || b.y < opt.top) opt = { x: cx, y: b.y + b.height / 2, top: b.y };
+      }
       if (opt) {
         await this.p.mouse.click(opt.x, opt.y);
         await this.p.waitForTimeout(350);
