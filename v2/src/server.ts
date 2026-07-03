@@ -475,8 +475,10 @@ api.post("/speedtest", async (req, res) => {
     return res.status(400).json({ ok: false, error: "A trade is open in this group — try after it closes." });
   }
   const before = rotation.peekNext(store.accountsIn(group));
-  const t = tunnelStatus();
-  const base = t.state === "on" && t.url ? t.url : `http://localhost:${config.port}`;
+  // Hit our own webhook on localhost — this cleanly measures the BOT's work
+  // (pick account → set size → click). The internet/TradingView delivery leg is
+  // separate and can't be measured from here.
+  const base = `http://localhost:${config.port}`;
 
   const fire = async (payload: Record<string, unknown>) => {
     const started = Date.now();
@@ -485,10 +487,10 @@ api.post("/speedtest", async (req, res) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(30_000),
       });
-      const j = (await r.json().catch(() => ({}))) as { message?: string };
-      return { ms: Date.now() - started, ok: r.ok, message: j.message ?? "" };
+      const j = (await r.json().catch(() => ({}))) as { message?: string; error?: string };
+      return { ms: Date.now() - started, ok: r.ok, message: j.message ?? j.error ?? "" };
     } catch (err) {
       return { ms: Date.now() - started, ok: false, message: (err as Error).message };
     }
@@ -501,14 +503,25 @@ api.post("/speedtest", async (req, res) => {
   if (before && rotation.isFlat) rotation.setNext(before.tradovateLabel, store.accountsIn(group));
   armNext(group);
 
-  const viaTunnel = base !== `http://localhost:${config.port}`;
+  const bothOk = open.ok && close.ok;
   pushEvent(
-    "info",
+    bothOk ? "info" : "warn",
     `⏱ Speed test (${group}, ${store.mode}): open ${open.ms}ms, close ${close.ms}ms` +
-      `${viaTunnel ? " — sent through your public address, same road TradingView uses." : " — sent locally (remote access is off)."}`,
+      (bothOk ? "" : ` — problem: ${!open.ok ? open.message : close.message}`),
     group,
   );
-  res.json({ ok: open.ok && close.ok, openMs: open.ms, closeMs: close.ms, mode: store.mode, viaTunnel, openMsg: open.message, closeMsg: close.message });
+  // ok:true means the TEST ran; per-leg ok/message tell whether each trade
+  // actually went through, so the dashboard can always show the result.
+  res.json({
+    ok: true,
+    openMs: open.ms,
+    closeMs: close.ms,
+    mode: store.mode,
+    openOk: open.ok,
+    closeOk: close.ok,
+    openMsg: open.message,
+    closeMsg: close.message,
+  });
 });
 
 api.post("/accounts/reactivate", (req, res) => {

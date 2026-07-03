@@ -493,12 +493,14 @@ for (const btn of $$(".speed-test")) {
         try {
           const r = await api("/speedtest", { group, confirmLive });
           const total = Date.now() - t0;
+          const legMsg = (label, ok, ms, msg) =>
+            `<p style="font-size:20px;margin:6px 0"><strong>${label}: ${ms}ms</strong> ${ok ? "✅" : `<span style="color:var(--red)">⚠️ ${esc(msg)}</span>`}</p>`;
           showModal(`
             <h2>⏱ Speed test — ${esc(group)}</h2>
-            <p style="font-size:22px;margin:10px 0"><strong>Open: ${r.openMs}ms</strong> · <strong>Close: ${r.closeMs}ms</strong></p>
-            <p>${r.viaTunnel ? "Sent through your public web address — the same road TradingView's alerts travel." : "Sent locally (remote access is off, so the internet leg isn't included)."}</p>
-            <p>${r.mode === "live" ? "LIVE mode: these times include the real browser clicks in Tradovate." : "Practice mode: this measures everything except the actual browser clicks (no order placed)."}</p>
-            <p style="color:var(--muted);font-size:13px">Button-to-answer total including both legs: ${total}ms. Note: TradingView itself typically adds 1–3s to deliver an alert — that part isn't the bot.</p>
+            ${legMsg("Open", r.openOk, r.openMs, r.openMsg)}
+            ${legMsg("Close", r.closeOk, r.closeMs, r.closeMsg)}
+            <p>${r.mode === "live" ? "LIVE mode: these include the real browser clicks in Tradovate." : "Practice mode: measures everything except the actual browser clicks (no order placed)."}</p>
+            <p style="color:var(--muted);font-size:13px">This is the <strong>bot's</strong> own time (button → server → trade). TradingView's own alert delivery typically adds 1–3s on top and isn't the bot. Button-to-answer total: ${total}ms.</p>
             <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
         } finally {
           btn.disabled = false;
