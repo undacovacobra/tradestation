@@ -481,6 +481,48 @@ for (const btn of $$(".test-contracts")) {
   });
 }
 
+for (const btn of $$(".speed-test")) {
+  btn.addEventListener("click", () => {
+    if (!status) return;
+    const group = btn.closest(".group").dataset.group;
+    const runTest = (confirmLive) =>
+      doAction(async () => {
+        btn.disabled = true;
+        btn.textContent = "⏱ Testing…";
+        const t0 = Date.now();
+        try {
+          const r = await api("/speedtest", { group, confirmLive });
+          const total = Date.now() - t0;
+          showModal(`
+            <h2>⏱ Speed test — ${esc(group)}</h2>
+            <p style="font-size:22px;margin:10px 0"><strong>Open: ${r.openMs}ms</strong> · <strong>Close: ${r.closeMs}ms</strong></p>
+            <p>${r.viaTunnel ? "Sent through your public web address — the same road TradingView's alerts travel." : "Sent locally (remote access is off, so the internet leg isn't included)."}</p>
+            <p>${r.mode === "live" ? "LIVE mode: these times include the real browser clicks in Tradovate." : "Practice mode: this measures everything except the actual browser clicks (no order placed)."}</p>
+            <p style="color:var(--muted);font-size:13px">Button-to-answer total including both legs: ${total}ms. Note: TradingView itself typically adds 1–3s to deliver an alert — that part isn't the bot.</p>
+            <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "⏱ Speed test";
+        }
+      });
+    if (status.mode === "live") {
+      showModal(`
+        <h2>⚠️ Speed test in LIVE mode?</h2>
+        <div class="warn-box">This will place a REAL order (your set contract size) on the next ${esc(group)} account and immediately flatten it. It may cost a tick or two of slippage.</div>
+        <div class="modal-actions">
+          <button class="btn" data-close>Cancel</button>
+          <button class="btn danger" id="confirm-speedtest">Yes, run live test</button>
+        </div>`);
+      $("#confirm-speedtest").addEventListener("click", () => {
+        closeModal();
+        runTest(true);
+      });
+    } else {
+      runTest(false);
+    }
+  });
+}
+
 for (const btn of $$(".copy-webhook")) {
   btn.addEventListener("click", () => {
     const url = $(".webhook-url", btn.closest(".group")).textContent;

@@ -453,6 +453,64 @@ api.post("/next", (req, res) => {
   res.json({ ok });
 });
 
+/**
+ * Speed test: fire a real buy-then-close webhook at OUR OWN webhook URL —
+ * through the public tunnel when it's up, i.e. the same road TradingView
+ * uses — and time each leg. Restores the rotation's next-account afterwards
+ * so a test never shuffles the real order.
+ */
+api.post("/speedtest", async (req, res) => {
+  const group = req.body?.group;
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  if (!store.running) {
+    return res.status(400).json({ ok: false, error: "The bot is paused — press Start first." });
+  }
+  if (store.mode === "live" && req.body?.confirmLive !== true) {
+    return res.status(400).json({ ok: false, error: "LIVE speed test needs confirmation (it places a real order)." });
+  }
+  const rotation = rotations[group];
+  if (!rotation.isFlat) {
+    return res.status(400).json({ ok: false, error: "A trade is open in this group — try after it closes." });
+  }
+  const before = rotation.peekNext(store.accountsIn(group));
+  const t = tunnelStatus();
+  const base = t.state === "on" && t.url ? t.url : `http://localhost:${config.port}`;
+
+  const fire = async (payload: Record<string, unknown>) => {
+    const started = Date.now();
+    try {
+      const r = await fetch(`${base}/webhook/${group}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const j = (await r.json().catch(() => ({}))) as { message?: string };
+      return { ms: Date.now() - started, ok: r.ok, message: j.message ?? "" };
+    } catch (err) {
+      return { ms: Date.now() - started, ok: false, message: (err as Error).message };
+    }
+  };
+
+  const secret = config.webhookSecret;
+  const open = await fire({ secret, action: "buy", symbol: "SPEEDTEST", marketPosition: "long", tradeId: "speedtest" });
+  const close = await fire({ secret, action: "sell", symbol: "SPEEDTEST", marketPosition: "flat" });
+  // Put the rotation back the way it was — a test shouldn't advance the order.
+  if (before && rotation.isFlat) rotation.setNext(before.tradovateLabel, store.accountsIn(group));
+  armNext(group);
+
+  const viaTunnel = base !== `http://localhost:${config.port}`;
+  pushEvent(
+    "info",
+    `⏱ Speed test (${group}, ${store.mode}): open ${open.ms}ms, close ${close.ms}ms` +
+      `${viaTunnel ? " — sent through your public address, same road TradingView uses." : " — sent locally (remote access is off)."}`,
+    group,
+  );
+  res.json({ ok: open.ok && close.ok, openMs: open.ms, closeMs: close.ms, mode: store.mode, viaTunnel, openMsg: open.message, closeMsg: close.message });
+});
+
 api.post("/accounts/reactivate", (req, res) => {
   const label = typeof req.body?.label === "string" ? req.body.label : "";
   const ok = store.reactivate(label);
