@@ -233,6 +233,14 @@ export class TradovateBrowser {
    */
   async switchAccount(label: string): Promise<void> {
     await this.requireLoggedIn();
+    // Fast path: if the top bar already shows this account, there's nothing to
+    // do — no menu, no settle wait. (Pre-arming makes this the common case.)
+    const current = await this.p
+      .getByText(TXT.accountIdPattern)
+      .first()
+      .textContent({ timeout: 2_000 })
+      .catch(() => null);
+    if (current?.includes(label)) return;
     log.info(`Switching active account to ${label}`);
     try {
       // Before the menu opens, an account id (LFE…/LFF…) only appears in the
@@ -401,6 +409,21 @@ export class TradovateBrowser {
       `Couldn't set the size to ${target} on Tradovate, so NO order was placed. ` +
         `A screenshot named set-quantity-failed was saved — send it to me and I'll fix the aim.`,
     );
+  }
+
+  /**
+   * Pre-arm for the next trade: select the account and pre-set the quantity so
+   * the entry webhook only has to click Buy/Sell. Best-effort — the entry path
+   * re-verifies both anyway (each is a fast no-op when already correct).
+   */
+  async armFor(label: string, qty: number): Promise<void> {
+    await this.switchAccount(label);
+    try {
+      await this.setQuantity(qty);
+      log.info(`Armed and ready: ${label} selected, size ${qty} set.`);
+    } catch (err) {
+      log.warn(`Armed ${label}, but couldn't pre-set size: ${(err as Error).message}`);
+    }
   }
 
   /** Click Buy Mkt / Sell Mkt. The quantity must already be set via setQuantity. */

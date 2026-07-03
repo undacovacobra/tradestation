@@ -39,8 +39,8 @@ export const config = {
   // trade is open (the relaxed cadence).
   monitorSeconds: Math.max(30, Number(process.env.MONITOR_SECONDS ?? 60)),
   // Faster cadence used while a trade is OPEN, so the profit-target stop reacts
-  // quickly on the one account that's live.
-  monitorActiveSeconds: Math.max(3, Number(process.env.MONITOR_ACTIVE_SECONDS ?? 5)),
+  // quickly on the one account that's live (a cheap top-bar read, ~50ms).
+  monitorActiveSeconds: Math.max(1, Number(process.env.MONITOR_ACTIVE_SECONDS ?? 3)),
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
   balancesPath: resolve(ROOT, "data", "balances.json"),

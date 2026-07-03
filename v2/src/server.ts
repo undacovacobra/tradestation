@@ -25,12 +25,37 @@ const rotations: Record<Group, GroupRotation> = {
  * Serialize everything that may touch the browser (orders from BOTH groups,
  * account scans). TradingView can fire alerts close together and browser
  * automation must never run two flows at once.
+ *
+ * SPEED: `pendingTrades` counts webhook trades waiting for the browser. All
+ * background work (balance sweeps, arming) checks it and yields, so a trade
+ * never waits behind more than one tiny background step.
  */
 let queue: Promise<unknown> = Promise.resolve();
+let pendingTrades = 0;
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
   const run = queue.then(task, task);
   queue = run.catch(() => {});
   return run;
+}
+
+/** Which lane fired most recently — the best guess for what fires next. */
+let lastAlertGroup: Group = "evals";
+
+/**
+ * Pre-arm the browser for the group's NEXT entry: select that account and
+ * pre-set the size, so the entry webhook only has to click Buy/Sell.
+ * Fire-and-forget; skipped in practice mode / when not logged in / not flat.
+ */
+function armNext(group: Group): void {
+  if (store.mode !== "live" || !browser.status().loggedIn) return;
+  const rotation = rotations[group];
+  if (!rotation.isFlat) return;
+  const next = rotation.peekNext(store.accountsIn(group));
+  if (!next) return;
+  void enqueue(() => {
+    if (pendingTrades > 0) return Promise.resolve(); // never delay a real trade
+    return browser.armFor(next.tradovateLabel, store.contractsFor(group));
+  }).catch((err) => log.warn(`Pre-arm failed: ${(err as Error).message}`));
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +146,9 @@ async function handleClose(group: Group, symbol: string): Promise<string> {
         : ` Result ${pnl >= 0 ? "+" : ""}$${pnl.toLocaleString()} (not a win) — it stays in the cycle.`
       : "";
   pushEvent(won ? "trade" : "info", `Round-trip finished on ${closed.accountName}.${resultMsg} ${nextMsg}`, group);
+  // Get the browser sitting on the next account with the size pre-set, so the
+  // next entry only has to click Buy/Sell.
+  armNext(group);
   return `Closed ${closed.symbol} on ${closed.accountName}.${resultMsg} ${nextMsg}`;
 }
 
@@ -137,6 +165,7 @@ async function forceClose(group: Group, reason: string): Promise<void> {
   const { closed, next } = rotation.recordClose(store.accountsIn(group), { won: true, exitBalance });
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
   pushEvent("warn", `${reason} Closed the open trade on ${closed.accountName} automatically. ${nextMsg}`, group);
+  armNext(group);
 }
 
 const monitor = new Monitor({
@@ -145,7 +174,21 @@ const monitor = new Monitor({
   isBrowserReady: () => browser.status().loggedIn,
   readSelected: () => enqueue(() => browser.readSelectedAccount()),
   readAccount: (label) => enqueue(() => browser.readAccount(label)),
-  readAll: () => enqueue(() => browser.readAllBalances()),
+  // Interruptible full sweep: each account is its own small queue job and the
+  // loop bails out the moment a trade is waiting — so a webhook never sits
+  // behind a multi-second all-accounts balance cycle.
+  readAll: async () => {
+    const labels = await enqueue(() => (pendingTrades > 0 ? Promise.resolve([]) : browser.listAccounts()));
+    const out: { label: string; balance: number | null }[] = [];
+    for (const label of labels) {
+      if (pendingTrades > 0) break; // yield to the trade; finish next sweep
+      out.push(await enqueue(() => browser.readAccount(label)).catch(() => ({ label, balance: null })));
+    }
+    // The sweep leaves the browser on whatever account it read last — put it
+    // back on the account that's up next so entries stay instant.
+    armNext(lastAlertGroup);
+    return out;
+  },
   forceClose,
   balancesPath: config.balancesPath,
   intervalSeconds: config.monitorSeconds,
@@ -217,8 +260,13 @@ app.post("/webhook/:group", async (req, res) => {
     return res.json({ ok: true, message: "Bot is paused; alert ignored." });
   }
 
+  const received = Date.now();
+  lastAlertGroup = group;
+  pendingTrades++;
   try {
+    let waitedMs = 0;
     const message = await enqueue(() => {
+      waitedMs = Date.now() - received;
       if (isCloseAlert(alert)) return handleClose(group, alert.symbol);
       // Past the close check, this is an entry: action is "buy" or "sell".
       const order: OrderRequest = {
@@ -233,10 +281,14 @@ app.post("/webhook/:group", async (req, res) => {
       };
       return handleEntry(group, order);
     });
+    const totalMs = Date.now() - received;
+    pushEvent("info", `⚡ Handled in ${totalMs}ms (waited ${waitedMs}ms for its turn).`, group);
     return res.json({ ok: true, message });
   } catch (err) {
     pushEvent("error", `Something went wrong handling a ${alert.action} alert: ${(err as Error).message}`, group);
     return res.status(500).json({ ok: false, error: (err as Error).message });
+  } finally {
+    pendingTrades--;
   }
 });
 
@@ -313,6 +365,7 @@ api.post("/mode", (req, res) => {
       ? "Switched to LIVE mode — alerts will place REAL orders in Tradovate."
       : "Switched to PRACTICE mode — trades are only simulated in the log.",
   );
+  if (mode === "live") armNext(lastAlertGroup);
   return res.json({ ok: true, mode });
 });
 
@@ -358,6 +411,7 @@ api.post("/contracts", (req, res) => {
   }
   store.setContracts(group, contracts);
   pushEvent("info", `Contracts per trade for ${group} set to ${store.contractsFor(group)}.`, group);
+  armNext(group); // pre-set the new size on the ticket
   res.json({ ok: true, contracts: store.contractsFor(group) });
 });
 
@@ -394,6 +448,7 @@ api.post("/next", (req, res) => {
   if (ok) {
     const acct = store.find(label);
     pushEvent("info", `Next ${group} trade will go to ${acct?.name ?? label}.`, group);
+    armNext(group);
   }
   res.json({ ok });
 });
@@ -414,6 +469,7 @@ api.post("/browser/connect", async (_req, res) => {
         ? "Tradovate browser connected and logged in."
         : "Browser opened, but not logged in yet — finish the login in the browser window on the bot PC.",
     );
+    if (status.loggedIn) armNext(lastAlertGroup);
     res.json({ ok: true, browser: status });
   } catch (err) {
     pushEvent("error", `Could not open the Tradovate browser: ${(err as Error).message}`);

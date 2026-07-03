@@ -59,6 +59,20 @@ untouched and still works. V2 adds:
   guards it; skips if no Chromium.
 - **Manual next-account pick** (2026-07-02): `⏭` button per account →
   `POST /api/next` → `rotation.setNext(label)` (only when flat).
+- **Event-driven speed architecture** (2026-07-02, after user saw 6-7s fills):
+  root cause was the idle balance sweep (switch+read EVERY account, seconds
+  long) holding the single serialized browser queue while a webhook waited.
+  Fixes: (a) `pendingTrades` counter — webhooks increment it; the sweep is now
+  per-account queue jobs that BAIL between accounts when a trade is pending
+  (`readAll` impl in server.ts); (b) **pre-arming** — after every close /
+  setNext / contracts change / connect / mode→live / sweep end, `armNext(group)`
+  selects the next account and pre-sets qty (`browser.armFor`), so an entry is
+  just topbar-check → qty-check (no-op) → click Buy/Sell; `switchAccount` has a
+  fast path (skips menu when top bar already shows the target);
+  (c) `lastAlertGroup` tracks which lane to arm for; (d) **⚡ stopwatch event**
+  per webhook ("Handled in Xms (waited Yms)") separates bot latency from
+  TradingView/ngrok delivery latency. MONITOR_ACTIVE_SECONDS default 3 (min 1).
+  Practice-mode webhook measured 1-19ms server-side.
 - **Bot now SETS position size** (2026-07-02): per-group "Contracts per trade"
   on the dashboard (`settings.contracts.{evals,funded}`, default 1). Live entry
   calls `browser.setQuantity(n)` which fills Tradovate's order-ticket qty field
