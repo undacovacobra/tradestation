@@ -48,10 +48,12 @@ export interface MonitorDeps {
   /** Flatten the group's open trade and advance the rotation. */
   forceClose: (group: Group, reason: string) => Promise<void>;
   balancesPath: string;
-  /** Relaxed cadence (seconds) when no trade is open. */
+  /** Heartbeat cadence (seconds) when no trade is open (no browser work). */
   intervalSeconds: number;
-  /** Fast cadence (seconds) while any trade is open. */
+  /** Cadence (seconds) for the cheap live-account read while a trade is open. */
   activeIntervalSeconds: number;
+  /** How often (ms) to do a full all-accounts balance sweep. 0 = never. */
+  fullSweepMs: number;
 }
 
 const HISTORY_MAX = 288; // at one point/5min that's ~24h of chart
@@ -63,6 +65,7 @@ export class Monitor {
   private running = false;
   private timer: NodeJS.Timeout | null = null;
   private warnedNoBalances = false;
+  private lastFullSweep = 0;
 
   constructor(private readonly deps: MonitorDeps) {
     this.balances = this.load();
@@ -98,12 +101,15 @@ export class Monitor {
   start(): void {
     if (this.running) return;
     this.running = true;
-    // First sweep shortly after boot so the dashboard fills in fast, then the
-    // loop re-schedules itself at a cadence that depends on whether a trade is
-    // open (fast) or not (relaxed).
+    // Light heartbeat: it does browser work ONLY while a trade is open (a cheap
+    // top-bar read of the live account). When flat it does nothing — no
+    // account-switching in the background — so it never fights a trade for the
+    // browser. A full all-accounts refresh only happens if BALANCE_SWEEP_MINUTES
+    // is set (default off); balances otherwise update via Scan + during trades.
     this.timer = setTimeout(() => void this.tick(), 5_000);
+    const sweep = this.deps.fullSweepMs > 0 ? `every ${Math.round(this.deps.fullSweepMs / 60000)}min` : "off";
     log.info(
-      `Account monitor started (every ${this.deps.intervalSeconds}s idle, every ${this.deps.activeIntervalSeconds}s while a trade is open, when logged in).`,
+      `Account monitor started (live-account watch every ${this.deps.activeIntervalSeconds}s during a trade; full balance sweep ${sweep}).`,
     );
   }
 
@@ -122,15 +128,15 @@ export class Monitor {
     if (!this.running) return;
     await this.sweep();
     if (!this.running) return;
-    // Watch the live account every few seconds; relax when nothing is open.
-    const seconds = this.anyTradeOpen() ? this.deps.activeIntervalSeconds : this.deps.intervalSeconds;
-    this.timer = setTimeout(() => void this.tick(), seconds * 1000);
+    // Always a short heartbeat so a newly-opened trade is noticed fast — but the
+    // heartbeat only touches the browser when there's actually a trade open.
+    this.timer = setTimeout(() => void this.tick(), this.deps.activeIntervalSeconds * 1000);
   }
 
   /**
-   * One pass. While a trade is open we only read the LIVE account (its balance
-   * is in the top bar because it's the selected one) — fast and non-disruptive.
-   * When idle we cycle every account to refresh all balances and catch new ones.
+   * One pass. While a trade is open: cheap top-bar read of the live account +
+   * target check (no account-switching). While flat: nothing, unless a periodic
+   * full sweep is enabled AND due (and even then it yields to any pending trade).
    */
   async sweep(): Promise<void> {
     if (this.sweeping || !this.deps.isBrowserReady()) return;
@@ -138,7 +144,8 @@ export class Monitor {
     try {
       if (this.anyTradeOpen()) {
         await this.sweepLiveAccount();
-      } else {
+      } else if (this.deps.fullSweepMs > 0 && Date.now() - this.lastFullSweep >= this.deps.fullSweepMs) {
+        this.lastFullSweep = Date.now();
         await this.applyRows(await this.deps.readAll());
       }
     } catch (err) {

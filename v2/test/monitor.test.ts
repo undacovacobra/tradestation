@@ -53,6 +53,7 @@ function makeWorld() {
     balancesPath: join(dir, "balances.json"),
     intervalSeconds: 3600,
     activeIntervalSeconds: 5,
+    fullSweepMs: 0,
   });
   return {
     dir,

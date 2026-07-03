@@ -73,6 +73,16 @@ untouched and still works. V2 adds:
   per webhook ("Handled in Xms (waited Yms)") separates bot latency from
   TradingView/ngrok delivery latency. MONITOR_ACTIVE_SECONDS default 3 (min 1).
   Practice-mode webhook measured 1-19ms server-side.
+- **Background balance sweep OFF by default** (2026-07-02, after user saw
+  1.7s-11s variance): the every-60s full sweep switched through EVERY account
+  (~seconds) and any trade landing mid-sweep waited behind it — the source of
+  the variance. Now `monitor.sweep()` when flat does NOTHING unless
+  `BALANCE_SWEEP_MINUTES>0` (default 0); during a trade it does the cheap
+  top-bar live-account read only (no switching). Heartbeat every
+  `MONITOR_ACTIVE_SECONDS` (3s) but only touches the browser when a trade is
+  open. Idle balances refresh on Scan + during trades. `$53k` stop still works
+  (live-account read). This removes account-switching contention from the trade
+  path entirely.
 - **Bot now SETS position size** (2026-07-02): per-group "Contracts per trade"
   on the dashboard (`settings.contracts.{evals,funded}`, default 1). Live entry
   calls `browser.setQuantity(n)` which fills Tradovate's order-ticket qty field

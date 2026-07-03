@@ -193,6 +193,7 @@ const monitor = new Monitor({
   balancesPath: config.balancesPath,
   intervalSeconds: config.monitorSeconds,
   activeIntervalSeconds: config.monitorActiveSeconds,
+  fullSweepMs: config.balanceSweepMinutes * 60_000,
 });
 
 // ---------------------------------------------------------------------------

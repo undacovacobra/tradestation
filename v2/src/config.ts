@@ -41,6 +41,11 @@ export const config = {
   // Faster cadence used while a trade is OPEN, so the profit-target stop reacts
   // quickly on the one account that's live (a cheap top-bar read, ~50ms).
   monitorActiveSeconds: Math.max(1, Number(process.env.MONITOR_ACTIVE_SECONDS ?? 3)),
+  // How often (MINUTES) to refresh EVERY account's balance in the background.
+  // This switches through all accounts (heavy) so it's OFF by default to keep
+  // trades instant — balances still refresh on Scan and for the live account
+  // during a trade. Set e.g. 10 to refresh idle balances every 10 minutes.
+  balanceSweepMinutes: Math.max(0, Number(process.env.BALANCE_SWEEP_MINUTES ?? 0)),
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
   balancesPath: resolve(ROOT, "data", "balances.json"),
