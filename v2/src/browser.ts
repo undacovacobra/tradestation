@@ -37,6 +37,10 @@ export class TradovateBrowser {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private loggedIn = false;
+  /** The account the bot last selected. The bot is the only thing that switches
+   *  accounts, so this is authoritative — used to skip the switch instantly when
+   *  we're already on the right account (armed). Reset on (re)connect. */
+  private currentAccount: string | null = null;
   private readonly shotDir: string;
 
   constructor(private readonly config: Config) {
@@ -68,6 +72,7 @@ export class TradovateBrowser {
         this.context = null;
         this.page = null;
         this.loggedIn = false;
+        this.currentAccount = null;
       });
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
       await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" });
@@ -139,23 +144,33 @@ export class TradovateBrowser {
   }
 
   /**
-   * Make the given account the active one. Fast path: if the top bar already
-   * shows this account, do nothing (pre-arming makes this the common case).
+   * Make the given account the active one.
+   *  - INSTANT path: we already know we're on it (the bot put it there) → do
+   *    nothing, not even a screen read. This is the armed common case, so a live
+   *    entry becomes just the Buy/Sell click.
+   *  - Otherwise (first trade, or just reconnected): read the top bar once; if it
+   *    already shows the account, adopt it; else open the menu and switch.
    */
   async switchAccount(label: string): Promise<void> {
+    if (this.currentAccount === label) return;
     await this.requireLoggedIn();
     const current = await this.p
       .getByText(TXT.accountIdPattern)
       .first()
       .textContent({ timeout: 2_000 })
       .catch(() => null);
-    if (current?.includes(label)) return;
+    if (current?.includes(label)) {
+      this.currentAccount = label;
+      return;
+    }
     log.info(`Switching active account to ${label}`);
     try {
       await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
       await this.p.getByText(label, { exact: false }).last().click({ timeout: 10_000 });
       await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
+      this.currentAccount = label;
     } catch (err) {
+      this.currentAccount = null; // we no longer know where we are
       await this.snapshot(`switch-account-failed-${label}`, true);
       throw new Error(
         `Could not select account "${label}". Check it still exists in the Tradovate account menu. Cause: ${(err as Error).message}`,
@@ -214,5 +229,6 @@ export class TradovateBrowser {
     this.context = null;
     this.page = null;
     this.loggedIn = false;
+    this.currentAccount = null;
   }
 }
