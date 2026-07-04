@@ -74,6 +74,18 @@ export class TradovateBrowser {
       this.context = await chromium.launchPersistentContext(this.config.sessionDir, {
         headless: !this.config.headed,
         viewport: { width: 1440, height: 900 },
+        // Keep Tradovate running at FULL speed even when this window is
+        // minimized or hidden behind others. By default Chromium throttles
+        // background/occluded windows to save CPU, which slows the page's
+        // rendering and makes the Buy/Sell/Exit click take longer to land —
+        // the exact reason the speed test is fast only while the window is
+        // visible. These flags disable that throttling.
+        args: [
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-features=CalculateNativeWinOcclusion",
+        ],
       });
       this.context.on("close", () => {
         this.context = null;
