@@ -24,12 +24,23 @@ export const config = {
   switchSettleMs: Number(process.env.SWITCH_SETTLE_MS ?? 250),
   // Save a screenshot on every order (slower). Failures always screenshot.
   captureShots: (process.env.SCREENSHOTS ?? "false") === "true",
+  // Daily WIN bench: an account that closes a winner sits out the rest of the
+  // (futures) trading day. Losers/breakeven keep cycling. Turn off with false.
+  benchWinnersForDay: (process.env.ONCE_PER_DAY ?? "true") !== "false",
+  // Futures "trading day" boundary — the 6pm ET session reset, not midnight.
+  tradingDayTz: process.env.TRADING_DAY_TZ ?? "America/New_York",
+  tradingDayResetHour: Number(process.env.TRADING_DAY_RESET_HOUR ?? 18),
+  // While a trade is open, how often (seconds) to re-read that ONE account's
+  // balance to catch the profit target. Only touches the already-selected
+  // account — never switches. Min 1s. Idle = no browser work at all.
+  monitorActiveSeconds: Math.max(1, Number(process.env.MONITOR_ACTIVE_SECONDS ?? 3)),
   // Remote access (ngrok) — dashboard "Remote access" button.
   ngrokAuthtoken: process.env.NGROK_AUTHTOKEN ?? "",
   ngrokDomain: process.env.NGROK_DOMAIN ?? "",
   ngrokAutostart: (process.env.NGROK_AUTOSTART ?? "true") === "true",
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
+  balancesPath: resolve(ROOT, "data", "balances.json"),
   screenshotDir: resolve(ROOT, "screenshots"),
   publicDir: resolve(ROOT, "public"),
 };

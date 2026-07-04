@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { Config } from "./config.js";
+import { extractEquity } from "./balanceParse.js";
 import { log } from "./logger.js";
 
 /**
@@ -22,6 +23,7 @@ const TXT = {
   confirm: /Place Order|Confirm|OK/i, // confirmation modal button, if one appears
   loginButton: "Login",
   simButton: /Start Simulated Trading/i,
+  equity: /EQUITY/i, // top bar: "EQUITY  50,320.00 USD" for the SELECTED account
 };
 
 export interface BrowserStatus {
@@ -187,6 +189,36 @@ export class TradovateBrowser {
   async armFor(label: string): Promise<void> {
     await this.switchAccount(label);
     log.info(`Armed: ${label} selected and ready.`);
+  }
+
+  /**
+   * Read the SELECTED account's balance from the top bar ("EQUITY  50,320.00").
+   * No menu, no account switching — cheap and safe to call while a trade is open
+   * (the trade account is the selected one) and never on the entry click path.
+   */
+  async readSelectedEquity(): Promise<number | null> {
+    if (!this.page || !this.loggedIn) return null;
+    const raw = await this.page
+      .getByText(TXT.equity)
+      .first()
+      .evaluate((node: Element) => {
+        // Climb to the smallest container holding EQUITY + a dollar figure.
+        let el: Element | null = node;
+        for (let i = 0; i < 6 && el; i++) {
+          const t = el.textContent ?? "";
+          if (/EQUITY/i.test(t) && /\d[\d,]*\.\d{2}/.test(t)) return t;
+          el = el.parentElement;
+        }
+        return node.parentElement?.textContent ?? node.textContent ?? "";
+      })
+      .catch(() => "");
+    return extractEquity(raw);
+  }
+
+  /** Read the balance after a short settle delay (for a just-closed trade). */
+  async readSettledEquity(): Promise<number | null> {
+    await this.p.waitForTimeout(1_200).catch(() => {});
+    return this.readSelectedEquity();
   }
 
   /** Click Buy Mkt / Sell Mkt. Symbol + quantity come from the Tradovate UI. */

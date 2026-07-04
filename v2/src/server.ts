@@ -6,15 +6,23 @@ import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Group, type OrderReque
 import { SettingsStore } from "./store.js";
 import { GroupRotation } from "./rotation.js";
 import { TradovateBrowser } from "./browser.js";
+import { BalanceLog } from "./balances.js";
+import { Monitor } from "./monitor.js";
+import { tradingDayKey } from "./tradingDay.js";
 import { connectTunnel, disconnectTunnel, tunnelStatus, autoStartTunnel } from "./tunnel.js";
 import { pushEvent, listEvents } from "./events.js";
 import { log } from "./logger.js";
 
 const store = new SettingsStore(config.settingsPath);
 const browser = new TradovateBrowser(config);
+/** Per-account last-known balance + short history. Read from MEMORY on the entry
+ *  path (instant), written only when the bot reads a balance at arm/in-trade/exit. */
+const balanceLog = new BalanceLog(config.balancesPath);
+/** Trading-day label (6pm ET reset by default) shared by both rotations. */
+const tradingDay = (at?: Date) => tradingDayKey(at ?? new Date(), config.tradingDayTz, config.tradingDayResetHour);
 const rotations: Record<Group, GroupRotation> = {
-  evals: new GroupRotation("evals", resolve(config.dataDir, "state-evals.json")),
-  funded: new GroupRotation("funded", resolve(config.dataDir, "state-funded.json")),
+  evals: new GroupRotation("evals", resolve(config.dataDir, "state-evals.json"), config.benchWinnersForDay, tradingDay),
+  funded: new GroupRotation("funded", resolve(config.dataDir, "state-funded.json"), config.benchWinnersForDay, tradingDay),
 };
 
 /**
@@ -43,9 +51,13 @@ function armNext(group: Group): void {
   if (!rotation.isFlat) return;
   const next = rotation.peekNext(store.accountsIn(group));
   if (!next) return;
-  void enqueue(() => browser.armFor(next.tradovateLabel)).catch((err) =>
-    log.warn(`Pre-arm failed: ${(err as Error).message}`),
-  );
+  void enqueue(async () => {
+    await browser.armFor(next.tradovateLabel);
+    // Read the armed account's balance now (idle — costs the entry click nothing).
+    // This becomes the entry baseline used to judge win/loss at close.
+    const eq = await browser.readSelectedEquity();
+    if (eq != null) balanceLog.set(next.tradovateLabel, eq);
+  }).catch((err) => log.warn(`Pre-arm failed: ${(err as Error).message}`));
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +96,8 @@ async function executeClose(label: string, name: string, symbol: string, group: 
   pushEvent("trade", `LIVE — closed ${symbol} on ${name} (${label}).`, group);
 }
 
+const money = (n: number) => `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+
 async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
   const rotation = rotations[group];
   const choice = rotation.selectAccountForEntry(store.accountsIn(group));
@@ -92,8 +106,19 @@ async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
     return choice.error;
   }
   const acct = choice.account;
+
+  // Instant, in-memory profit-target guard: if the last-known balance for this
+  // account is already at/over target, retire it (no browser read) and try the
+  // next one. Keeps a passed account from ever taking a fresh trade.
+  const known = balanceLog.get(acct.tradovateLabel);
+  if (known != null && known >= store.evalTarget) {
+    store.markPassed(acct.tradovateLabel);
+    pushEvent("info", `🏆 ${acct.name} is already at the ${money(store.evalTarget)} target — retired from rotation. Trying the next account.`, group);
+    return handleEntry(group, order); // that account is now excluded; pick the next
+  }
+
   await executeEntry(acct.tradovateLabel, acct.name, order, group);
-  rotation.recordOpen(acct, order);
+  rotation.recordOpen(acct, order, known ?? undefined);
   return `Opened ${order.action} ${order.symbol} on ${acct.name}`;
 }
 
@@ -105,12 +130,78 @@ async function handleClose(group: Group, symbol: string): Promise<string> {
   }
   const open = rotation.getState().openTrade!;
   await executeClose(open.tradovateLabel, open.accountName, symbol, group);
-  const { closed, next } = rotation.recordClose(store.accountsIn(group));
+
+  // Read the settled balance AFTER the exit click (never on the entry path) to
+  // log win/loss and the exit balance. Practice mode moves no money, so skip it.
+  let exitBalance: number | undefined;
+  if (store.mode === "live") {
+    exitBalance = (await browser.readSettledEquity()) ?? undefined;
+    if (exitBalance != null) balanceLog.set(open.tradovateLabel, exitBalance);
+  }
+
+  const { closed, next, won, pnl } = rotation.recordClose(store.accountsIn(group), { exitBalance });
+  if (exitBalance != null && exitBalance >= store.evalTarget) {
+    store.markPassed(closed.tradovateLabel);
+    pushEvent("info", `🏆 ${closed.accountName} reached the ${money(store.evalTarget)} target — retired from rotation.`, group);
+  }
+  const wonMsg = won
+    ? ` 🏅 WINNER${pnl != null ? ` (+${money(pnl)})` : ""} — resting for the rest of today.`
+    : pnl != null
+      ? ` (${pnl >= 0 ? "+" : "−"}${money(Math.abs(pnl))})`
+      : "";
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
-  pushEvent("info", `Round-trip finished on ${closed.accountName}. ${nextMsg}`, group);
+  pushEvent("info", `Round-trip finished on ${closed.accountName}.${wonMsg} ${nextMsg}`, group);
   armNext(group); // get the browser sitting on the next account, ready to click
-  return `Closed ${closed.symbol} on ${closed.accountName}. ${nextMsg}`;
+  return `Closed ${closed.symbol} on ${closed.accountName}.${wonMsg} ${nextMsg}`;
 }
+
+/**
+ * Cut an open trade WITHOUT a webhook (the profit-target auto-close) and retire
+ * the account. Assumes the trade's account is already the selected one (the
+ * monitor only calls this for the selected account), so the exit is a pure
+ * click. Must be called from inside `enqueue`.
+ */
+async function forceClose(group: Group, reason: string): Promise<void> {
+  const rotation = rotations[group];
+  const open = rotation.getState().openTrade;
+  if (!open) return;
+  pushEvent("warn", `🎯 ${open.accountName} hit the target — closing the trade automatically (${reason}).`, group);
+  await browser.clickExit(open.tradovateLabel);
+  const exitBalance = (await browser.readSettledEquity()) ?? undefined;
+  if (exitBalance != null) balanceLog.set(open.tradovateLabel, exitBalance);
+  const { closed, next } = rotation.recordClose(store.accountsIn(group), { won: true, exitBalance });
+  store.markPassed(closed.tradovateLabel);
+  const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
+  pushEvent("info", `🏆 ${closed.accountName} retired at the target. ${nextMsg}`, group);
+  armNext(group);
+}
+
+/**
+ * The monitor's per-tick work: read ONLY the selected account's balance (the
+ * open trade's account is the selected one), log it, and cut at the target.
+ * Never switches accounts. No-op unless live + logged in + a trade is open on
+ * the currently-selected account.
+ */
+async function monitorTick(): Promise<void> {
+  if (store.mode !== "live" || !browser.status().loggedIn) return;
+  const selected = browser.selectedAccount;
+  if (!selected) return;
+  const group = GROUPS.find((g) => rotations[g].getState().openTrade?.tradovateLabel === selected);
+  if (!group) return;
+  await enqueue(async () => {
+    const open = rotations[group].getState().openTrade;
+    if (!open || browser.selectedAccount !== open.tradovateLabel) return; // changed under us
+    const equity = await browser.readSelectedEquity();
+    if (equity == null) return;
+    balanceLog.set(open.tradovateLabel, equity);
+    if (equity >= store.evalTarget) await forceClose(group, `balance reached ${money(equity)}`);
+  });
+}
+
+const monitor = new Monitor(monitorTick, {
+  activeMs: config.monitorActiveSeconds * 1_000,
+  isActive: () => GROUPS.some((g) => !rotations[g].isFlat),
+});
 
 // ---------------------------------------------------------------------------
 // App + dashboard authentication
@@ -207,13 +298,26 @@ const api = express.Router();
 api.use(requireAuth);
 
 api.get("/status", (_req, res) => {
+  const bal = balanceLog.snapshot();
+  const decorate = (a: (typeof store.accounts)[number]) => {
+    const rec = bal[a.tradovateLabel];
+    const balance = rec?.balance ?? null;
+    return {
+      ...a,
+      balance,
+      updatedAt: rec?.updatedAt ?? null,
+      history: rec?.history ?? [],
+      toTarget: balance != null ? Math.max(0, store.evalTarget - balance) : null,
+      restingToday: rotations[a.group].isBenchedToday(a.tradovateLabel),
+    };
+  };
   const groups: Record<string, unknown> = {};
   for (const group of GROUPS) {
     const rotation = rotations[group];
     const state = rotation.getState();
     groups[group] = {
       webhookPath: `/webhook/${group}`,
-      accounts: store.allAccountsIn(group),
+      accounts: store.allAccountsIn(group).map(decorate),
       next: rotation.peekNext(store.accountsIn(group))?.name ?? null,
       openTrade: state.openTrade,
       tradesToday: rotation.tradesToday(),
@@ -223,9 +327,11 @@ api.get("/status", (_req, res) => {
     ok: true,
     running: store.running,
     mode: store.mode,
+    evalTarget: store.evalTarget,
     browser: browser.status(),
     tunnel: tunnelStatus(),
     groups,
+    passed: store.passedAccounts().map(decorate),
     events: listEvents(60),
   });
 });
@@ -286,6 +392,16 @@ api.post("/accounts/move", (req, res) => {
   const label = typeof req.body?.label === "string" ? req.body.label : "";
   const direction = req.body?.direction === "up" ? "up" : "down";
   res.json({ ok: store.moveAccount(label, direction) });
+});
+
+api.post("/accounts/reactivate", (req, res) => {
+  const label = typeof req.body?.label === "string" ? req.body.label : "";
+  const ok = store.reactivate(label);
+  if (ok) {
+    pushEvent("info", `${store.find(label)?.name ?? label} put back into rotation.`);
+    armNext(lastAlertGroup);
+  }
+  res.json({ ok });
 });
 
 api.post("/next", (req, res) => {
@@ -407,11 +523,13 @@ async function main() {
     log.info(`Webhooks: /webhook/evals and /webhook/funded | mode=${store.mode} | running=${store.running}`);
     pushEvent("info", `Bot server started. Mode: ${store.mode.toUpperCase()}. Open the dashboard to manage it.`);
     autoStartTunnel();
+    monitor.start(); // watches the open trade's balance to cut at the target
   });
 }
 
 const shutdown = async () => {
   log.info("Shutting down…");
+  monitor.stop();
   await disconnectTunnel().catch(() => {});
   await browser.disconnect();
   process.exit(0);

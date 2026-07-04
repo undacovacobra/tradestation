@@ -102,6 +102,7 @@ function render() {
   }
 
   for (const group of ["evals", "funded"]) renderGroup(group);
+  renderPassed();
   renderEvents();
 }
 
@@ -130,15 +131,20 @@ function renderGroup(group) {
   for (const acct of info.accounts) {
     const li = document.createElement("li");
     if (!acct.enabled) li.classList.add("disabled");
-    const isNext = info.next && acct.name === info.next && acct.enabled;
+    const resting = acct.restingToday;
+    if (resting) li.classList.add("resting");
+    const isNext = info.next && acct.name === info.next && acct.enabled && !resting;
     if (isNext) li.classList.add("next-up");
     li.innerHTML = `
       <div class="acct-name">
         <span class="nick">${esc(acct.name)}</span>
         ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
+        ${resting ? '<span class="rest-tag">😴 WON TODAY</span>' : ""}
         <span class="label">${esc(acct.tradovateLabel)}</span>
+        ${balanceLine(acct)}
       </div>
-      ${acct.enabled && !isNext ? '<button class="icon-btn nextbtn" title="Make this the next account to trade" data-act="next">⏭</button>' : ""}
+      ${sparkline(acct.history)}
+      ${acct.enabled && !isNext && !resting ? '<button class="icon-btn nextbtn" title="Make this the next account to trade" data-act="next">⏭</button>' : ""}
       <button class="icon-btn" title="Move up" data-act="up">▲</button>
       <button class="icon-btn" title="Move down" data-act="down">▼</button>
       <button class="icon-btn" title="${acct.enabled ? "Turn off (skip this account)" : "Turn on"}" data-act="toggle">${acct.enabled ? "✅" : "🚫"}</button>
@@ -146,6 +152,71 @@ function renderGroup(group) {
     for (const btn of $$(".icon-btn", li)) btn.addEventListener("click", () => accountAction(btn.dataset.act, acct));
     list.appendChild(li);
   }
+}
+
+function renderPassed() {
+  const card = $("#passed-card");
+  const list = $("#passed-list");
+  const passed = (status && status.passed) || [];
+  if (passed.length === 0) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  list.innerHTML = "";
+  for (const acct of passed) {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <div class="acct-name">
+        <span class="nick">🏆 ${esc(acct.name)}</span>
+        <span class="label">${esc(acct.tradovateLabel)} · ${esc(acct.group)}</span>
+        ${acct.balance != null ? `<span class="balance-row">Finished at <strong>${money(acct.balance)}</strong></span>` : ""}
+      </div>
+      <button class="btn small" data-act="reactivate">Put back in rotation</button>`;
+    $("[data-act=reactivate]", li).addEventListener("click", () =>
+      doAction(() => api("/accounts/reactivate", { label: acct.tradovateLabel })),
+    );
+    list.appendChild(li);
+  }
+}
+
+function money(n) {
+  return "$" + Math.round(n).toLocaleString("en-US");
+}
+
+/** One line under an account: its balance and how far to the profit target. */
+function balanceLine(acct) {
+  const target = (status && status.evalTarget) || 53000;
+  if (acct.balance == null) {
+    return `<span class="balance-row muted">Balance: not read yet (updates when it's armed or trading).</span>`;
+  }
+  if (acct.balance >= target) {
+    return `<span class="balance-row">💰 <strong>${money(acct.balance)}</strong> — at the ${money(target)} target 🎯</span>`;
+  }
+  const toGo = acct.toTarget != null ? acct.toTarget : target - acct.balance;
+  return `<span class="balance-row">💰 <strong>${money(acct.balance)}</strong> · ${money(toGo)} to ${money(target)}</span>`;
+}
+
+/** Tiny inline SVG sparkline of an account's recent balance history. */
+function sparkline(history) {
+  if (!history || history.length < 2) return '<span class="spark-empty"></span>';
+  const vals = history.map((p) => p.b);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const w = 110;
+  const h = 26;
+  const n = vals.length;
+  const span = max - min || 1;
+  const pts = vals
+    .map((v, i) => {
+      const x = (i / (n - 1)) * w;
+      const y = h - ((v - min) / span) * (h - 4) - 2;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const up = vals[vals.length - 1] >= vals[0];
+  const color = up ? "var(--green)" : "var(--red)";
+  return `<span class="spark"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 }
 
 function renderEvents() {

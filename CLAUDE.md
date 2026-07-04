@@ -36,6 +36,54 @@ config: `ORDER_CONFIRM_WAIT_MS` (250), `SWITCH_SETTLE_MS` (250), `SCREENSHOTS`
 (off). Pre-arming (`armFor` = switch only) + `switchAccount` fast-path (skip menu
 when top bar already shows the target) keep the live entry to ~a click. 7 tests.
 
+## ✅ FEATURES RE-ADDED — the LOG way (2026-07-04) — read this second
+After the strip proved the entry path was finally fast (user confirmed the
+dropdown no longer opens before Buy/Sell), the user asked for three things back
+**without** the monitoring that caused the lag: (1) track which accounts have
+WON that day and keep the rest in the cycle, (2) cut a trade when its balance
+hits the target ($53k), (3) "when it exits a trade, log if it won/lost and the
+balance at exit; when IN a trade, watch only THAT one account's balance." Key
+instruction: **"there should be a log it refers to so it doesn't slow down
+executions at all."** How it was built — the golden rule is *balance reads never
+touch the entry click and never switch accounts*:
+- **`v2/src/balances.ts` `BalanceLog`** — the "log". Per-account last balance +
+  short history in `data/balances.json`. Read from **memory** on the entry path
+  (`get(label)` is instant); written only at the three idle/after moments below.
+- **WHEN balances are read (never on the Buy/Sell click):** (a) **at arm time** —
+  after a round-trip closes, `armNext` selects the next account AND reads its
+  top-bar EQUITY into the log; that becomes the trade's **entry baseline** at zero
+  entry cost. (b) **during a trade** — `v2/src/monitor.ts` `Monitor` is a lazy
+  self-scheduling timer: does NOTHING while flat, and while a trade is open reads
+  ONLY the already-selected account (`browser.readSelectedEquity`, top bar, no
+  switch) every `MONITOR_ACTIVE_SECONDS` (3). (c) **at exit** — after the close
+  click, `readSettledEquity` (1.2s settle, AFTER the click so it never delays the
+  order) records the exit balance.
+- **Win/loss + daily bench** (`rotation.ts`, restored): `recordClose({exitBalance})`
+  → won = exitBalance > entryBalance (or explicit). A winner sets `lastWonDay`
+  and `isBenchedToday` skips it for the rest of the **futures trading day**
+  (6pm ET reset via `tradingDay.ts`, injected). Losers/breakeven keep cycling.
+  Toggle with `ONCE_PER_DAY` (default true). Practice moves no money → never a win.
+- **$53k profit target, two guards:** (a) in-trade — the monitor force-closes +
+  retires the account the instant the read hits target (`forceClose`, no webhook,
+  the exit is a pure click since that account is already selected); (b) entry-time
+  — `handleEntry` checks the **in-memory** balance before entering and retires any
+  account already at/over target (no browser read), then picks the next. Target is
+  `settings.evalTarget` (default 53000), set on the dashboard.
+- **Retired accounts** get `status:"passed"` (`store.ts`), leave rotation, and show
+  in a new **🏆 Passed** dashboard card with a "Put back in rotation" button
+  (`/api/accounts/reactivate`). Dashboard also shows each account's balance,
+  "$X to $53,000", a balance sparkline, and a "😴 WON TODAY" rest tag.
+- **What we did NOT bring back:** the background balance SWEEP that switched
+  through every account (the original lag source) — it's gone for good. The
+  monitor only ever reads the selected account. Also NOT back: the qty setter
+  (user sets size on the Tradovate screen).
+- Rotation constructor is now `(group, statePath, benchWinnersForDay, today?)`.
+  `StoredAccount` has `status`. `OpenTrade` has `entryBalance`. Config adds
+  `benchWinnersForDay`, `tradingDayTz`, `tradingDayResetHour`,
+  `monitorActiveSeconds`, `balancesPath`. **16 tests pass**, type-checks clean,
+  server boots + full practice round-trip verified. Live UI reads still unverified
+  against the real Tradovate top bar (same caveat as always).
+
 ## ⭐ V2 exists (2026-07-01) — see `v2/` — (historical changelog below)
 The user asked for a big upgrade but **kept separate** from the working V1. V2 lives
 entirely in the `v2/` folder (own package.json, port **3300**); V1 in the repo root is

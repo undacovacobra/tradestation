@@ -61,6 +61,8 @@ export interface StoredAccount {
   name: string;
   group: Group;
   enabled: boolean;
+  /** "active" = trades; "passed" = hit the eval target, retired from rotation. */
+  status: "active" | "passed";
 }
 
 /** A normalized order the executor knows how to act on. */
