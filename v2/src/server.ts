@@ -19,11 +19,10 @@ const rotations: Record<Group, GroupRotation> = {
 
 /**
  * Serialize everything that touches the browser (orders from BOTH lanes, arming,
- * scans). Browser automation must never run two flows at once. `pendingTrades`
- * lets pre-arming step aside instantly so a real trade never waits behind it.
+ * scans). Browser automation must never run two flows at once, and this keeps a
+ * single, predictable order of operations.
  */
 let queue: Promise<unknown> = Promise.resolve();
-let pendingTrades = 0;
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
   const run = queue.then(task, task);
   queue = run.catch(() => {});
@@ -35,7 +34,8 @@ let lastAlertGroup: Group = "evals";
 
 /**
  * Pre-select the group's NEXT account so an entry webhook only has to click
- * Buy/Sell. Fire-and-forget; skipped in practice / when not logged in / not flat.
+ * Buy/Sell — the ONE dropdown touch that happens after a round-trip (or on
+ * startup). Fire-and-forget; skipped in practice / when not logged in / not flat.
  */
 function armNext(group: Group): void {
   if (store.mode !== "live" || !browser.status().loggedIn) return;
@@ -43,10 +43,9 @@ function armNext(group: Group): void {
   if (!rotation.isFlat) return;
   const next = rotation.peekNext(store.accountsIn(group));
   if (!next) return;
-  void enqueue(() => {
-    if (pendingTrades > 0) return Promise.resolve(); // never delay a real trade
-    return browser.armFor(next.tradovateLabel);
-  }).catch((err) => log.warn(`Pre-arm failed: ${(err as Error).message}`));
+  void enqueue(() => browser.armFor(next.tradovateLabel)).catch((err) =>
+    log.warn(`Pre-arm failed: ${(err as Error).message}`),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +166,6 @@ app.post("/webhook/:group", async (req, res) => {
 
   const received = Date.now();
   lastAlertGroup = group;
-  pendingTrades++;
   try {
     let waitedMs = 0;
     const message = await enqueue(() => {
@@ -186,8 +184,6 @@ app.post("/webhook/:group", async (req, res) => {
   } catch (err) {
     pushEvent("error", `Something went wrong handling a ${alert.action} alert: ${(err as Error).message}`, group);
     return res.status(500).json({ ok: false, error: (err as Error).message });
-  } finally {
-    pendingTrades--;
   }
 });
 
@@ -244,6 +240,7 @@ api.post("/mode", (req, res) => {
       ? "Switched to LIVE mode — alerts will place REAL orders in Tradovate."
       : "Switched to PRACTICE mode — trades are only simulated in the log.",
   );
+  // Startup arm: go sit on the next account now, ready to click.
   if (mode === "live") armNext(lastAlertGroup);
   return res.json({ ok: true, mode });
 });
@@ -310,7 +307,9 @@ api.post("/speedtest", async (req, res) => {
   const rotation = rotations[group];
   if (!rotation.isFlat) return res.status(400).json({ ok: false, error: "A trade is open in this group — try after it closes." });
 
-  const before = rotation.peekNext(store.accountsIn(group));
+  // The test is a normal round-trip: it advances the rotation and arms the next
+  // account exactly like a real trade, so it never does an extra back-and-forth
+  // switch in the browser.
   const base = `http://localhost:${config.port}`;
   const fire = async (payload: Record<string, unknown>) => {
     const started = Date.now();
@@ -331,8 +330,7 @@ api.post("/speedtest", async (req, res) => {
   const secret = config.webhookSecret;
   const open = await fire({ secret, action: "buy", symbol: "SPEEDTEST", marketPosition: "long", tradeId: "speedtest" });
   const close = await fire({ secret, action: "sell", symbol: "SPEEDTEST", marketPosition: "flat" });
-  if (before && rotation.isFlat) rotation.setNext(before.tradovateLabel, store.accountsIn(group)); // don't advance order
-  armNext(group);
+  // (handleClose already armed the next account — no extra switching here.)
 
   pushEvent(
     open.ok && close.ok ? "info" : "warn",
