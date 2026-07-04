@@ -52,12 +52,24 @@ function armNext(group: Group): void {
 // Trade handling — deliberately minimal: switch account, click. Nothing else.
 // ---------------------------------------------------------------------------
 
+/**
+ * Ensure we're on `label` WITHOUT touching the dropdown in the normal case.
+ * If the bot is already there (armed) this is a pure no-op — the trade is then
+ * just a click. It only opens the dropdown as a last-resort safety when the bot
+ * somehow isn't pre-armed, and says so, so a click never hits the wrong account.
+ */
+async function ensureOn(label: string, name: string, group: Group): Promise<void> {
+  if (browser.selectedAccount === label) return; // armed — do nothing
+  pushEvent("warn", `Wasn't pre-armed on ${name} — switching to it first (this shouldn't normally happen).`, group);
+  await browser.switchAccount(label);
+}
+
 async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<void> {
   if (store.mode === "practice") {
     pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
     return;
   }
-  await browser.switchAccount(label);
+  await ensureOn(label, name, group);
   await browser.clickOrder(order.action, label);
   pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}).`, group);
 }
@@ -67,7 +79,7 @@ async function executeClose(label: string, name: string, symbol: string, group: 
     pushEvent("trade", `PRACTICE — would CLOSE ${symbol} on ${name} (${label}). No real order placed.`, group);
     return;
   }
-  await browser.switchAccount(label);
+  await ensureOn(label, name, group);
   await browser.clickExit(label);
   pushEvent("trade", `LIVE — closed ${symbol} on ${name} (${label}).`, group);
 }

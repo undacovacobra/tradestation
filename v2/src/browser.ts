@@ -51,6 +51,11 @@ export class TradovateBrowser {
     return { connected: this.page !== null, loggedIn: this.loggedIn };
   }
 
+  /** The account the bot currently believes is selected (null if unknown). */
+  get selectedAccount(): string | null {
+    return this.currentAccount;
+  }
+
   private get p(): Page {
     if (!this.page) {
       throw new Error("The Tradovate browser is not connected. Click “Connect browser” on the dashboard first.");
