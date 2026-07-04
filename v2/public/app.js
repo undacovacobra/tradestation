@@ -6,24 +6,15 @@ const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
 let lastStatusJson = "";
 let status = null;
-let busy = false; // true while a button action is in flight
+let busy = false;
 
-// ---------------------------------------------------------------------------
-// Server helpers
-// ---------------------------------------------------------------------------
+// --- Server helpers --------------------------------------------------------
 
-/**
- * A slow/flaky tunnel connection (e.g. ngrok free tier from off-network) can
- * cause an occasional dropped request. Rather than bounce the user to the
- * login screen on a single hiccup, require two 401s in a row — with a short
- * pause between — before concluding the session really did expire.
- */
 async function fetchAuthed(path, init) {
-  const attempt = () => fetch(path, init);
-  let res = await attempt();
+  let res = await fetch(path, init);
   if (res.status === 401) {
     await new Promise((r) => setTimeout(r, 500));
-    res = await attempt();
+    res = await fetch(path, init); // one retry — tolerate a flaky tunnel hiccup
   }
   return res;
 }
@@ -59,9 +50,7 @@ async function refresh() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
+// --- Rendering -------------------------------------------------------------
 
 function setPill(id, color, text, withDot = true) {
   const pill = $("#" + id);
@@ -74,7 +63,6 @@ function setPill(id, color, text, withDot = true) {
 function render() {
   if (!status) return;
 
-  // Header pills
   setPill("pill-running", status.running ? "green" : "amber", status.running ? "Running" : "Paused");
   const b = status.browser || {};
   setPill(
@@ -90,7 +78,6 @@ function render() {
   );
   setPill("pill-mode", status.mode === "live" ? "red" : "green", status.mode === "live" ? "LIVE MODE" : "Practice mode", false);
 
-  // Big buttons
   const btnRunning = $("#btn-running");
   btnRunning.textContent = status.running ? "⏸ Pause bot" : "▶ Start bot";
   btnRunning.className = "btn big " + (status.running ? "" : "success");
@@ -105,7 +92,6 @@ function render() {
   btnTunnel.textContent = t.state === "on" ? "📡 Turn off remote access" : "📡 Turn on remote access";
   btnTunnel.className = "btn " + (t.state === "on" ? "success" : "");
 
-  // Live-mode banner
   const banner = $("#banner");
   if (status.mode === "live") {
     banner.hidden = false;
@@ -116,7 +102,6 @@ function render() {
   }
 
   for (const group of ["evals", "funded"]) renderGroup(group);
-  renderPassed();
   renderEvents();
 }
 
@@ -125,29 +110,18 @@ function renderGroup(group) {
   const info = status.groups[group];
   if (!card || !info) return;
 
-  const url = new URL(info.webhookPath, window.location.origin).href;
-  $(".webhook-url", card).textContent = url;
+  $(".webhook-url", card).textContent = new URL(info.webhookPath, window.location.origin).href;
 
-  // Keep the contracts box in sync unless the user is mid-edit.
-  const cInput = $(".contracts-input", card);
-  const cVal = (status.contracts || {})[group];
-  if (cVal != null && document.activeElement !== cInput) cInput.value = cVal;
-
-  // Next-up + open trade
   const nextRow = $(".next-row", card);
   let html = info.next
     ? `Next trade goes to: <strong>${esc(info.next)}</strong>`
     : `<span style="color:var(--muted)">No account is ready for the next trade.</span>`;
   if (info.openTrade) {
-    const qty = info.openTrade.quantity
-      ? ` · ${info.openTrade.quantity} contract${info.openTrade.quantity > 1 ? "s" : ""}`
-      : "";
-    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}${esc(qty)}</span>`;
+    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}</span>`;
   }
   html += `<div style="color:var(--muted);font-size:13px;margin-top:4px">Round-trips finished today: ${info.tradesToday}</div>`;
   nextRow.innerHTML = html;
 
-  // Account list
   const list = $(".account-list", card);
   list.innerHTML = "";
   if (info.accounts.length === 0) {
@@ -156,100 +130,20 @@ function renderGroup(group) {
   for (const acct of info.accounts) {
     const li = document.createElement("li");
     if (!acct.enabled) li.classList.add("disabled");
-    if (acct.restingToday) li.classList.add("resting");
     const isNext = info.next && acct.name === info.next && acct.enabled;
     if (isNext) li.classList.add("next-up");
     li.innerHTML = `
       <div class="acct-name">
         <span class="nick">${esc(acct.name)}</span>
         ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
-        ${acct.restingToday ? '<span class="rest-tag" title="Won a trade today — sitting out until tomorrow">😴 WON TODAY</span>' : ""}
         <span class="label">${esc(acct.tradovateLabel)}</span>
-        ${balanceLine(acct, group === "evals")}
       </div>
-      ${sparklineSvg(acct.history)}
       ${acct.enabled && !isNext ? '<button class="icon-btn nextbtn" title="Make this the next account to trade" data-act="next">⏭</button>' : ""}
       <button class="icon-btn" title="Move up" data-act="up">▲</button>
       <button class="icon-btn" title="Move down" data-act="down">▼</button>
       <button class="icon-btn" title="${acct.enabled ? "Turn off (skip this account)" : "Turn on"}" data-act="toggle">${acct.enabled ? "✅" : "🚫"}</button>
       <button class="icon-btn remove" title="Remove" data-act="remove">✕</button>`;
-    for (const btn of $$(".icon-btn", li)) {
-      btn.addEventListener("click", () => accountAction(btn.dataset.act, acct));
-    }
-    list.appendChild(li);
-  }
-}
-
-function money(n) {
-  return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-/** Balance + "$ to go" line under an account's name. Text only — no color-coded meaning. */
-function balanceLine(acct, isEval) {
-  if (acct.balance == null) {
-    return `<span class="balance-row muted">Balance: — (shows once the browser is connected)</span>`;
-  }
-  let extra = "";
-  if (isEval && acct.toTarget != null) {
-    extra =
-      acct.toTarget <= 0
-        ? ` · 🏆 target reached`
-        : ` · <strong>${money(acct.toTarget)}</strong> to go to ${money(status.evalTarget || 53000)}`;
-  }
-  return `<span class="balance-row">Balance: <strong>${money(acct.balance)}</strong>${extra}</span>`;
-}
-
-/**
- * Tiny single-series line chart of the account's balance history.
- * One quiet hue, 2px stroke, no axes (the numbers live in the text beside it);
- * a native tooltip carries the exact range for hover.
- */
-function sparklineSvg(history) {
-  if (!history || history.length < 2) return `<span class="spark spark-empty"></span>`;
-  const W = 110;
-  const H = 30;
-  const P = 3;
-  const vals = history.map((p) => p.b);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const span = max - min || 1;
-  const pts = history
-    .map((p, i) => {
-      const x = P + (i / (history.length - 1)) * (W - 2 * P);
-      const y = H - P - ((p.b - min) / span) * (H - 2 * P);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  const first = history[0];
-  const last = history[history.length - 1];
-  const title = `${money(first.b)} → ${money(last.b)}`;
-  return `<span class="spark" title="${esc(title)}"><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Balance history: ${esc(title)}"><polyline points="${pts}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
-}
-
-function renderPassed() {
-  const card = $("#passed-card");
-  const list = $("#passed-list");
-  const passed = status.passed || [];
-  card.hidden = passed.length === 0;
-  list.innerHTML = "";
-  for (const acct of passed) {
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <div class="acct-name">
-        <span class="nick">🏆 ${esc(acct.name)}</span>
-        <span class="label">${esc(acct.tradovateLabel)}</span>
-        ${acct.balance != null ? `<span class="balance-row">Balance: <strong>${money(acct.balance)}</strong></span>` : ""}
-      </div>
-      ${sparklineSvg(acct.history)}
-      <button class="btn small" data-act="reactivate">Put back in rotation</button>
-      <button class="icon-btn remove" title="Remove" data-act="remove">✕</button>`;
-    $('[data-act="reactivate"]', li).addEventListener("click", () =>
-      doAction(async () => {
-        if (!confirm(`Put ${acct.name} back into the ${acct.group} rotation? It will be traded again.`)) return;
-        await api("/accounts/reactivate", { label: acct.tradovateLabel });
-      }),
-    );
-    $('[data-act="remove"]', li).addEventListener("click", () => accountAction("remove", acct));
+    for (const btn of $$(".icon-btn", li)) btn.addEventListener("click", () => accountAction(btn.dataset.act, acct));
     list.appendChild(li);
   }
 }
@@ -264,8 +158,8 @@ function renderEvents() {
   for (const ev of status.events) {
     const li = document.createElement("li");
     li.className = ev.kind;
-    const t = new Date(ev.time);
-    li.innerHTML = `<span class="time">${t.toLocaleTimeString()}</span><span>${ev.group ? `<strong>[${esc(ev.group)}]</strong> ` : ""}${esc(ev.message)}</span>`;
+    const time = new Date(ev.time);
+    li.innerHTML = `<span class="time">${time.toLocaleTimeString()}</span><span>${ev.group ? `<strong>[${esc(ev.group)}]</strong> ` : ""}${esc(ev.message)}</span>`;
     ul.appendChild(li);
   }
 }
@@ -274,9 +168,7 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
+// --- Actions ---------------------------------------------------------------
 
 async function doAction(fn) {
   if (busy) return;
@@ -309,9 +201,7 @@ async function accountAction(act, acct) {
   });
 }
 
-$("#btn-running").addEventListener("click", () =>
-  doAction(() => api("/running", { running: !status.running })),
-);
+$("#btn-running").addEventListener("click", () => doAction(() => api("/running", { running: !status.running })));
 
 $("#btn-mode").addEventListener("click", () => {
   if (!status) return;
@@ -323,12 +213,9 @@ $("#btn-mode").addEventListener("click", () => {
     <h2>⚠️ Go LIVE?</h2>
     <div class="warn-box">
       Live mode places <u>REAL orders</u> on your real prop accounts the next time
-      a TradingView alert arrives. Make sure:
-      <ul style="margin:8px 0 0; padding-left:18px">
-        <li>the right contract and size are set on the Tradovate screen,</li>
-        <li>the browser is connected and logged in,</li>
-        <li>you actually want real trades right now.</li>
-      </ul>
+      a TradingView alert arrives. Make sure the right contract and size are set on
+      the Tradovate screen, the browser is connected and logged in, and you actually
+      want real trades right now.
     </div>
     <div class="modal-actions">
       <button class="btn" data-close>Cancel — stay in Practice</button>
@@ -359,8 +246,8 @@ $("#btn-scan").addEventListener("click", () =>
     btn.disabled = true;
     btn.textContent = "Scanning…";
     try {
-      const { labels, balances } = await api("/scan", {});
-      showScanModal(labels, balances || []);
+      const { labels } = await api("/scan", {});
+      showScanModal(labels);
     } finally {
       btn.disabled = false;
       btn.textContent = "Scan Tradovate accounts";
@@ -383,59 +270,48 @@ $("#btn-tunnel").addEventListener("click", () => {
   });
 });
 
-function showScanModal(labels, balances) {
-  if (!labels || labels.length === 0) {
-    showModal(`<h2>No accounts found</h2>
-      <p>The scan didn't find any LFE… / LFF… accounts in the Tradovate menu.
-      Make sure the browser is connected and logged in, then try again.</p>
-      <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
-    return;
-  }
-  const balByLabel = {};
-  for (const b of balances || []) balByLabel[b.label] = b.balance;
-  const anyDollars = (balances || []).some((b) => b.balance != null);
-  const known = new Set(
-    [...status.groups.evals.accounts, ...status.groups.funded.accounts].map((a) => a.tradovateLabel),
-  );
-  const rows = labels
-    .map((label, i) => {
-      const suggested = label.startsWith("LFE") ? "evals" : label.startsWith("LFF") ? "funded" : "skip";
-      const already = known.has(label);
-      const bal = balByLabel[label];
-      const balTxt = bal != null ? `<span class="scan-bal">${money(bal)}</span>` : "";
-      return `<li>
-        <code>${esc(label)}</code>
-        ${balTxt}
-        ${already ? '<span style="font-size:12px;color:var(--muted)">(already added)</span>' : ""}
-        <label><input type="radio" name="scan-${i}" value="evals" ${suggested === "evals" && !already ? "checked" : ""}/> Evals</label>
-        <label><input type="radio" name="scan-${i}" value="funded" ${suggested === "funded" && !already ? "checked" : ""}/> Funded</label>
-        <label><input type="radio" name="scan-${i}" value="skip" ${suggested === "skip" || already ? "checked" : ""}/> Skip</label>
-      </li>`;
-    })
-    .join("");
-  const balNote = anyDollars
-    ? ""
-    : `<p style="color:var(--amber);font-size:13px">No dollar balances showed up in the menu — the account numbers still work, but balances will read “—”. If that's unexpected, send a screenshot of your open Tradovate account menu.</p>`;
-  showModal(`
-    <h2>🔍 Accounts found in Tradovate</h2>
-    <p>Tick where each account belongs. LFE… are pre-set to Evals, LFF… to Funded.</p>
-    ${balNote}
-    <ul class="scan-list">${rows}</ul>
-    <div class="modal-actions">
-      <button class="btn" data-close>Cancel</button>
-      <button class="btn primary" id="scan-apply">Add selected</button>
-    </div>`);
-  $("#scan-apply").addEventListener("click", () =>
-    doAction(async () => {
-      for (let i = 0; i < labels.length; i++) {
-        const pick = $(`input[name="scan-${i}"]:checked`);
-        if (pick && pick.value !== "skip") {
-          await api("/accounts/add", { label: labels[i], group: pick.value });
+for (const btn of $$(".speed-test")) {
+  btn.addEventListener("click", () => {
+    if (!status) return;
+    const group = btn.closest(".group").dataset.group;
+    const runTest = (confirmLive) =>
+      doAction(async () => {
+        btn.disabled = true;
+        btn.textContent = "⏱ Testing…";
+        const t0 = Date.now();
+        try {
+          const r = await api("/speedtest", { group, confirmLive });
+          const total = Date.now() - t0;
+          const leg = (label, ok, ms, msg) =>
+            `<p style="font-size:20px;margin:6px 0"><strong>${label}: ${ms}ms</strong> ${ok ? "✅" : `<span style="color:var(--red)">⚠️ ${esc(msg)}</span>`}</p>`;
+          showModal(`
+            <h2>⏱ Speed test — ${esc(group)}</h2>
+            ${leg("Open", r.openOk, r.openMs, r.openMsg)}
+            ${leg("Close", r.closeOk, r.closeMs, r.closeMsg)}
+            <p>${r.mode === "live" ? "LIVE: includes the real browser clicks in Tradovate." : "Practice: measures everything except the browser clicks (no order placed)."}</p>
+            <p style="color:var(--muted);font-size:13px">This is the <strong>bot's</strong> own time. TradingView's own alert delivery adds 1–3s on top and isn't the bot. Button-to-answer total: ${total}ms.</p>
+            <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "⏱ Speed test";
         }
-      }
-      closeModal();
-    }),
-  );
+      });
+    if (status.mode === "live") {
+      showModal(`
+        <h2>⚠️ Speed test in LIVE mode?</h2>
+        <div class="warn-box">This places a REAL order on the next ${esc(group)} account and immediately flattens it. It may cost a tick or two of slippage.</div>
+        <div class="modal-actions">
+          <button class="btn" data-close>Cancel</button>
+          <button class="btn danger" id="confirm-speedtest">Yes, run live test</button>
+        </div>`);
+      $("#confirm-speedtest").addEventListener("click", () => {
+        closeModal();
+        runTest(true);
+      });
+    } else {
+      runTest(false);
+    }
+  });
 }
 
 for (const form of $$(".add-form")) {
@@ -452,79 +328,6 @@ for (const form of $$(".add-form")) {
   });
 }
 
-for (const btn of $$(".save-contracts")) {
-  btn.addEventListener("click", () => {
-    const card = btn.closest(".group");
-    const group = card.dataset.group;
-    const contracts = Number($(".contracts-input", card).value);
-    doAction(() => api("/contracts", { group, contracts }));
-  });
-}
-
-for (const btn of $$(".test-contracts")) {
-  btn.addEventListener("click", () => {
-    const card = btn.closest(".group");
-    const group = card.dataset.group;
-    doAction(async () => {
-      btn.disabled = true;
-      btn.textContent = "Testing…";
-      try {
-        // Save whatever's typed first, then test that value on Tradovate.
-        await api("/contracts", { group, contracts: Number($(".contracts-input", card).value) });
-        const { confirmed } = await api("/test-quantity", { group });
-        alert(`✅ Tradovate now shows ${confirmed} contract(s) on the order ticket. No order was placed.`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Test size on Tradovate";
-      }
-    });
-  });
-}
-
-for (const btn of $$(".speed-test")) {
-  btn.addEventListener("click", () => {
-    if (!status) return;
-    const group = btn.closest(".group").dataset.group;
-    const runTest = (confirmLive) =>
-      doAction(async () => {
-        btn.disabled = true;
-        btn.textContent = "⏱ Testing…";
-        const t0 = Date.now();
-        try {
-          const r = await api("/speedtest", { group, confirmLive });
-          const total = Date.now() - t0;
-          const legMsg = (label, ok, ms, msg) =>
-            `<p style="font-size:20px;margin:6px 0"><strong>${label}: ${ms}ms</strong> ${ok ? "✅" : `<span style="color:var(--red)">⚠️ ${esc(msg)}</span>`}</p>`;
-          showModal(`
-            <h2>⏱ Speed test — ${esc(group)}</h2>
-            ${legMsg("Open", r.openOk, r.openMs, r.openMsg)}
-            ${legMsg("Close", r.closeOk, r.closeMs, r.closeMsg)}
-            <p>${r.mode === "live" ? "LIVE mode: these include the real browser clicks in Tradovate." : "Practice mode: measures everything except the actual browser clicks (no order placed)."}</p>
-            <p style="color:var(--muted);font-size:13px">This is the <strong>bot's</strong> own time (button → server → trade). TradingView's own alert delivery typically adds 1–3s on top and isn't the bot. Button-to-answer total: ${total}ms.</p>
-            <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "⏱ Speed test";
-        }
-      });
-    if (status.mode === "live") {
-      showModal(`
-        <h2>⚠️ Speed test in LIVE mode?</h2>
-        <div class="warn-box">This will place a REAL order (your set contract size) on the next ${esc(group)} account and immediately flatten it. It may cost a tick or two of slippage.</div>
-        <div class="modal-actions">
-          <button class="btn" data-close>Cancel</button>
-          <button class="btn danger" id="confirm-speedtest">Yes, run live test</button>
-        </div>`);
-      $("#confirm-speedtest").addEventListener("click", () => {
-        closeModal();
-        runTest(true);
-      });
-    } else {
-      runTest(false);
-    }
-  });
-}
-
 for (const btn of $$(".copy-webhook")) {
   btn.addEventListener("click", () => {
     const url = $(".webhook-url", btn.closest(".group")).textContent;
@@ -535,9 +338,47 @@ for (const btn of $$(".copy-webhook")) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Modals + login
-// ---------------------------------------------------------------------------
+function showScanModal(labels) {
+  if (!labels || labels.length === 0) {
+    showModal(`<h2>No accounts found</h2>
+      <p>The scan didn't find any LFE… / LFF… accounts. Make sure the browser is connected and logged in, then try again.</p>
+      <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+    return;
+  }
+  const known = new Set([...status.groups.evals.accounts, ...status.groups.funded.accounts].map((a) => a.tradovateLabel));
+  const rows = labels
+    .map((label, i) => {
+      const suggested = label.startsWith("LFE") ? "evals" : label.startsWith("LFF") ? "funded" : "skip";
+      const already = known.has(label);
+      return `<li>
+        <code>${esc(label)}</code>
+        ${already ? '<span style="font-size:12px;color:var(--muted)">(already added)</span>' : ""}
+        <label><input type="radio" name="scan-${i}" value="evals" ${suggested === "evals" && !already ? "checked" : ""}/> Evals</label>
+        <label><input type="radio" name="scan-${i}" value="funded" ${suggested === "funded" && !already ? "checked" : ""}/> Funded</label>
+        <label><input type="radio" name="scan-${i}" value="skip" ${suggested === "skip" || already ? "checked" : ""}/> Skip</label>
+      </li>`;
+    })
+    .join("");
+  showModal(`
+    <h2>🔍 Accounts found in Tradovate</h2>
+    <p>Tick where each account belongs. LFE… are pre-set to Evals, LFF… to Funded.</p>
+    <ul class="scan-list">${rows}</ul>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="scan-apply">Add selected</button>
+    </div>`);
+  $("#scan-apply").addEventListener("click", () =>
+    doAction(async () => {
+      for (let i = 0; i < labels.length; i++) {
+        const pick = $(`input[name="scan-${i}"]:checked`);
+        if (pick && pick.value !== "skip") await api("/accounts/add", { label: labels[i], group: pick.value });
+      }
+      closeModal();
+    }),
+  );
+}
+
+// --- Modals + login --------------------------------------------------------
 
 function showModal(html) {
   $("#modal-box").innerHTML = html;
@@ -547,7 +388,6 @@ function showModal(html) {
 function closeModal() {
   $("#modal-overlay").hidden = true;
 }
-
 function showLogin(wrong) {
   $("#login-overlay").hidden = false;
   $("#login-error").hidden = !wrong;

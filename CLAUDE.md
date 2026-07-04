@@ -18,7 +18,25 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 **browser automation** (Playwright) of the Tradovate web trader. Runs on the user's
 **always-on Windows home PC**. Node 22, TypeScript, Playwright (Chromium).
 
-## ⭐ V2 exists (2026-07-01) — see `v2/`
+## ⚠️ STRIPPED TO LEAN EXECUTION (2026-07-03) — read this first
+After chasing a 1.3-7s fill lag through many additions, the user asked to remove
+everything except execution ("I will handle balances/targets/quantity myself").
+So V2 was cut back to: **connect → switch account → click Buy/Sell/Exit**, plus the
+two lanes, rotation, on-screen account management, Scan, ⏭ next-account pick,
+practice/live, pause, remote access (ngrok), and the ⏱ speed-test button.
+**DELETED:** `monitor.ts`, `balanceParse.ts`, `tradingDay.ts` and all balance
+reading / EQUITY parsing, the $53k profit-target auto-close, win/loss detection &
+the daily win-bench, the "Passed" column, the "Contracts per trade" setter
+(`setQuantity`/`findQtyControl` — the whole-DOM scan was the prime latency
+suspect), and their tests/fixtures. The changelog below is KEPT as history (it
+explains *why* each thing was removed) but no longer describes current code.
+Rotation constructor is now `(group, statePath)` only; `OrderRequest` is just
+`{action, symbol, tradeId?}`; `StoredAccount` has no `status`. Speed knobs live in
+config: `ORDER_CONFIRM_WAIT_MS` (250), `SWITCH_SETTLE_MS` (250), `SCREENSHOTS`
+(off). Pre-arming (`armFor` = switch only) + `switchAccount` fast-path (skip menu
+when top bar already shows the target) keep the live entry to ~a click. 7 tests.
+
+## ⭐ V2 exists (2026-07-01) — see `v2/` — (historical changelog below)
 The user asked for a big upgrade but **kept separate** from the working V1. V2 lives
 entirely in the `v2/` folder (own package.json, port **3300**); V1 in the repo root is
 untouched and still works. V2 adds:

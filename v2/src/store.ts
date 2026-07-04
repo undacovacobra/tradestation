@@ -8,7 +8,6 @@ const AccountSchema = z.object({
   name: z.string().min(1),
   group: z.enum(["evals", "funded"]),
   enabled: z.boolean().default(true),
-  status: z.enum(["active", "passed"]).default("active"),
 });
 
 const SettingsSchema = z.object({
@@ -16,12 +15,6 @@ const SettingsSchema = z.object({
   running: z.boolean().default(true),
   /** practice = log only, never touches the broker. live = clicks real buttons. */
   mode: z.enum(["practice", "live"]).default("practice"),
-  /** Eval profit target in dollars — an eval at/above this is retired ("passed"). */
-  evalTarget: z.number().positive().default(53_000),
-  /** Contracts the bot sets on Tradovate before each Buy/Sell, per group. */
-  contracts: z
-    .object({ evals: z.number().int().positive(), funded: z.number().int().positive() })
-    .default({ evals: 1, funded: 1 }),
   accounts: z.array(AccountSchema).default([]),
 });
 
@@ -44,7 +37,6 @@ export class SettingsStore {
     try {
       return SettingsSchema.parse(JSON.parse(readFileSync(this.path, "utf8")));
     } catch {
-      // Corrupt settings must not brick the app; start fresh but stay in practice mode.
       return SettingsSchema.parse({});
     }
   }
@@ -57,59 +49,21 @@ export class SettingsStore {
   get running(): boolean {
     return this.settings.running;
   }
-
   get mode(): Mode {
     return this.settings.mode;
   }
-
   get accounts(): readonly StoredAccount[] {
     return this.settings.accounts;
   }
 
-  get evalTarget(): number {
-    return this.settings.evalTarget;
-  }
-
-  contractsFor(group: Group): number {
-    return this.settings.contracts[group];
-  }
-
-  setContracts(group: Group, contracts: number): void {
-    this.settings.contracts[group] = Math.max(1, Math.floor(contracts));
-    this.save();
-  }
-
-  /** Tradeable accounts of one group, in rotation order (enabled + not passed). */
+  /** Tradeable accounts of one group, in rotation order (enabled). */
   accountsIn(group: Group): StoredAccount[] {
-    return this.settings.accounts.filter((a) => a.group === group && a.enabled && a.status === "active");
+    return this.settings.accounts.filter((a) => a.group === group && a.enabled);
   }
 
-  /** All non-passed accounts of one group (including disabled), in rotation order. */
+  /** All accounts of one group (including disabled), in rotation order. */
   allAccountsIn(group: Group): StoredAccount[] {
-    return this.settings.accounts.filter((a) => a.group === group && a.status === "active");
-  }
-
-  /** Retired accounts (hit the eval target), any group. */
-  passedAccounts(): StoredAccount[] {
-    return this.settings.accounts.filter((a) => a.status === "passed");
-  }
-
-  /** Retire an account from trading (eval target reached). */
-  markPassed(label: string): boolean {
-    const acct = this.find(label);
-    if (!acct || acct.status === "passed") return false;
-    acct.status = "passed";
-    this.save();
-    return true;
-  }
-
-  /** Put a passed account back into its group's rotation. */
-  reactivate(label: string): boolean {
-    const acct = this.find(label);
-    if (!acct || acct.status !== "passed") return false;
-    acct.status = "active";
-    this.save();
-    return true;
+    return this.settings.accounts.filter((a) => a.group === group);
   }
 
   find(label: string): StoredAccount | undefined {
@@ -135,13 +89,7 @@ export class SettingsStore {
       this.save();
       return existing;
     }
-    const account: StoredAccount = {
-      tradovateLabel: label,
-      name: name?.trim() || label,
-      group,
-      enabled: true,
-      status: "active",
-    };
+    const account: StoredAccount = { tradovateLabel: label, name: name?.trim() || label, group, enabled: true };
     this.settings.accounts.push(account);
     this.save();
     return account;
@@ -163,10 +111,7 @@ export class SettingsStore {
     return true;
   }
 
-  /**
-   * Move an account up or down WITHIN its group. Order across the whole list is
-   * preserved for other accounts; we swap with the neighbouring same-group entry.
-   */
+  /** Move an account up or down WITHIN its group. */
   moveAccount(label: string, direction: "up" | "down"): boolean {
     const list = this.settings.accounts;
     const from = list.findIndex((a) => a.tradovateLabel === label);
@@ -182,6 +127,6 @@ export class SettingsStore {
         return true;
       }
     }
-    return false; // already at the edge of its group
+    return false;
   }
 }

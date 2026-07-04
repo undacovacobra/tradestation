@@ -5,30 +5,22 @@ import { config } from "./config.js";
 import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Group, type OrderRequest } from "./types.js";
 import { SettingsStore } from "./store.js";
 import { GroupRotation } from "./rotation.js";
-import { tradingDayKey } from "./tradingDay.js";
 import { TradovateBrowser } from "./browser.js";
-import { Monitor } from "./monitor.js";
 import { connectTunnel, disconnectTunnel, tunnelStatus, autoStartTunnel } from "./tunnel.js";
 import { pushEvent, listEvents } from "./events.js";
 import { log } from "./logger.js";
 
 const store = new SettingsStore(config.settingsPath);
 const browser = new TradovateBrowser(config);
-// The trading day rolls over in the evening (default 6pm ET), not at midnight.
-const tradingDay = (at: Date = new Date()) => tradingDayKey(at, config.tradingDayTz, config.tradingDayResetHour);
 const rotations: Record<Group, GroupRotation> = {
-  evals: new GroupRotation("evals", resolve(config.dataDir, "state-evals.json"), config.oncePerDay, tradingDay),
-  funded: new GroupRotation("funded", resolve(config.dataDir, "state-funded.json"), config.oncePerDay, tradingDay),
+  evals: new GroupRotation("evals", resolve(config.dataDir, "state-evals.json")),
+  funded: new GroupRotation("funded", resolve(config.dataDir, "state-funded.json")),
 };
 
 /**
- * Serialize everything that may touch the browser (orders from BOTH groups,
- * account scans). TradingView can fire alerts close together and browser
- * automation must never run two flows at once.
- *
- * SPEED: `pendingTrades` counts webhook trades waiting for the browser. All
- * background work (balance sweeps, arming) checks it and yields, so a trade
- * never waits behind more than one tiny background step.
+ * Serialize everything that touches the browser (orders from BOTH lanes, arming,
+ * scans). Browser automation must never run two flows at once. `pendingTrades`
+ * lets pre-arming step aside instantly so a real trade never waits behind it.
  */
 let queue: Promise<unknown> = Promise.resolve();
 let pendingTrades = 0;
@@ -42,9 +34,8 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 let lastAlertGroup: Group = "evals";
 
 /**
- * Pre-arm the browser for the group's NEXT entry: select that account and
- * pre-set the size, so the entry webhook only has to click Buy/Sell.
- * Fire-and-forget; skipped in practice mode / when not logged in / not flat.
+ * Pre-select the group's NEXT account so an entry webhook only has to click
+ * Buy/Sell. Fire-and-forget; skipped in practice / when not logged in / not flat.
  */
 function armNext(group: Group): void {
   if (store.mode !== "live" || !browser.status().loggedIn) return;
@@ -54,79 +45,45 @@ function armNext(group: Group): void {
   if (!next) return;
   void enqueue(() => {
     if (pendingTrades > 0) return Promise.resolve(); // never delay a real trade
-    return browser.armFor(next.tradovateLabel, store.contractsFor(group));
+    return browser.armFor(next.tradovateLabel);
   }).catch((err) => log.warn(`Pre-arm failed: ${(err as Error).message}`));
 }
 
 // ---------------------------------------------------------------------------
-// Trade handling
+// Trade handling — deliberately minimal: switch account, click. Nothing else.
 // ---------------------------------------------------------------------------
 
-/** Open a position. Returns the account balance read just before the order
- *  (live mode) so we can later judge win/loss; undefined in practice. */
-async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<number | undefined> {
-  const qty = order.quantity ?? 1;
+async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<void> {
   if (store.mode === "practice") {
-    pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${qty} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
-    return undefined;
+    pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
+    return;
   }
   await browser.switchAccount(label);
-  // Set + verify the size FIRST; setQuantity throws if it can't confirm, so we
-  // never click Buy/Sell with the wrong number of contracts.
-  await browser.setQuantity(qty);
   await browser.clickOrder(order.action, label);
-  pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${qty} ${order.symbol} on ${name} (${label}).`, group);
-  // Read the entry balance AFTER firing the order so it never delays the fill.
-  // A just-opened position has ~0 P&L, so this equals the pre-trade balance for
-  // win/loss purposes.
-  const after = await browser.readSelectedAccount().catch(() => null);
-  return after?.balance ?? undefined;
+  pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}).`, group);
 }
 
-/** Flatten the position. Returns the balance read just after closing (live)
- *  so win/loss can be measured; undefined in practice. */
-async function executeClose(label: string, name: string, symbol: string, group: Group): Promise<number | undefined> {
+async function executeClose(label: string, name: string, symbol: string, group: Group): Promise<void> {
   if (store.mode === "practice") {
     pushEvent("trade", `PRACTICE — would CLOSE ${symbol} on ${name} (${label}). No real order placed.`, group);
-    return undefined;
+    return;
   }
   await browser.switchAccount(label);
   await browser.clickExit(label);
-  const after = await browser.readSettledBalance().catch(() => null);
   pushEvent("trade", `LIVE — closed ${symbol} on ${name} (${label}).`, group);
-  return after?.balance ?? undefined;
 }
 
 async function handleEntry(group: Group, order: OrderRequest): Promise<string> {
   const rotation = rotations[group];
-  let choice = rotation.selectAccountForEntry(store.accountsIn(group));
-
-  // Belt-and-braces target guard: never OPEN a trade on an eval that's already
-  // at/above the profit target, even if the monitor hasn't retired it yet.
-  let guard = 0;
-  while (!("error" in choice) && group === "evals" && guard++ < 100) {
-    const bal = monitor.balanceOf(choice.account.tradovateLabel);
-    if (bal === null || bal < store.evalTarget) break;
-    pushEvent(
-      "info",
-      `${choice.account.name} is already at $${bal.toLocaleString()} (target reached) — skipping it and retiring it.`,
-      group,
-    );
-    store.markPassed(choice.account.tradovateLabel);
-    choice = rotation.selectAccountForEntry(store.accountsIn(group));
-  }
-
+  const choice = rotation.selectAccountForEntry(store.accountsIn(group));
   if ("error" in choice) {
     pushEvent("warn", `Entry skipped: ${choice.error}`, group);
     return choice.error;
   }
   const acct = choice.account;
-  // The dashboard's per-group "Contracts per trade" is the source of truth for
-  // size — not the alert — so the bot sets exactly this many on Tradovate.
-  order.quantity = store.contractsFor(group);
-  const entryBalance = await executeEntry(acct.tradovateLabel, acct.name, order, group);
-  rotation.recordOpen(acct, order, entryBalance);
-  return `Opened ${order.action} ${order.quantity} ${order.symbol} on ${acct.name}`;
+  await executeEntry(acct.tradovateLabel, acct.name, order, group);
+  rotation.recordOpen(acct, order);
+  return `Opened ${order.action} ${order.symbol} on ${acct.name}`;
 }
 
 async function handleClose(group: Group, symbol: string): Promise<string> {
@@ -136,65 +93,13 @@ async function handleClose(group: Group, symbol: string): Promise<string> {
     return "No open trade to close.";
   }
   const open = rotation.getState().openTrade!;
-  const exitBalance = await executeClose(open.tradovateLabel, open.accountName, symbol, group);
-  const { closed, next, won, pnl } = rotation.recordClose(store.accountsIn(group), { exitBalance });
+  await executeClose(open.tradovateLabel, open.accountName, symbol, group);
+  const { closed, next } = rotation.recordClose(store.accountsIn(group));
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
-  const resultMsg =
-    pnl != null
-      ? won
-        ? ` WON +$${pnl.toLocaleString()} — ${closed.accountName} is done for today.`
-        : ` Result ${pnl >= 0 ? "+" : ""}$${pnl.toLocaleString()} (not a win) — it stays in the cycle.`
-      : "";
-  pushEvent(won ? "trade" : "info", `Round-trip finished on ${closed.accountName}.${resultMsg} ${nextMsg}`, group);
-  // Get the browser sitting on the next account with the size pre-set, so the
-  // next entry only has to click Buy/Sell.
-  armNext(group);
-  return `Closed ${closed.symbol} on ${closed.accountName}.${resultMsg} ${nextMsg}`;
+  pushEvent("info", `Round-trip finished on ${closed.accountName}. ${nextMsg}`, group);
+  armNext(group); // get the browser sitting on the next account, ready to click
+  return `Closed ${closed.symbol} on ${closed.accountName}. ${nextMsg}`;
 }
-
-/**
- * Close a group's open trade WITHOUT a webhook (used by the monitor when an
- * eval hits the profit target). Flattens at market and advances the rotation.
- */
-async function forceClose(group: Group, reason: string): Promise<void> {
-  const rotation = rotations[group];
-  if (rotation.isFlat) return;
-  const open = rotation.getState().openTrade!;
-  const exitBalance = await enqueue(() => executeClose(open.tradovateLabel, open.accountName, open.symbol, group));
-  // Hitting the profit target is by definition a win for that account.
-  const { closed, next } = rotation.recordClose(store.accountsIn(group), { won: true, exitBalance });
-  const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
-  pushEvent("warn", `${reason} Closed the open trade on ${closed.accountName} automatically. ${nextMsg}`, group);
-  armNext(group);
-}
-
-const monitor = new Monitor({
-  store,
-  rotations,
-  isBrowserReady: () => browser.status().loggedIn,
-  readSelected: () => enqueue(() => browser.readSelectedAccount()),
-  readAccount: (label) => enqueue(() => browser.readAccount(label)),
-  // Interruptible full sweep: each account is its own small queue job and the
-  // loop bails out the moment a trade is waiting — so a webhook never sits
-  // behind a multi-second all-accounts balance cycle.
-  readAll: async () => {
-    const labels = await enqueue(() => (pendingTrades > 0 ? Promise.resolve([]) : browser.listAccounts()));
-    const out: { label: string; balance: number | null }[] = [];
-    for (const label of labels) {
-      if (pendingTrades > 0) break; // yield to the trade; finish next sweep
-      out.push(await enqueue(() => browser.readAccount(label)).catch(() => ({ label, balance: null })));
-    }
-    // The sweep leaves the browser on whatever account it read last — put it
-    // back on the account that's up next so entries stay instant.
-    armNext(lastAlertGroup);
-    return out;
-  },
-  forceClose,
-  balancesPath: config.balancesPath,
-  intervalSeconds: config.monitorSeconds,
-  activeIntervalSeconds: config.monitorActiveSeconds,
-  fullSweepMs: config.balanceSweepMinutes * 60_000,
-});
 
 // ---------------------------------------------------------------------------
 // App + dashboard authentication
@@ -204,13 +109,12 @@ const app = express();
 app.use(express.json());
 app.disable("x-powered-by");
 
-/** Session cookie value: HMAC of the dashboard password, keyed by the webhook secret. */
 function authToken(): string {
   return createHmac("sha256", config.webhookSecret).update(config.dashboardPassword).digest("hex");
 }
 
 function isAuthed(req: Request): boolean {
-  if (!config.dashboardPassword) return true; // no password set -> local-only use
+  if (!config.dashboardPassword) return true;
   const cookies = req.headers.cookie ?? "";
   const match = /(?:^|;\s*)dash=([a-f0-9]+)/.exec(cookies);
   if (!match) return false;
@@ -234,7 +138,7 @@ app.post("/api/login", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Webhooks (one per group) — protected by the shared secret, not the cookie.
+// Webhooks (one per group)
 // ---------------------------------------------------------------------------
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -269,15 +173,9 @@ app.post("/webhook/:group", async (req, res) => {
     const message = await enqueue(() => {
       waitedMs = Date.now() - received;
       if (isCloseAlert(alert)) return handleClose(group, alert.symbol);
-      // Past the close check, this is an entry: action is "buy" or "sell".
       const order: OrderRequest = {
         action: alert.action === "sell" ? "sell" : "buy",
         symbol: alert.symbol,
-        quantity: alert.quantity ?? 1,
-        orderType: alert.orderType,
-        price: alert.price,
-        stopLoss: alert.stopLoss,
-        takeProfit: alert.takeProfit,
         tradeId: alert.tradeId,
       };
       return handleEntry(group, order);
@@ -301,45 +199,25 @@ const api = express.Router();
 api.use(requireAuth);
 
 api.get("/status", (_req, res) => {
-  const balances = monitor.snapshot();
-  const withBalance = (a: { tradovateLabel: string; group: string }) => {
-    const b = balances[a.tradovateLabel];
-    return {
-      ...a,
-      balance: b?.balance ?? null,
-      balanceUpdatedAt: b?.updatedAt ?? null,
-      history: b?.history ?? [],
-      toTarget: a.group === "evals" && b ? Math.max(0, store.evalTarget - b.balance) : null,
-    };
-  };
   const groups: Record<string, unknown> = {};
   for (const group of GROUPS) {
     const rotation = rotations[group];
-    const enabled = store.accountsIn(group);
     const state = rotation.getState();
     groups[group] = {
       webhookPath: `/webhook/${group}`,
-      accounts: store.allAccountsIn(group).map((a) => ({
-        ...withBalance(a),
-        restingToday: rotation.isBenchedToday(a.tradovateLabel), // won already today
-      })),
-      next: rotation.peekNext(enabled)?.name ?? null,
+      accounts: store.allAccountsIn(group),
+      next: rotation.peekNext(store.accountsIn(group))?.name ?? null,
       openTrade: state.openTrade,
       tradesToday: rotation.tradesToday(),
-      recentHistory: state.history.slice(-5).reverse(),
     };
   }
   res.json({
     ok: true,
     running: store.running,
     mode: store.mode,
-    oncePerDay: config.oncePerDay,
-    evalTarget: store.evalTarget,
-    contracts: { evals: store.contractsFor("evals"), funded: store.contractsFor("funded") },
     browser: browser.status(),
     tunnel: tunnelStatus(),
     groups,
-    passed: store.passedAccounts().map(withBalance),
     events: listEvents(60),
   });
 });
@@ -401,37 +279,6 @@ api.post("/accounts/move", (req, res) => {
   res.json({ ok: store.moveAccount(label, direction) });
 });
 
-api.post("/contracts", (req, res) => {
-  const group = req.body?.group;
-  const contracts = Number(req.body?.contracts);
-  if (typeof group !== "string" || !isGroup(group)) {
-    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
-  }
-  if (!Number.isFinite(contracts) || contracts < 1) {
-    return res.status(400).json({ ok: false, error: "contracts must be a whole number of at least 1" });
-  }
-  store.setContracts(group, contracts);
-  pushEvent("info", `Contracts per trade for ${group} set to ${store.contractsFor(group)}.`, group);
-  armNext(group); // pre-set the new size on the ticket
-  res.json({ ok: true, contracts: store.contractsFor(group) });
-});
-
-api.post("/test-quantity", async (req, res) => {
-  const group = req.body?.group;
-  if (typeof group !== "string" || !isGroup(group)) {
-    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
-  }
-  const want = store.contractsFor(group);
-  try {
-    const confirmed = await enqueue(() => browser.setQuantity(want));
-    pushEvent("info", `Contract-size test OK — Tradovate now shows ${confirmed} on the order ticket (no order placed).`, group);
-    res.json({ ok: true, confirmed });
-  } catch (err) {
-    pushEvent("warn", `Contract-size test failed: ${(err as Error).message}`, group);
-    res.status(500).json({ ok: false, error: (err as Error).message });
-  }
-});
-
 api.post("/next", (req, res) => {
   const group = req.body?.group;
   const label = typeof req.body?.label === "string" ? req.body.label : "";
@@ -440,47 +287,31 @@ api.post("/next", (req, res) => {
   }
   const rotation = rotations[group];
   if (!rotation.isFlat) {
-    return res.status(400).json({
-      ok: false,
-      error: "There's an open trade — the next account is chosen automatically when it closes.",
-    });
+    return res.status(400).json({ ok: false, error: "There's an open trade — the next account is chosen automatically when it closes." });
   }
   const ok = rotation.setNext(label, store.accountsIn(group));
   if (ok) {
-    const acct = store.find(label);
-    pushEvent("info", `Next ${group} trade will go to ${acct?.name ?? label}.`, group);
+    pushEvent("info", `Next ${group} trade will go to ${store.find(label)?.name ?? label}.`, group);
     armNext(group);
   }
   res.json({ ok });
 });
 
-/**
- * Speed test: fire a real buy-then-close webhook at OUR OWN webhook URL —
- * through the public tunnel when it's up, i.e. the same road TradingView
- * uses — and time each leg. Restores the rotation's next-account afterwards
- * so a test never shuffles the real order.
- */
+/** Speed test: fire a real buy-then-close at our own webhook and time each leg. */
 api.post("/speedtest", async (req, res) => {
   const group = req.body?.group;
   if (typeof group !== "string" || !isGroup(group)) {
     return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
   }
-  if (!store.running) {
-    return res.status(400).json({ ok: false, error: "The bot is paused — press Start first." });
-  }
+  if (!store.running) return res.status(400).json({ ok: false, error: "The bot is paused — press Start first." });
   if (store.mode === "live" && req.body?.confirmLive !== true) {
     return res.status(400).json({ ok: false, error: "LIVE speed test needs confirmation (it places a real order)." });
   }
   const rotation = rotations[group];
-  if (!rotation.isFlat) {
-    return res.status(400).json({ ok: false, error: "A trade is open in this group — try after it closes." });
-  }
-  const before = rotation.peekNext(store.accountsIn(group));
-  // Hit our own webhook on localhost — this cleanly measures the BOT's work
-  // (pick account → set size → click). The internet/TradingView delivery leg is
-  // separate and can't be measured from here.
-  const base = `http://localhost:${config.port}`;
+  if (!rotation.isFlat) return res.status(400).json({ ok: false, error: "A trade is open in this group — try after it closes." });
 
+  const before = rotation.peekNext(store.accountsIn(group));
+  const base = `http://localhost:${config.port}`;
   const fire = async (payload: Record<string, unknown>) => {
     const started = Date.now();
     try {
@@ -500,36 +331,16 @@ api.post("/speedtest", async (req, res) => {
   const secret = config.webhookSecret;
   const open = await fire({ secret, action: "buy", symbol: "SPEEDTEST", marketPosition: "long", tradeId: "speedtest" });
   const close = await fire({ secret, action: "sell", symbol: "SPEEDTEST", marketPosition: "flat" });
-  // Put the rotation back the way it was — a test shouldn't advance the order.
-  if (before && rotation.isFlat) rotation.setNext(before.tradovateLabel, store.accountsIn(group));
+  if (before && rotation.isFlat) rotation.setNext(before.tradovateLabel, store.accountsIn(group)); // don't advance order
   armNext(group);
 
-  const bothOk = open.ok && close.ok;
   pushEvent(
-    bothOk ? "info" : "warn",
+    open.ok && close.ok ? "info" : "warn",
     `⏱ Speed test (${group}, ${store.mode}): open ${open.ms}ms, close ${close.ms}ms` +
-      (bothOk ? "" : ` — problem: ${!open.ok ? open.message : close.message}`),
+      (open.ok && close.ok ? "" : ` — problem: ${!open.ok ? open.message : close.message}`),
     group,
   );
-  // ok:true means the TEST ran; per-leg ok/message tell whether each trade
-  // actually went through, so the dashboard can always show the result.
-  res.json({
-    ok: true,
-    openMs: open.ms,
-    closeMs: close.ms,
-    mode: store.mode,
-    openOk: open.ok,
-    closeOk: close.ok,
-    openMsg: open.message,
-    closeMsg: close.message,
-  });
-});
-
-api.post("/accounts/reactivate", (req, res) => {
-  const label = typeof req.body?.label === "string" ? req.body.label : "";
-  const ok = store.reactivate(label);
-  if (ok) pushEvent("info", `${label} was moved back into its rotation from the Passed column.`);
-  res.json({ ok });
+  res.json({ ok: true, openMs: open.ms, closeMs: close.ms, mode: store.mode, openOk: open.ok, closeOk: close.ok, openMsg: open.message, closeMsg: close.message });
 });
 
 api.post("/browser/connect", async (_req, res) => {
@@ -555,31 +366,24 @@ api.post("/browser/disconnect", async (_req, res) => {
   res.json({ ok: true });
 });
 
+api.post("/scan", async (_req, res) => {
+  try {
+    const labels = await enqueue(() => browser.listAccounts());
+    pushEvent("info", `Scanned Tradovate: found ${labels.length} account(s).`);
+    res.json({ ok: true, labels });
+  } catch (err) {
+    pushEvent("error", `Account scan failed: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
 api.post("/tunnel/connect", async (_req, res) => {
   const status = await connectTunnel();
   res.json({ ok: status.state !== "error", tunnel: status, error: status.state === "error" ? status.error : undefined });
 });
 
 api.post("/tunnel/disconnect", async (_req, res) => {
-  const status = await disconnectTunnel();
-  res.json({ ok: true, tunnel: status });
-});
-
-api.post("/scan", async (_req, res) => {
-  try {
-    const rows = await enqueue(() => browser.readAllBalances());
-    // Fill balances/charts in immediately instead of waiting for the next sweep.
-    monitor.scanIngest(rows);
-    const withDollars = rows.filter((r) => r.balance !== null).length;
-    pushEvent(
-      "info",
-      `Scanned Tradovate: found ${rows.length} account(s)${withDollars ? `, ${withDollars} with balances` : ""}.`,
-    );
-    res.json({ ok: true, labels: rows.map((r) => r.label), balances: rows });
-  } catch (err) {
-    pushEvent("error", `Account scan failed: ${(err as Error).message}`);
-    res.status(500).json({ ok: false, error: (err as Error).message });
-  }
+  res.json({ ok: true, tunnel: await disconnectTunnel() });
 });
 
 app.use("/api", api);
@@ -592,12 +396,7 @@ async function main() {
     log.info(`Dashboard + webhooks listening on http://localhost:${config.port}`);
     log.info(`Webhooks: /webhook/evals and /webhook/funded | mode=${store.mode} | running=${store.running}`);
     pushEvent("info", `Bot server started. Mode: ${store.mode.toUpperCase()}. Open the dashboard to manage it.`);
-    // Bring remote access up automatically if it's configured, so a fresh
-    // double-click of the startup shortcut needs no extra steps.
     autoStartTunnel();
-    // Balance / new-account / eval-target monitor (idles until the Tradovate
-    // browser is connected and logged in).
-    monitor.start();
   });
 }
 

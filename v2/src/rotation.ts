@@ -1,19 +1,14 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Group, OrderRequest, StoredAccount } from "./types.js";
-import { tradingDayKey } from "./tradingDay.js";
 
 export interface OpenTrade {
   tradovateLabel: string;
   accountName: string;
   symbol: string;
   action: "buy" | "sell";
-  /** Contracts the ALERT asked for (actual size is whatever is set on Tradovate). */
-  quantity?: number;
   tradeId?: string;
   openedAt: string;
-  /** Account balance (EQUITY) read just before the entry, to judge win/loss. */
-  entryBalance?: number;
 }
 
 export interface GroupState {
@@ -21,11 +16,6 @@ export interface GroupState {
   nextLabel: string | null;
   /** The currently open round-trip, or null if flat. */
   openTrade: OpenTrade | null;
-  /**
-   * Map of tradovateLabel -> calendar day (YYYY-MM-DD) it last closed a WINNING
-   * trade. A winner sits out the rest of that day; losers keep cycling.
-   */
-  lastWonDay: Record<string, string>;
   history: Array<{
     accountName: string;
     tradovateLabel: string;
@@ -33,25 +23,16 @@ export interface GroupState {
     action: string;
     openedAt: string;
     closedAt: string;
-    won?: boolean;
-    pnl?: number;
   }>;
 }
 
-const emptyState = (): GroupState => ({
-  nextLabel: null,
-  openTrade: null,
-  lastWonDay: {},
-  history: [],
-});
+const emptyState = (): GroupState => ({ nextLabel: null, openTrade: null, history: [] });
 
 /**
  * The account-cycling logic for ONE group (evals or funded): open exactly one
- * round-trip at a time, advance to the next account when it closes.
- *
- * Unlike V1 this is keyed by account LABEL, not array index, because the
- * dashboard lets the user add / remove / reorder accounts while the bot runs.
- * The current account list is passed into each call.
+ * round-trip at a time, then advance to the next account. Keyed by account
+ * LABEL (not array index) so it survives add / remove / reorder mid-rotation.
+ * Deliberately simple: no balances, no daily rules — just the cycle.
  */
 export class GroupRotation {
   private state: GroupState;
@@ -59,10 +40,6 @@ export class GroupRotation {
   constructor(
     readonly group: Group,
     private readonly statePath: string,
-    /** When true, an account that closed a WINNER sits out the rest of the day. */
-    private readonly benchWinnersForDay: boolean,
-    /** Trading-day label for an instant (defaults to now). Injectable for tests. */
-    private readonly today: (at?: Date) => string = defaultToday,
   ) {
     this.state = this.load();
   }
@@ -95,15 +72,20 @@ export class GroupRotation {
     return "error" in choice ? null : choice.account;
   }
 
-  /** True when this account won a trade earlier today and is benched for the day. */
-  isBenchedToday(label: string): boolean {
-    return this.benchWinnersForDay && this.state.lastWonDay[label] === this.today();
+  /** Decide which account takes the next entry, or explain why none can. */
+  selectAccountForEntry(accounts: StoredAccount[]): { account: StoredAccount } | { error: string } {
+    if (this.state.openTrade) {
+      const t = this.state.openTrade;
+      return { error: `A trade is already open on ${t.accountName} (${t.symbol}). It must close first.` };
+    }
+    if (accounts.length === 0) {
+      return { error: "This group has no accounts turned on. Add or enable accounts on the dashboard." };
+    }
+    const idx = accounts.findIndex((a) => a.tradovateLabel === this.state.nextLabel);
+    return { account: accounts[idx === -1 ? 0 : idx]! };
   }
 
-  /**
-   * Manually choose which account takes the next entry. Only allowed while flat
-   * (with a trade open the next account is decided automatically on close).
-   */
+  /** Manually choose which account takes the next entry (only when flat). */
   setNext(label: string, accounts: StoredAccount[]): boolean {
     if (this.state.openTrade) return false;
     if (!accounts.some((a) => a.tradovateLabel === label)) return false;
@@ -112,44 +94,15 @@ export class GroupRotation {
     return true;
   }
 
-  /**
-   * Decide which account should take the next entry, or explain why none can.
-   * Starts at the remembered next account (falling back to the top of the list
-   * if it was removed), skips accounts that already WON today, and scans at
-   * most one full loop.
-   */
-  selectAccountForEntry(accounts: StoredAccount[]): { account: StoredAccount } | { error: string } {
-    if (this.state.openTrade) {
-      const t = this.state.openTrade;
-      return { error: `A trade is already open on ${t.accountName} (${t.symbol}). It must close first.` };
-    }
-    const n = accounts.length;
-    if (n === 0) {
-      return { error: "This group has no accounts turned on. Add or enable accounts on the dashboard." };
-    }
-    const startIdx = Math.max(
-      0,
-      accounts.findIndex((a) => a.tradovateLabel === this.state.nextLabel),
-    );
-    for (let step = 0; step < n; step++) {
-      const acct = accounts[(startIdx + step) % n]!;
-      if (this.isBenchedToday(acct.tradovateLabel)) continue;
-      return { account: acct };
-    }
-    return { error: "Every account here already won a trade today, so they're all resting until tomorrow." };
-  }
-
   /** Record that an entry was placed on the given account. */
-  recordOpen(account: StoredAccount, order: OrderRequest, entryBalance?: number): OpenTrade {
+  recordOpen(account: StoredAccount, order: OrderRequest): OpenTrade {
     const open: OpenTrade = {
       tradovateLabel: account.tradovateLabel,
       accountName: account.name,
       symbol: order.symbol,
       action: order.action,
-      quantity: order.quantity,
       tradeId: order.tradeId,
       openedAt: new Date().toISOString(),
-      entryBalance,
     };
     this.state.openTrade = open;
     this.state.nextLabel = account.tradovateLabel;
@@ -159,24 +112,11 @@ export class GroupRotation {
 
   /**
    * Record that the open round-trip closed, then advance to the account AFTER
-   * the one just traded (in the current list order). If the trade won (`won`
-   * true, or `exitBalance` above the recorded entry balance), that account is
-   * benched for the rest of the day. Returns the closed trade, whether it won,
-   * and the account that takes the next entry (null if the list is empty).
+   * the one just traded. Returns the closed trade and the next account.
    */
-  recordClose(
-    accounts: StoredAccount[],
-    opts: { won?: boolean; exitBalance?: number } = {},
-  ): { closed: OpenTrade; next: StoredAccount | null; won: boolean; pnl?: number } {
+  recordClose(accounts: StoredAccount[]): { closed: OpenTrade; next: StoredAccount | null } {
     const closed = this.state.openTrade;
     if (!closed) throw new Error("recordClose called with no open trade");
-
-    let pnl: number | undefined;
-    if (closed.entryBalance != null && opts.exitBalance != null) {
-      pnl = Math.round((opts.exitBalance - closed.entryBalance) * 100) / 100;
-    }
-    // A win is an explicit flag, or a measured profit above the entry balance.
-    const won = opts.won === true || (pnl != null && pnl > 0);
 
     this.state.history.push({
       accountName: closed.accountName,
@@ -185,35 +125,23 @@ export class GroupRotation {
       action: closed.action,
       openedAt: closed.openedAt,
       closedAt: new Date().toISOString(),
-      won,
-      pnl,
     });
-    if (this.state.history.length > 500) {
-      this.state.history.splice(0, this.state.history.length - 500);
-    }
-    if (won) this.state.lastWonDay[closed.tradovateLabel] = this.today();
+    if (this.state.history.length > 500) this.state.history.splice(0, this.state.history.length - 500);
     this.state.openTrade = null;
 
     let next: StoredAccount | null = null;
     if (accounts.length > 0) {
       const idx = accounts.findIndex((a) => a.tradovateLabel === closed.tradovateLabel);
-      // If the traded account was removed mid-trade, idx is -1 and (−1+1)%n = 0:
-      // we simply restart from the top of the list.
       next = accounts[(idx + 1) % accounts.length]!;
     }
     this.state.nextLabel = next?.tradovateLabel ?? null;
     this.save();
-    return { closed, next, won, pnl };
+    return { closed, next };
   }
 
-  /** How many round-trips this group closed in the current trading day. */
+  /** How many round-trips this group closed today (UTC), for display only. */
   tradesToday(): number {
-    const today = this.today();
-    return this.state.history.filter((h) => this.today(new Date(h.closedAt)) === today).length;
+    const today = new Date().toISOString().slice(0, 10);
+    return this.state.history.filter((h) => h.closedAt.slice(0, 10) === today).length;
   }
-}
-
-/** Fallback trading day: 6pm US/Eastern reset (server injects the configured one). */
-function defaultToday(at: Date = new Date()): string {
-  return tradingDayKey(at, "America/New_York", 18);
 }

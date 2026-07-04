@@ -24,11 +24,13 @@ export function isGroup(v: string): v is Group {
  *     "secret": "your-webhook-secret",
  *     "action": "{{strategy.order.action}}",       // "buy" or "sell"
  *     "symbol": "{{ticker}}",
- *     "quantity": 1,
  *     "marketPosition": "{{strategy.market_position}}"  // "long" / "short" / "flat"
  *   }
  *
  * The old two-alert style still works too: send `"action": "close"` to close.
+ *
+ * NOTE: the bot does NOT set symbol or quantity — you set those on the Tradovate
+ * screen. It only switches account and clicks Buy / Sell / Exit.
  */
 export const AlertSchema = z.object({
   secret: z.string().min(1),
@@ -40,21 +42,18 @@ export const AlertSchema = z.object({
   stopLoss: z.number().positive().optional(),
   takeProfit: z.number().positive().optional(),
   tradeId: z.string().optional(),
-  /**
-   * Position AFTER this order, from {{strategy.market_position}}. "flat" means
-   * the trade just closed. Optional so the old close-action style still works.
-   */
+  /** Position AFTER this order ({{strategy.market_position}}). "flat" = close. */
   marketPosition: z.string().optional(),
 });
+
+export type Alert = z.infer<typeof AlertSchema>;
 
 /** True when this alert represents closing the open trade (not a new entry). */
 export function isCloseAlert(alert: Alert): boolean {
   return alert.action === "close" || (alert.marketPosition ?? "").trim().toLowerCase() === "flat";
 }
 
-export type Alert = z.infer<typeof AlertSchema>;
-
-/** An account as stored in settings.json (managed from the dashboard, never by hand). */
+/** An account as stored in settings.json (managed from the dashboard). */
 export interface StoredAccount {
   /** The exact account id shown in Tradovate's account menu, e.g. LFE05079261220005. */
   tradovateLabel: string;
@@ -62,29 +61,11 @@ export interface StoredAccount {
   name: string;
   group: Group;
   enabled: boolean;
-  /**
-   * "active" accounts rotate normally. "passed" = an eval that hit the profit
-   * target; it is retired from trading and shown in the Passed column until
-   * the user reactivates or removes it.
-   */
-  status: "active" | "passed";
-}
-
-/** One account's balance as read from the Tradovate account menu. */
-export interface AccountBalance {
-  label: string;
-  /** Dollars, or null when the menu row didn't show a parsable amount. */
-  balance: number | null;
 }
 
 /** A normalized order the executor knows how to act on. */
 export interface OrderRequest {
   action: "buy" | "sell";
   symbol: string;
-  quantity: number;
-  orderType: "market" | "limit";
-  price?: number;
-  stopLoss?: number;
-  takeProfit?: number;
   tradeId?: string;
 }
