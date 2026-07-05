@@ -263,6 +263,7 @@ export class TradovateBrowser {
         const stack: (Document | ShadowRoot)[] = [document];
         let numeric: HTMLInputElement | null = null;
         let labelled: HTMLInputElement | null = null;
+        let formCtrl: HTMLInputElement | null = null;
         while (stack.length) {
           const root = stack.pop()!;
           const all = root.querySelectorAll("*");
@@ -272,6 +273,8 @@ export class TradovateBrowser {
             if (el instanceof HTMLInputElement) {
               const role = (el.getAttribute("role") || "").toLowerCase();
               const isNum = el.type === "number" || role === "spinbutton";
+              const cls = (el.getAttribute("class") || "").toLowerCase();
+              const isSearch = el.type === "search" || cls.indexOf("search") >= 0;
               const hint = (
                 (el.getAttribute("aria-label") || "") +
                 " " +
@@ -284,12 +287,18 @@ export class TradovateBrowser {
                 hint.indexOf("quantity") >= 0 ||
                 hint.indexOf("size") >= 0 ||
                 hint.indexOf("contract") >= 0;
+              // Tradovate's order-ticket size box: a plain form-control input
+              // that currently holds a whole number (its label is "Select value",
+              // not "Qty"), sitting by the Buy/Sell/Exit buttons. Never the
+              // symbol search box.
+              const holdsInteger = /^\s*\d+\s*$/.test(el.value || "");
               if (looksQty && !labelled) labelled = el;
               if (isNum && !numeric) numeric = el;
+              if (!isSearch && !formCtrl && cls.indexOf("form-control") >= 0 && holdsInteger) formCtrl = el;
             }
           }
         }
-        const box = labelled || numeric;
+        const box = labelled || numeric || formCtrl;
         if (!box) return null;
         box.setAttribute("data-bot-qty", "1");
         const proto = Object.getPrototypeOf(box);

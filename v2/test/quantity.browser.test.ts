@@ -77,6 +77,24 @@ test("setQuantity sets the shadow-DOM qty box and verifies it", async (t) => {
   }
 });
 
+test("setQuantity finds Tradovate's 'Select value' form-control box, not the search box", async (t) => {
+  const browser = await launch();
+  if (!browser) return t.skip("no Chromium available");
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+    await page.goto("file://" + resolve(__dirname, "fixtures", "mock-ticket-tradovate.html"));
+    const b = fake(page);
+
+    await b.setQuantity(4);
+    const qty = await page.evaluate(() => (document.querySelector(".form-control") as HTMLInputElement).value);
+    const search = await page.evaluate(() => (document.querySelector(".search-box--input") as HTMLInputElement).value);
+    assert.equal(qty, "4", "the form-control size box should read 4");
+    assert.equal(search, "", "the symbol search box must be left alone");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("setQuantity rejects a bad size before touching the page", async (t) => {
   const browser = await launch();
   if (!browser) return t.skip("no Chromium available");
