@@ -318,6 +318,48 @@ export class TradovateBrowser {
     this.lastQty = want;
   }
 
+  /**
+   * Diagnostic for calibrating the size box: list every editable/number-ish
+   * field on the page (inputs, textareas, spinbuttons, contenteditable) with
+   * its tag, type, labels, class and current value. Used by the Test-size
+   * button when it can't find the box, so we can see what the real ticket has.
+   */
+  async inspectFields(): Promise<Array<Record<string, string>>> {
+    if (!this.page) return [];
+    return await this.page
+      .evaluate(() => {
+        const out: Array<Record<string, string>> = [];
+        const stack: (Document | ShadowRoot)[] = [document];
+        while (stack.length) {
+          const root = stack.pop()!;
+          const all = root.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i] as HTMLElement;
+            if (el.shadowRoot) stack.push(el.shadowRoot);
+            const tag = el.tagName.toLowerCase();
+            const role = (el.getAttribute("role") || "").toLowerCase();
+            const editable = el.getAttribute("contenteditable") === "true";
+            const isField = tag === "input" || tag === "textarea" || role === "spinbutton" || editable;
+            if (!isField) continue;
+            const val = (el as HTMLInputElement).value;
+            out.push({
+              tag,
+              type: el.getAttribute("type") || "",
+              role,
+              ariaLabel: el.getAttribute("aria-label") || "",
+              name: el.getAttribute("name") || "",
+              placeholder: el.getAttribute("placeholder") || "",
+              cls: (el.getAttribute("class") || "").slice(0, 50),
+              value: (val != null ? String(val) : el.textContent || "").slice(0, 24),
+            });
+            if (out.length >= 40) return out;
+          }
+        }
+        return out;
+      })
+      .catch(() => []);
+  }
+
   /** Click Buy Mkt / Sell Mkt. Symbol comes from the Tradovate UI; size is set
    *  by setQuantity when the alert carries one. */
   async clickOrder(action: "buy" | "sell", label: string): Promise<void> {

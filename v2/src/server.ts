@@ -475,24 +475,27 @@ api.post("/speedtest", async (req, res) => {
   res.json({ ok: true, openMs: open.ms, closeMs: close.ms, mode: store.mode, openOk: open.ok, closeOk: close.ok, openMsg: open.message, closeMsg: close.message });
 });
 
-/** Size test: set the order-ticket quantity (no order placed) and time it. */
+/** Size test: set the order-ticket quantity (no order placed) and time it.
+ *  Always returns 200 with a result object; on a miss it also returns a list of
+ *  the page's editable fields so we can calibrate which one is the size box. */
 api.post("/test-quantity", async (req, res) => {
   const qty = Math.floor(Number(req.body?.quantity));
   if (!Number.isFinite(qty) || qty < 1) {
-    return res.status(400).json({ ok: false, error: "Enter a whole number of contracts (1 or more)." });
+    return res.json({ ok: true, set: false, message: "Enter a whole number of contracts (1 or more)." });
   }
   if (!browser.status().loggedIn) {
-    return res.status(400).json({ ok: false, error: "Connect the browser and log into Tradovate first." });
+    return res.json({ ok: true, set: false, message: "Connect the browser and log into Tradovate first." });
   }
+  const started = Date.now();
   try {
-    const started = Date.now();
     await enqueue(() => browser.setQuantity(qty, true)); // force = always do the work
     const ms = Date.now() - started;
     pushEvent("info", `🔢 Set order size to ${qty} in ${ms}ms (test only — no order placed).`);
-    res.json({ ok: true, ms, quantity: qty });
+    res.json({ ok: true, set: true, ms, quantity: qty });
   } catch (err) {
-    pushEvent("warn", `Size test failed: ${(err as Error).message}`);
-    res.status(500).json({ ok: false, error: (err as Error).message });
+    const fields = await enqueue(() => browser.inspectFields()).catch(() => []);
+    pushEvent("warn", `Size test couldn't find the size box — showing the ${fields.length} fields it can see for calibration.`);
+    res.json({ ok: true, set: false, quantity: qty, message: (err as Error).message, fields });
   }
 });
 

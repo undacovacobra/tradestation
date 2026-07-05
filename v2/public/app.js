@@ -357,7 +357,26 @@ $("#btn-testqty").addEventListener("click", () => {
     try {
       const r = await api("/test-quantity", { quantity: qty });
       const total = Date.now() - t0;
-      result.innerHTML = `<strong>Set to ${r.quantity} in ${r.ms}ms</strong> ✅ <span style="color:var(--muted);font-size:13px">(button-to-answer ${total}ms)</span>`;
+      if (r.set) {
+        result.innerHTML = `<strong>Set to ${r.quantity} in ${r.ms}ms</strong> ✅ <span style="color:var(--muted);font-size:13px">(button-to-answer ${total}ms)</span>`;
+      } else {
+        let html = `<div style="font-size:16px;color:var(--red)">⚠️ ${esc(r.message || "Couldn't set it.")}</div>`;
+        if (r.fields && r.fields.length) {
+          html += `<p style="font-size:13px;color:var(--muted);margin:10px 0 4px">Boxes the bot can see on the ticket — <strong>screenshot this whole list for Claude</strong> so it can pick the right one:</p>`;
+          html += `<div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px">`;
+          html += `<table style="width:100%;font-size:12px;border-collapse:collapse">`;
+          html += `<tr style="text-align:left;color:var(--muted)"><th style="padding:3px 6px">#</th><th style="padding:3px 6px">kind</th><th style="padding:3px 6px">label / name / class</th><th style="padding:3px 6px">value</th></tr>`;
+          r.fields.forEach((f, i) => {
+            const lbl = [f.ariaLabel, f.name, f.placeholder, f.cls].filter(Boolean).join(" · ") || "—";
+            const kind = esc(f.tag) + (f.type ? "/" + esc(f.type) : "") + (f.role ? " " + esc(f.role) : "");
+            html += `<tr style="border-top:1px solid var(--line)"><td style="padding:3px 6px">${i}</td><td style="padding:3px 6px">${kind}</td><td style="padding:3px 6px">${esc(lbl)}</td><td style="padding:3px 6px">${esc(f.value)}</td></tr>`;
+          });
+          html += `</table></div>`;
+        } else if (r.fields) {
+          html += `<p style="font-size:13px;color:var(--muted)">The bot couldn't see any input boxes at all — make sure the order ticket is open and showing on the Tradovate screen, then try again.</p>`;
+        }
+        result.innerHTML = html;
+      }
     } catch (err) {
       result.innerHTML = `<span style="color:var(--red)">⚠️ ${esc(err.message)}</span>`;
     } finally {
