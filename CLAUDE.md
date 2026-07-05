@@ -36,6 +36,34 @@ config: `ORDER_CONFIRM_WAIT_MS` (250), `SWITCH_SETTLE_MS` (250), `SCREENSHOTS`
 (off). Pre-arming (`armFor` = switch only) + `switchAccount` fast-path (skip menu
 when top bar already shows the target) keep the live entry to ~a click. 7 tests.
 
+## ✅ DYNAMIC ORDER SIZE re-added — fast (2026-07-05) — read this third
+The user needs the contract size to come from the alert (it's dynamic inside the
+strategy) but **without** re-introducing the lag. Key realization stated to them:
+*the old lag was the SEARCH for the qty box (a whole-DOM boundingBox scan), not
+the act of setting it.* How it's built now:
+- Alert carries `quantity` (`{{strategy.order.contracts}}`); `AlertSchema` already
+  had the field. `OrderRequest.quantity` added; the webhook passes it through.
+- `browser.setQuantity(qty, force?)`: **cached** (`lastQty` — same size = pure
+  no-op), finds the ticket's qty input in **ONE** shadow-DOM-piercing
+  `page.evaluate` (no per-element round-trips), sets it via the native value
+  setter + input/change events, then **reads it back and THROWS if it can't
+  confirm** the exact number → the caller places no order, so a wrong size can't
+  fire. Pass-2 fallback types it via `locator('[data-bot-qty]').fill()`. All
+  inline (no nested fns — esbuild `__name` gotcha). `lastQty` resets on
+  connect/disconnect and on any real account switch.
+- `executeEntry` calls `setQuantity(order.quantity)` **before** clickOrder only
+  when the alert carries a size; omitted `quantity` = leave the ticket as-is.
+- **🔢 Test size button** (dashboard) → `POST /api/test-quantity` sets+verifies a
+  typed number with `force:true` and returns the ms (no order). Modal lets the
+  user type a new number and re-time repeatedly.
+- **⚠️ Selector unverified against the real Tradovate ticket** — heuristic
+  (qty/size/contract-labelled input, else first numeric/spinbutton); saves a
+  `set-quantity-failed` screenshot + throws (skips the trade) on a miss. Guarded
+  by `test/quantity.browser.test.ts` + `test/fixtures/mock-ticket.html` (real
+  shadow-DOM ticket, prefers the qty box over a decoy price field). Needs one
+  live calibration pass. **18 tests pass**, type-checks clean, practice webhook +
+  test endpoint verified.
+
 ## ✅ FEATURES RE-ADDED — the LOG way (2026-07-04) — read this second
 After the strip proved the entry path was finally fast (user confirmed the
 dropdown no longer opens before Buy/Sell), the user asked for three things back

@@ -77,13 +77,18 @@ async function ensureOn(label: string, name: string, group: Group): Promise<void
 }
 
 async function executeEntry(label: string, name: string, order: OrderRequest, group: Group): Promise<void> {
+  const sizeLabel = order.quantity != null ? `${order.quantity}x ` : "";
   if (store.mode === "practice") {
-    pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}). No real order placed.`, group);
+    pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${sizeLabel}${order.symbol} on ${name} (${label}). No real order placed.`, group);
     return;
   }
   await ensureOn(label, name, group);
+  // Set the size from the alert BEFORE the click. Cached, so a same-size trade
+  // is a no-op; a change is one fast set that's verified (or the trade is
+  // skipped). Omitted quantity = leave whatever size is on the ticket.
+  if (order.quantity != null) await browser.setQuantity(order.quantity);
   await browser.clickOrder(order.action, label);
-  pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${order.symbol} on ${name} (${label}).`, group);
+  pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${sizeLabel}${order.symbol} on ${name} (${label}).`, group);
 }
 
 async function executeClose(label: string, name: string, symbol: string, group: Group): Promise<void> {
@@ -278,6 +283,7 @@ app.post("/webhook/:group", async (req, res) => {
         action: alert.action === "sell" ? "sell" : "buy",
         symbol: alert.symbol,
         tradeId: alert.tradeId,
+        quantity: alert.quantity,
       };
       return handleEntry(group, order);
     });
@@ -467,6 +473,27 @@ api.post("/speedtest", async (req, res) => {
     group,
   );
   res.json({ ok: true, openMs: open.ms, closeMs: close.ms, mode: store.mode, openOk: open.ok, closeOk: close.ok, openMsg: open.message, closeMsg: close.message });
+});
+
+/** Size test: set the order-ticket quantity (no order placed) and time it. */
+api.post("/test-quantity", async (req, res) => {
+  const qty = Math.floor(Number(req.body?.quantity));
+  if (!Number.isFinite(qty) || qty < 1) {
+    return res.status(400).json({ ok: false, error: "Enter a whole number of contracts (1 or more)." });
+  }
+  if (!browser.status().loggedIn) {
+    return res.status(400).json({ ok: false, error: "Connect the browser and log into Tradovate first." });
+  }
+  try {
+    const started = Date.now();
+    await enqueue(() => browser.setQuantity(qty, true)); // force = always do the work
+    const ms = Date.now() - started;
+    pushEvent("info", `🔢 Set order size to ${qty} in ${ms}ms (test only — no order placed).`);
+    res.json({ ok: true, ms, quantity: qty });
+  } catch (err) {
+    pushEvent("warn", `Size test failed: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
 });
 
 api.post("/browser/connect", async (_req, res) => {

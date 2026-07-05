@@ -22,15 +22,17 @@ export function isGroup(v: string): v is Group {
  *   Single alert message:
  *   {
  *     "secret": "your-webhook-secret",
- *     "action": "{{strategy.order.action}}",       // "buy" or "sell"
+ *     "action": "{{strategy.order.action}}",           // "buy" or "sell"
  *     "symbol": "{{ticker}}",
+ *     "quantity": {{strategy.order.contracts}},        // dynamic size for THIS order
  *     "marketPosition": "{{strategy.market_position}}"  // "long" / "short" / "flat"
  *   }
  *
  * The old two-alert style still works too: send `"action": "close"` to close.
  *
- * NOTE: the bot does NOT set symbol or quantity — you set those on the Tradovate
- * screen. It only switches account and clicks Buy / Sell / Exit.
+ * NOTE: the bot does NOT set the symbol — you pick the contract on the Tradovate
+ * screen. It DOES set the size when the alert carries `quantity` (verified before
+ * the order fires); leave `quantity` out to keep whatever size the ticket shows.
  */
 export const AlertSchema = z.object({
   secret: z.string().min(1),
@@ -70,4 +72,6 @@ export interface OrderRequest {
   action: "buy" | "sell";
   symbol: string;
   tradeId?: string;
+  /** Contracts for this entry (from the alert). Omitted = leave the ticket as-is. */
+  quantity?: number;
 }

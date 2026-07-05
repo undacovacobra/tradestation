@@ -326,6 +326,47 @@ $("#btn-scan").addEventListener("click", () =>
   }),
 );
 
+$("#btn-testqty").addEventListener("click", () => {
+  if (!status) return;
+  showModal(`
+    <h2>🔢 Test order size</h2>
+    <p>Type a number of contracts and time how long the bot takes to set it on the Tradovate ticket. <strong>No order is placed.</strong></p>
+    <p style="color:var(--muted);font-size:13px">The browser must be connected, logged in, and sitting on an account (so the order ticket is showing). Type a different number each time to see a real set.</p>
+    <form id="qty-form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0">
+      <input id="qty-input" type="number" min="1" step="1" value="1" style="font:inherit;width:90px;padding:10px;border-radius:8px;border:1px solid var(--line)" />
+      <button class="btn primary" type="submit">Set &amp; time it</button>
+    </form>
+    <div id="qty-result" style="font-size:20px;min-height:26px"></div>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+  const form = $("#qty-form");
+  const result = $("#qty-result");
+  const input = $("#qty-input");
+  input.focus();
+  input.select();
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const qty = Math.floor(Number(input.value));
+    if (!Number.isFinite(qty) || qty < 1) {
+      result.innerHTML = `<span style="color:var(--red)">Enter a whole number of 1 or more.</span>`;
+      return;
+    }
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    result.textContent = "Setting…";
+    const t0 = Date.now();
+    try {
+      const r = await api("/test-quantity", { quantity: qty });
+      const total = Date.now() - t0;
+      result.innerHTML = `<strong>Set to ${r.quantity} in ${r.ms}ms</strong> ✅ <span style="color:var(--muted);font-size:13px">(button-to-answer ${total}ms)</span>`;
+    } catch (err) {
+      result.innerHTML = `<span style="color:var(--red)">⚠️ ${esc(err.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+      input.select();
+    }
+  });
+});
+
 $("#btn-tunnel").addEventListener("click", () => {
   if (!status) return;
   const on = (status.tunnel || {}).state === "on";

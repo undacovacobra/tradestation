@@ -43,6 +43,9 @@ export class TradovateBrowser {
    *  accounts, so this is authoritative — used to skip the switch instantly when
    *  we're already on the right account (armed). Reset on (re)connect. */
   private currentAccount: string | null = null;
+  /** The order size we last set on the ticket. Lets us skip re-setting the same
+   *  size (a pure no-op) and forces a re-set after an account switch. */
+  private lastQty: number | null = null;
   private readonly shotDir: string;
 
   constructor(private readonly config: Config) {
@@ -92,6 +95,7 @@ export class TradovateBrowser {
         this.page = null;
         this.loggedIn = false;
         this.currentAccount = null;
+        this.lastQty = null;
       });
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
       await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" });
@@ -180,6 +184,7 @@ export class TradovateBrowser {
       .catch(() => null);
     if (current?.includes(label)) {
       this.currentAccount = label;
+      this.lastQty = null; // new account — ticket size unknown, re-set on next order
       return;
     }
     log.info(`Switching active account to ${label}`);
@@ -188,6 +193,7 @@ export class TradovateBrowser {
       await this.p.getByText(label, { exact: false }).last().click({ timeout: 10_000 });
       await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
       this.currentAccount = label;
+      this.lastQty = null; // new account — ticket size unknown, re-set on next order
     } catch (err) {
       this.currentAccount = null; // we no longer know where we are
       await this.snapshot(`switch-account-failed-${label}`, true);
@@ -233,7 +239,87 @@ export class TradovateBrowser {
     return this.readSelectedEquity();
   }
 
-  /** Click Buy Mkt / Sell Mkt. Symbol + quantity come from the Tradovate UI. */
+  /**
+   * Set the order-ticket quantity, FAST. Two rules keep this off the slow path:
+   *  - Cached: if we already set this exact size, do nothing (a pure no-op) —
+   *    so back-to-back same-size trades cost zero.
+   *  - One pass: it finds the size box in a SINGLE in-page search (no
+   *    per-element round-trips — that whole-DOM scan was the old lag) and sets
+   *    the value, then READS IT BACK. If it can't confirm the exact number it
+   *    THROWS, so the caller places no order and a wrong size can never fire.
+   *  `force` re-sets even if the size looks unchanged (used by the test button).
+   */
+  async setQuantity(qty: number, force = false): Promise<void> {
+    if (!Number.isFinite(qty) || qty < 1) throw new Error(`Order size must be a whole number of 1 or more (got ${qty}).`);
+    const want = Math.floor(qty);
+    if (!force && this.lastQty === want) return; // already set — nothing to do
+    await this.requireLoggedIn();
+
+    // Pass 1: locate the qty input and set it via the native value setter,
+    // dispatching input/change so React registers it. All inline (no nested
+    // functions — esbuild's __name helper would throw inside the page).
+    let value = await this.p
+      .evaluate((target) => {
+        const stack: (Document | ShadowRoot)[] = [document];
+        let numeric: HTMLInputElement | null = null;
+        let labelled: HTMLInputElement | null = null;
+        while (stack.length) {
+          const root = stack.pop()!;
+          const all = root.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i] as HTMLElement;
+            if (el.shadowRoot) stack.push(el.shadowRoot);
+            if (el instanceof HTMLInputElement) {
+              const role = (el.getAttribute("role") || "").toLowerCase();
+              const isNum = el.type === "number" || role === "spinbutton";
+              const hint = (
+                (el.getAttribute("aria-label") || "") +
+                " " +
+                (el.getAttribute("name") || "") +
+                " " +
+                (el.getAttribute("placeholder") || "")
+              ).toLowerCase();
+              const looksQty =
+                hint.indexOf("qty") >= 0 ||
+                hint.indexOf("quantity") >= 0 ||
+                hint.indexOf("size") >= 0 ||
+                hint.indexOf("contract") >= 0;
+              if (looksQty && !labelled) labelled = el;
+              if (isNum && !numeric) numeric = el;
+            }
+          }
+        }
+        const box = labelled || numeric;
+        if (!box) return null;
+        box.setAttribute("data-bot-qty", "1");
+        const proto = Object.getPrototypeOf(box);
+        const desc = Object.getOwnPropertyDescriptor(proto, "value");
+        if (desc && desc.set) desc.set.call(box, String(target));
+        else box.value = String(target);
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+        box.dispatchEvent(new Event("change", { bubbles: true }));
+        return Number(box.value);
+      }, want)
+      .catch(() => null);
+
+    // Pass 2 (only if pass 1 didn't stick): type it like a person would.
+    if (value !== want) {
+      const box = this.p.locator("[data-bot-qty]").first();
+      if (await box.count().catch(() => 0)) {
+        await box.fill(String(want), { timeout: 3_000 }).catch(() => {});
+        value = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
+      }
+    }
+
+    if (value !== want) {
+      await this.snapshot("set-quantity-failed", true);
+      throw new Error(`Couldn't set the order size to ${want} on the Tradovate ticket — the trade was skipped so a wrong size can't fire.`);
+    }
+    this.lastQty = want;
+  }
+
+  /** Click Buy Mkt / Sell Mkt. Symbol comes from the Tradovate UI; size is set
+   *  by setQuantity when the alert carries one. */
   async clickOrder(action: "buy" | "sell", label: string): Promise<void> {
     const btn = action === "buy" ? TXT.buy : TXT.sell;
     await this.p.getByText(btn, { exact: true }).first().click({ timeout: 10_000 });
