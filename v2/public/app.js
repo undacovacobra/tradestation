@@ -365,11 +365,11 @@ $("#btn-testqty").addEventListener("click", () => {
           html += `<p style="font-size:13px;color:var(--muted);margin:10px 0 4px">Boxes the bot can see on the ticket — <strong>screenshot this whole list for Claude</strong> so it can pick the right one:</p>`;
           html += `<div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px">`;
           html += `<table style="width:100%;font-size:12px;border-collapse:collapse">`;
-          html += `<tr style="text-align:left;color:var(--muted)"><th style="padding:3px 6px">#</th><th style="padding:3px 6px">kind</th><th style="padding:3px 6px">label / name / class</th><th style="padding:3px 6px">value</th></tr>`;
+          html += `<tr style="text-align:left;color:var(--muted)"><th style="padding:3px 6px">#</th><th style="padding:3px 6px">kind</th><th style="padding:3px 6px">label / name / class</th><th style="padding:3px 6px">near</th><th style="padding:3px 6px">value</th></tr>`;
           r.fields.forEach((f, i) => {
             const lbl = [f.ariaLabel, f.name, f.placeholder, f.cls].filter(Boolean).join(" · ") || "—";
             const kind = esc(f.tag) + (f.type ? "/" + esc(f.type) : "") + (f.role ? " " + esc(f.role) : "");
-            html += `<tr style="border-top:1px solid var(--line)"><td style="padding:3px 6px">${i}</td><td style="padding:3px 6px">${kind}</td><td style="padding:3px 6px">${esc(lbl)}</td><td style="padding:3px 6px">${esc(f.value)}</td></tr>`;
+            html += `<tr style="border-top:1px solid var(--line)"><td style="padding:3px 6px">${i}</td><td style="padding:3px 6px">${kind}</td><td style="padding:3px 6px">${esc(lbl)}</td><td style="padding:3px 6px">${esc(f.near || "")}</td><td style="padding:3px 6px">${esc(f.value)}</td></tr>`;
           });
           html += `</table></div>`;
         } else if (r.fields) {

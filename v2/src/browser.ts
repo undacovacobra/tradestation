@@ -339,9 +339,24 @@ export class TradovateBrowser {
             const tag = el.tagName.toLowerCase();
             const role = (el.getAttribute("role") || "").toLowerCase();
             const editable = el.getAttribute("contenteditable") === "true";
-            const isField = tag === "input" || tag === "textarea" || role === "spinbutton" || editable;
+            const isField =
+              tag === "input" || tag === "textarea" || tag === "select" || role === "spinbutton" || editable;
             if (!isField) continue;
             const val = (el as HTMLInputElement).value;
+            // "near": the nearest ancestor text (e.g. a "Qty" / "Price" label),
+            // and "ctx": ancestor class names — both help identify the box.
+            let near = "";
+            let ctx = "";
+            let p: HTMLElement | null = el.parentElement;
+            for (let up = 0; up < 5 && p; up++) {
+              if (!near) {
+                const t = (p.textContent || "").replace(/\s+/g, " ").trim();
+                if (t && t.length <= 40) near = t;
+              }
+              const c = p.getAttribute("class") || "";
+              if (c) ctx += (ctx ? " ‹ " : "") + c.slice(0, 30);
+              p = p.parentElement;
+            }
             out.push({
               tag,
               type: el.getAttribute("type") || "",
@@ -349,8 +364,10 @@ export class TradovateBrowser {
               ariaLabel: el.getAttribute("aria-label") || "",
               name: el.getAttribute("name") || "",
               placeholder: el.getAttribute("placeholder") || "",
-              cls: (el.getAttribute("class") || "").slice(0, 50),
+              cls: (el.getAttribute("class") || "").slice(0, 40),
               value: (val != null ? String(val) : el.textContent || "").slice(0, 24),
+              near: near.slice(0, 40),
+              ctx: ctx.slice(0, 80),
             });
             if (out.length >= 40) return out;
           }
