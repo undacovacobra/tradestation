@@ -9,9 +9,24 @@ export interface OpenTrade {
   symbol: string;
   action: "buy" | "sell";
   tradeId?: string;
+  /** Contracts traded on this entry (from the alert), if the alert carried one. */
+  quantity?: number;
   openedAt: string;
   /** Account balance read at arm time (before entry), to judge win/loss. */
   entryBalance?: number;
+}
+
+export interface TradeRecord {
+  accountName: string;
+  tradovateLabel: string;
+  symbol: string;
+  action: string;
+  quantity?: number;
+  openedAt: string;
+  closedAt: string;
+  won?: boolean;
+  pnl?: number;
+  exitBalance?: number;
 }
 
 export interface GroupState {
@@ -19,17 +34,7 @@ export interface GroupState {
   openTrade: OpenTrade | null;
   /** tradovateLabel -> trading-day (YYYY-MM-DD) it last closed a WINNER. */
   lastWonDay: Record<string, string>;
-  history: Array<{
-    accountName: string;
-    tradovateLabel: string;
-    symbol: string;
-    action: string;
-    openedAt: string;
-    closedAt: string;
-    won?: boolean;
-    pnl?: number;
-    exitBalance?: number;
-  }>;
+  history: TradeRecord[];
 }
 
 const emptyState = (): GroupState => ({ nextLabel: null, openTrade: null, lastWonDay: {}, history: [] });
@@ -122,6 +127,7 @@ export class GroupRotation {
       symbol: order.symbol,
       action: order.action,
       tradeId: order.tradeId,
+      quantity: order.quantity,
       openedAt: new Date().toISOString(),
       entryBalance,
     };
@@ -155,6 +161,7 @@ export class GroupRotation {
       tradovateLabel: closed.tradovateLabel,
       symbol: closed.symbol,
       action: closed.action,
+      quantity: closed.quantity,
       openedAt: closed.openedAt,
       closedAt: new Date().toISOString(),
       won,
@@ -178,6 +185,12 @@ export class GroupRotation {
   tradesToday(): number {
     const today = this.today();
     return this.state.history.filter((h) => this.today(new Date(h.closedAt)) === today).length;
+  }
+
+  /** Today's finished round-trips, newest first — for the dashboard trade log. */
+  todaysHistory(): TradeRecord[] {
+    const today = this.today();
+    return this.state.history.filter((h) => this.today(new Date(h.closedAt)) === today).reverse();
   }
 }
 

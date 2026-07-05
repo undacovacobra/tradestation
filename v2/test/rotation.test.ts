@@ -197,6 +197,37 @@ test("when every account has won today, entry returns a resting error", () => {
   }
 });
 
+test("logs contracts + result per trade in today's history", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = makeRot(path);
+    const accounts = [acct("A"), acct("B")];
+
+    const c1 = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in c1);
+    rot.recordOpen(c1.account, { action: "buy", symbol: "MNQ1!", quantity: 3 }, 50_000);
+    rot.recordClose(accounts, { exitBalance: 50_400 }); // win, +400
+
+    const c2 = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in c2);
+    rot.recordOpen(c2.account, { action: "sell", symbol: "MNQ1!", quantity: 2 }, 50_000);
+    rot.recordClose(accounts, { exitBalance: 49_800 }); // loss, -200
+
+    const log = rot.todaysHistory();
+    assert.equal(log.length, 2);
+    // newest first: the 2-contract loss, then the 3-contract win
+    const [loss, win] = log;
+    assert.equal(loss!.quantity, 2);
+    assert.equal(loss!.won, false);
+    assert.equal(loss!.pnl, -200);
+    assert.equal(win!.quantity, 3);
+    assert.equal(win!.won, true);
+    assert.equal(win!.pnl, 400);
+  } finally {
+    cleanup();
+  }
+});
+
 test("bench is ignored when benchWinnersForDay is off", () => {
   const { path, cleanup } = tempPath();
   try {

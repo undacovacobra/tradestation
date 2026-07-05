@@ -327,6 +327,7 @@ api.get("/status", (_req, res) => {
       next: rotation.peekNext(store.accountsIn(group))?.name ?? null,
       openTrade: state.openTrade,
       tradesToday: rotation.tradesToday(),
+      log: rotation.todaysHistory(),
     };
   }
   res.json({

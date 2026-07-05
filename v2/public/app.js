@@ -103,7 +103,60 @@ function render() {
 
   for (const group of ["evals", "funded"]) renderGroup(group);
   renderPassed();
+  renderTradeLog();
   renderEvents();
+}
+
+/** "Today's trades" — every finished round-trip today, with contracts + time. */
+function renderTradeLog() {
+  const summary = $("#log-summary");
+  const table = $("#log-table");
+  let rows = [];
+  for (const group of ["evals", "funded"]) {
+    const info = status.groups[group];
+    if (info && info.log) rows = rows.concat(info.log.map((t) => ({ ...t, group })));
+  }
+  rows.sort((a, b) => new Date(b.closedAt) - new Date(a.closedAt));
+
+  if (rows.length === 0) {
+    summary.innerHTML = `<span style="color:var(--muted)">No trades yet today — finished round-trips will show up here.</span>`;
+    table.innerHTML = "";
+    return;
+  }
+
+  // Per-account tally: trades + total contracts today.
+  const tally = {};
+  for (const t of rows) {
+    const key = t.tradovateLabel;
+    if (!tally[key]) tally[key] = { name: t.accountName, trades: 0, contracts: 0 };
+    tally[key].trades += 1;
+    tally[key].contracts += Number(t.quantity) || 0;
+  }
+  summary.innerHTML = Object.values(tally)
+    .map(
+      (a) =>
+        `<span class="tally-chip"><strong>${esc(a.name)}</strong>: ${a.trades} trade${a.trades === 1 ? "" : "s"}${a.contracts ? ` · ${a.contracts} contract${a.contracts === 1 ? "" : "s"}` : ""}</span>`,
+    )
+    .join("");
+
+  let html =
+    `<tr><th>Time</th><th>Account</th><th>Side</th><th>Contracts</th><th>Result</th></tr>`;
+  for (const t of rows) {
+    const time = new Date(t.closedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const side = String(t.action || "").toUpperCase();
+    const qty = t.quantity != null ? t.quantity : "—";
+    let result = `<span style="color:var(--muted)">—</span>`;
+    if (t.won) result = `<span style="color:var(--green);font-weight:600">🏅 WON${t.pnl != null ? " +" + money(t.pnl) : ""}</span>`;
+    else if (t.pnl != null) result = `<span style="color:${t.pnl < 0 ? "var(--red)" : "var(--muted)"}">${t.pnl < 0 ? "−" : "+"}${money(Math.abs(t.pnl))}</span>`;
+    html += `<tr>
+      <td>${esc(time)}</td>
+      <td>${esc(t.accountName)} <span class="grouptag">${t.group === "evals" ? "Eval" : "Funded"}</span></td>
+      <td>${esc(side)}</td>
+      <td>${esc(String(qty))}</td>
+      <td>${result}</td>
+    </tr>`;
+  }
+  table.innerHTML = html;
 }
 
 function renderGroup(group) {
