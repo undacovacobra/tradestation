@@ -90,6 +90,12 @@ test("setQuantity finds Tradovate's 'Select value' form-control box, not the sea
     const search = await page.evaluate(() => (document.querySelector(".search-box--input") as HTMLInputElement).value);
     assert.equal(qty, "4", "the form-control size box should read 4");
     assert.equal(search, "", "the symbol search box must be left alone");
+
+    // REPLACE, don't append/add: box already holds 4, set it to 2 -> exactly 2
+    // (not "42" from appending, and not 6 from adding).
+    await b.setQuantity(2);
+    const replaced = await page.evaluate(() => (document.querySelector(".form-control") as HTMLInputElement).value);
+    assert.equal(replaced, "2", "setting over an existing value must replace it, not append/add");
   } finally {
     await browser.close();
   }

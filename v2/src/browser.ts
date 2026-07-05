@@ -255,11 +255,13 @@ export class TradovateBrowser {
     if (!force && this.lastQty === want) return; // already set — nothing to do
     await this.requireLoggedIn();
 
-    // Pass 1: locate the qty input and set it via the native value setter,
-    // dispatching input/change so React registers it. All inline (no nested
-    // functions — esbuild's __name helper would throw inside the page).
-    let value = await this.p
-      .evaluate((target) => {
+    // Step 1: FIND and mark the size box (one in-page pass; no per-element
+    // round-trips). We do NOT set the value here — poking the value property
+    // made Tradovate's widget ADD to the existing size (2 on screen + 1 from
+    // the alert = 3) instead of replacing it. All inline (no nested functions —
+    // esbuild's __name helper would throw inside the page).
+    const found = await this.p
+      .evaluate(() => {
         const stack: (Document | ShadowRoot)[] = [document];
         let numeric: HTMLInputElement | null = null;
         let labelled: HTMLInputElement | null = null;
@@ -299,22 +301,30 @@ export class TradovateBrowser {
           }
         }
         const box = labelled || numeric || formCtrl;
-        if (!box) return null;
+        if (!box) return false;
         box.setAttribute("data-bot-qty", "1");
-        const proto = Object.getPrototypeOf(box);
-        const desc = Object.getOwnPropertyDescriptor(proto, "value");
-        if (desc && desc.set) desc.set.call(box, String(target));
-        else box.value = String(target);
-        box.dispatchEvent(new Event("input", { bubbles: true }));
-        box.dispatchEvent(new Event("change", { bubbles: true }));
-        return Number(box.value);
-      }, want)
-      .catch(() => null);
+        return true;
+      })
+      .catch(() => false);
 
-    // Pass 2 (only if pass 1 didn't stick): type it like a person would.
-    if (value !== want) {
+    let value: number | null = null;
+    if (found) {
+      // Step 2: REPLACE the value the way a person does — click into the box,
+      // select ALL of it, then type the new number OVER the selection. Typing
+      // over a full selection overwrites it, so it can never append or add.
+      // Commit with Tab (never Enter — Enter could place an order).
       const box = this.p.locator("[data-bot-qty]").first();
-      if (await box.count().catch(() => 0)) {
+      try {
+        await box.click({ timeout: 3_000 });
+        await box.press("ControlOrMeta+a");
+        await box.pressSequentially(String(want), { delay: 15 });
+        await box.press("Tab");
+      } catch {
+        /* verified below */
+      }
+      value = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
+      // Fallback: fill() also clears the field before setting it.
+      if (value !== want) {
         await box.fill(String(want), { timeout: 3_000 }).catch(() => {});
         value = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
       }
