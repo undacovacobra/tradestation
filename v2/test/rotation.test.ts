@@ -197,6 +197,31 @@ test("when every account has won today, entry returns a resting error", () => {
   }
 });
 
+test("resetOpenTrade clears a stuck trade and advances, without logging it", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = makeRot(path);
+    const accounts = [acct("A"), acct("B"), acct("C")];
+    const c1 = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in c1 && c1.account.tradovateLabel === "A");
+    rot.recordOpen(c1.account, order);
+    assert.equal(rot.isFlat, false);
+
+    const { was, next } = rot.resetOpenTrade(accounts);
+    assert.equal(was?.tradovateLabel, "A");
+    assert.equal(next?.tradovateLabel, "B", "advances to the next account");
+    assert.equal(rot.isFlat, true, "no longer thinks a trade is open");
+    assert.equal(rot.todaysHistory().length, 0, "a manual reset is not logged as a trade");
+
+    // And the next real entry goes to B.
+    const c2 = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in c2);
+    assert.equal(c2.account.tradovateLabel, "B");
+  } finally {
+    cleanup();
+  }
+});
+
 test("logs contracts + result per trade in today's history", () => {
   const { path, cleanup } = tempPath();
   try {

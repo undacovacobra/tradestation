@@ -182,6 +182,25 @@ export class GroupRotation {
     return { closed, next, won, pnl };
   }
 
+  /**
+   * Manually clear a stuck "open trade" (the bot thinks it's in a trade but it
+   * isn't) and advance to the next account. Places NO order and does not touch
+   * the browser — it only fixes the bot's memory. Not added to the trade log.
+   */
+  resetOpenTrade(accounts: StoredAccount[]): { was: OpenTrade | null; next: StoredAccount | null } {
+    const was = this.state.openTrade;
+    this.state.openTrade = null;
+    let next: StoredAccount | null = null;
+    if (accounts.length > 0) {
+      const fromLabel = was?.tradovateLabel ?? this.state.nextLabel;
+      const idx = accounts.findIndex((a) => a.tradovateLabel === fromLabel);
+      next = was ? accounts[(idx + 1) % accounts.length]! : accounts[Math.max(0, idx)]!;
+    }
+    this.state.nextLabel = next?.tradovateLabel ?? null;
+    this.save();
+    return { was, next };
+  }
+
   tradesToday(): number {
     const today = this.today();
     return this.state.history.filter((h) => this.today(new Date(h.closedAt)) === today).length;

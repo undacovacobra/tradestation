@@ -171,10 +171,20 @@ function renderGroup(group) {
     ? `Next trade goes to: <strong>${esc(info.next)}</strong>`
     : `<span style="color:var(--muted)">No account is ready for the next trade.</span>`;
   if (info.openTrade) {
-    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}</span>`;
+    const q = info.openTrade.quantity != null ? info.openTrade.quantity + "x " : "";
+    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(q)}${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}
+      <button class="btn small reset-trade" title="Tell the bot this trade is closed and move to the next account (places no order)">✖ Mark closed / reset</button></span>`;
   }
   html += `<div style="color:var(--muted);font-size:13px;margin-top:4px">Round-trips finished today: ${info.tradesToday}</div>`;
   nextRow.innerHTML = html;
+
+  const resetBtn = $(".reset-trade", nextRow);
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      if (!confirm("Tell the bot this trade is CLOSED and move to the next account?\n\nThis only fixes the bot's memory — it does NOT close any real position on Tradovate. Use it only when the bot thinks a trade is open but there isn't one.")) return;
+      doAction(() => api("/reset-trade", { group }));
+    });
+  }
 
   const list = $(".account-list", card);
   list.innerHTML = "";

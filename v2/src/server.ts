@@ -429,6 +429,25 @@ api.post("/next", (req, res) => {
   res.json({ ok });
 });
 
+/** Manually clear a stuck open trade (no order placed) and advance to the next
+ *  account. Only fixes the bot's memory — it does NOT close any real position. */
+api.post("/reset-trade", (req, res) => {
+  const group = req.body?.group;
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  const rotation = rotations[group];
+  const { was, next } = rotation.resetOpenTrade(store.accountsIn(group));
+  const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
+  pushEvent(
+    "warn",
+    `Manually reset — marked ${was ? was.accountName : "this lane"} as closed (no order placed). ${nextMsg}`,
+    group,
+  );
+  armNext(group); // sit on the next account, ready to click
+  res.json({ ok: true, next: next?.name ?? null });
+});
+
 /** Speed test: fire a real buy-then-close at our own webhook and time each leg. */
 api.post("/speedtest", async (req, res) => {
   const group = req.body?.group;
