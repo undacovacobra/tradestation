@@ -112,6 +112,28 @@ export class TradovateBrowser {
     return this.status();
   }
 
+  /**
+   * Recover a session that has drifted — logged out, timed out, or the page
+   * wandered off the trader. Reloads the Tradovate page and re-runs the
+   * automatic login. Used by the health check when the trading screen vanishes.
+   * Only safe to call while FLAT (it reloads the page). Forgets the armed
+   * account/size since a reload loses them.
+   */
+  async recover(): Promise<BrowserStatus> {
+    if (!this.page) return this.connect();
+    log.warn("Recovering Tradovate session (reload + re-login)…");
+    this.currentAccount = null;
+    this.lastQty = null;
+    await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+    await this.refreshLoginState(6_000);
+    if (!this.loggedIn) {
+      await this.tryAutoLogin();
+      await this.refreshLoginState(6_000);
+    }
+    if (this.loggedIn) await this.dismissPopups().catch(() => false);
+    return this.status();
+  }
+
   /** Re-check whether the trader screen is actually loaded and logged in. */
   async refreshLoginState(timeout = 3_000): Promise<boolean> {
     if (!this.page) return false;

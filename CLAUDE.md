@@ -67,9 +67,15 @@ and remains the user's live bot.** V3 adds (all verified, 23 tests pass):
   clear), auto-connect needs-login/failed, and startup-with-open-trade; and
   `notifyGoodNews()` fires on a WON trade and on hitting the $53k target. A
   clean auto-recovered restart is SILENT (no generic "bot started" ping).
-- **Proactive popup sweep**: server `startPopupWatch()` — a 45s setInterval
-  that enqueues `browser.dismissPopups()` whenever logged in, so a dialog that
-  appears between trades is cleared before the next entry (cleared in shutdown).
+- **Health watch**: server `startHealthWatch()` — a 45s setInterval (enqueued,
+  cleared in shutdown) running `healthCheck()`: `refreshLoginState()` verifies
+  the trader (Buy Mkt marker); if present → `dismissPopups()`; if the trading
+  screen is GONE and flat → `browser.recover()` (reload + auto-login), notify if
+  it can't; if gone WHILE a trade is open → alarm only (never reload mid-trade).
+  `browser.recover()` reloads `tradovateUrl`, re-runs tryAutoLogin, resets
+  currentAccount/lastQty. Replaced the popup-only sweep.
+- SETUP-GUIDE.md now V3/port-3400 with AUTO_CONNECT=true + NGROK_AUTOSTART=true
+  in the live .env and a Telegram section.
 - **Crash watchdog**: new `run-bot.cmd` (loop: npm start → wait 5s → again);
   `Start Trading Bot.cmd` starts it and opens :3400.
 - **Startup self-check**: on boot, any group whose state says a trade is open

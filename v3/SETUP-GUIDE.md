@@ -1,25 +1,34 @@
-# Trading Bot — Setup Guide (start to finish)
+# Trading Bot (V3) — Setup Guide (start to finish)
 
 This bot receives your TradingView alerts and places the trades in Tradovate for
 you, rotating through your prop accounts one trade at a time. You run it on your
 own Windows computer. Plan for about 45–60 minutes the first time. No tech
 skills needed — just follow each step in order and don't skip ahead.
 
+**This is V3** — the self-healing version. On top of the trading, it:
+- **reconnects and logs back into Tradovate by itself** after a restart,
+- **clears Tradovate popups on its own** (and every ~45s while running),
+- **notices if it gets logged out** and tries to fix it before a trade is missed,
+- **restarts itself** if it ever crashes,
+- **texts your phone** only when you're actually needed, or when you win.
+
+It runs on **port 3400** (V2, if you also have it, uses 3300 — they don't clash).
+
 ## ⚠️ Three rules before you start
 
-1. **Make your OWN keys.** Later you'll create your own "secret" and your own
-   ngrok address. Never copy someone else's from a screenshot or document —
+1. **Make your OWN keys.** You'll create your own "secret," your own ngrok
+   address, and (optionally) your own Telegram bot. Never copy someone else's —
    whoever's address+secret is in your TradingView alert is whose accounts get
    traded.
 2. **The bot starts in Practice mode** (no real orders). Keep it there until
-   everything is tested. Live mode is a deliberate switch with a big red warning.
+   everything is tested. Live mode is a deliberate switch with a big warning.
 3. **Know the risk.** Prop firms generally don't allow automation — running this
    can violate their terms and could get an account closed. Run it only if you
    understand and accept that.
 
 ## What you need before starting
 
-- A Windows computer that can stay on while you trade (8GB+ memory is plenty)
+- A Windows computer that can stay on 24/7 while you trade (8GB+ memory)
 - Your Tradovate login (your prop-firm accounts)
 - A TradingView plan that supports **webhooks** in alerts
 - A free account at **ngrok.com** (you'll make one in Part 4)
@@ -35,25 +44,25 @@ skills needed — just follow each step in order and don't skip ahead.
 3. Click **Finish**.
 
 **Check it worked:** open the Start menu, type **PowerShell**, open it, type
-`node -v` and press Enter. If you see a version number like `v24…`, you're good.
+`node -v` and press Enter. If you see a version number like `v22…`/`v24…`, good.
 
 ## Part 2 — Download the bot
 
 1. Sign in at **github.com**, then open the bot's repository page (from your
    invite): `github.com/undacovacobra/tradestation`
-2. **Important:** near the top-left there's a branch button (it probably says
-   `main`). Click it and choose **`claude/tradestation-takeover-qowymb`** — the
-   up-to-date version lives there. After picking it you should see a **`v2`**
-   folder in the file list. If you don't see `v2`, you're on the wrong branch.
+2. **Important:** near the top-left there's a branch button (probably says
+   `main`). Click it and choose **`claude/tradestation-takeover-qowymb`**. After
+   picking it you should see a **`v3`** folder in the file list. If you don't
+   see `v3`, you're on the wrong branch.
 3. Click the green **`< > Code`** button → **Download ZIP**.
 4. In your Downloads, right-click the ZIP → **Extract All → Extract**.
-5. Open the extracted folder until you find the **`v2`** folder, and move the
-   whole project folder somewhere permanent like **Documents** (cut + paste, not
-   copy, and don't leave it in Downloads).
+5. Open the extracted folder, find the **`v3`** folder, and move it somewhere
+   permanent like **Documents** (cut + paste, not copy; don't leave it in
+   Downloads).
 
 ## Part 3 — Install the bot's pieces
 
-1. Open the **`v2`** folder in File Explorer.
+1. Open the **`v3`** folder in File Explorer.
 2. Click once in the **address bar** at the top, type **`cmd`**, press
    **Enter**. A black command window opens, already pointed at the right folder.
 3. Type each of these, pressing Enter after each, letting each finish before the
@@ -87,28 +96,49 @@ That's what ngrok provides — for free.
    down — you'll paste this exact value into TradingView later.
 5. Also pick a **dashboard password** (anything you'll remember).
 
-## Part 5 — Create your settings file
+## Part 5 — (Optional but recommended) Phone alerts via Telegram
 
-1. In the black command window (still in the `v2` folder), type:
+Skip this the first time if you like — everything works without it. To turn it
+on:
+
+1. On your phone, install **Telegram** and make an account.
+2. Search **@BotFather**, tap Start, send **`/newbot`**, and answer its two
+   questions (a name, then a username ending in `bot`). It replies with a
+   **token** — copy it.
+3. Open **your** new bot (the username you just made), tap Start, send it `hi`.
+4. On a computer, visit this address (replace `<TOKEN>` with your token):
+   `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   Find `"chat":{"id":` followed by a number — that's your **chat id**.
+
+## Part 6 — Create your settings file
+
+1. In the black command window (still in the `v3` folder), type:
 
    ```
    notepad .env
    ```
 
    Say **Yes** if it asks to create the file.
-2. Type these 4 lines, using YOUR values from Part 4 (no `<` or `>` brackets,
-   no quotes):
+2. Type these lines, using YOUR values from Parts 4–5 (no `<` `>` brackets, no
+   quotes). Leave out the two Telegram lines if you skipped Part 5:
 
    ```
    WEBHOOK_SECRET=your-own-long-random-secret
    DASHBOARD_PASSWORD=your-dashboard-password
    NGROK_AUTHTOKEN=your-ngrok-authtoken
    NGROK_DOMAIN=your-words-here.ngrok-free.dev
+   AUTO_CONNECT=true
+   NGROK_AUTOSTART=true
+   TELEGRAM_BOT_TOKEN=your-telegram-token
+   TELEGRAM_CHAT_ID=your-chat-id
    ```
 
+   (`AUTO_CONNECT=true` + `NGROK_AUTOSTART=true` are what make it start
+   *everything* by itself — the Tradovate browser and remote access — after a
+   restart. Leave them on for a live machine.)
 3. **File → Save**, then close Notepad.
 
-## Part 6 — Start it and log into Tradovate
+## Part 7 — Start it and log into Tradovate
 
 1. In the black window, type:
 
@@ -116,30 +146,29 @@ That's what ngrok provides — for free.
    npm start
    ```
 
-   You should see lines ending with something like
-   `Dashboard + webhooks listening on http://localhost:3300`.
-   **Leave this window open — it IS the bot.** Closing it stops the bot.
-2. Open a web browser and go to **http://localhost:3300** — enter your
+   You should see lines ending with
+   `Dashboard + webhooks listening on http://localhost:3400`.
+   **Leave this window open — it IS the bot.**
+2. Open a web browser and go to **http://localhost:3400** — enter your
    dashboard password.
-3. Click **"Connect browser."** A separate browser window opens by itself and
-   goes to Tradovate. **Log into Tradovate there** (username, password, 2FA).
-   This is one-time — it remembers you afterward.
-4. Back on the dashboard, the **Tradovate** pill should turn green:
-   **"Tradovate: logged in."**
-5. Click **"Turn on remote access."** The pill should go green:
-   **"Remote access: on."** (If it errors, your ngrok token/domain in `.env`
-   don't match — recheck Part 5.)
+3. Because `AUTO_CONNECT=true`, a Tradovate browser window opens by itself. The
+   first time, **log into Tradovate there** (username, password, 2FA). It
+   remembers you afterward, so future restarts log in on their own.
+4. Back on the dashboard, the **Tradovate** pill should turn green
+   (**"logged in"**) and **Remote access** should go green on its own.
+   - If Remote access shows a problem, make sure **no other computer** is using
+     the same ngrok address — only one machine can hold it at a time.
 
-## Part 7 — Add your accounts
+## Part 8 — Add your accounts
 
 1. On the dashboard click **"Scan Tradovate accounts."** It reads your account
    list from Tradovate automatically.
 2. Tick which accounts are **Evals** (ids starting LFE) and which are **Funded**
-   (LFF) — it pre-guesses for you — then add them.
-3. Use the arrows to set the order you want them traded in. The one marked
-   **NEXT** takes the next trade.
+   (LFF) — it pre-guesses — then add them.
+3. Use the arrows to set the order they're traded in. The one marked **NEXT**
+   takes the next trade.
 
-## Part 8 — Connect TradingView
+## Part 9 — Connect TradingView
 
 1. In TradingView, open the chart with your strategy and create an **Alert** on
    the strategy.
@@ -152,7 +181,7 @@ That's what ngrok provides — for free.
    (`/webhook/evals` trades your eval accounts; `/webhook/funded` trades your
    funded ones. Make one alert per lane you use.)
 3. Paste this in the alert **Message** box, replacing the secret with YOUR
-   secret from Part 4:
+   secret:
 
    ```json
    {
@@ -164,11 +193,11 @@ That's what ngrok provides — for free.
    }
    ```
 
-   Note: the `quantity` line has no quotes around its value — leave it exactly
-   like that. One alert handles both opening and closing.
+   The `quantity` line has no quotes around its value — leave it exactly like
+   that. One alert handles both opening and closing.
 4. Set the alert to **Open-ended** and create it.
 
-## Part 9 — Test before anything is real
+## Part 10 — Test before anything is real
 
 1. Stay in **Practice mode** (the default).
 2. Fire a test alert from TradingView (or wait for your strategy to trigger).
@@ -183,9 +212,11 @@ That's what ngrok provides — for free.
 
 ## Daily use
 
-- Double-click **`Start Trading Bot.cmd`** in the `v2` folder to start
-  everything (bot + dashboard). Right-click it → **Send to → Desktop** to make
-  a desktop shortcut.
+- Double-click **`Start Trading Bot.cmd`** in the `v3` folder to start
+  everything (bot + dashboard, and — with `AUTO_CONNECT`/`NGROK_AUTOSTART` on —
+  the Tradovate browser and remote access too). Right-click it →
+  **Send to → Desktop** to make a one-tap desktop shortcut.
+- If the bot ever crashes, it restarts itself within 5 seconds.
 - Check the dashboard from your phone anytime at your ngrok address
   (`https://your-words-here.ngrok-free.dev`).
 - **Run the bot on ONE computer only.** Your ngrok address can only be held by
@@ -193,17 +224,25 @@ That's what ngrok provides — for free.
 - Keep the computer plugged in and set Windows to **never sleep**
   (Settings → System → Power).
 
+## When will my phone buzz?
+
+Only when it matters:
+- **🔴 NEEDS YOU** — a trade didn't go through, a popup is stuck, Tradovate needs
+  a login, or the computer restarted while a trade was open.
+- **🏅 Good news** — you won a trade, or an account hit the target and passed.
+- Everything routine (normal trades, popups it cleared itself, clean restarts)
+  stays silent — it's all still in the dashboard's Activity feed.
+
 ## If something looks wrong
 
 - **Bot window closed / computer restarted:** double-click
-  `Start Trading Bot.cmd` again, then check the dashboard pills are green.
+  `Start Trading Bot.cmd` again; with auto-connect on it comes back by itself.
 - **"Tradovate: not logged in":** click **Connect browser** and finish the
   login in the window that opens.
 - **Alert didn't fire:** check the Activity feed. "Wrong secret" means the
-  secret in your TradingView message doesn't exactly match your `.env`.
-  Nothing at all means TradingView couldn't reach you — check the Remote
-  access pill is green and the webhook URL uses your ngrok domain (never
-  "localhost").
+  secret in your TradingView message doesn't exactly match your `.env`. Nothing
+  at all means TradingView couldn't reach you — check the Remote access pill is
+  green and the webhook URL uses your ngrok domain (never "localhost").
 - **Bot thinks a trade is open but it isn't:** click **"✖ Mark closed /
   reset"** next to the open-trade banner (it only fixes the bot's memory — it
   never places or closes real orders).

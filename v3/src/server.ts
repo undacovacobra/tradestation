@@ -215,18 +215,49 @@ const monitor = new Monitor(monitorTick, {
 });
 
 /**
- * Proactively clear Tradovate popups on a slow cadence — even when idle — so a
- * dialog that appears between trades is dismissed before the next entry has to
- * click through it. Cheap (one in-page check, no account switching) and
- * serialized behind the trade queue, so it never contends with a real order.
+ * The health watch (every 45s, even when idle). Two silent failures this
+ * catches BEFORE a trade is missed:
+ *   1. A popup covering the screen → clears it.
+ *   2. Tradovate logged out / left the trading screen → tries to log back in by
+ *      itself; only buzzes the phone if it truly can't.
+ * Cheap and serialized behind the trade queue, so it never contends with an
+ * order. Recovery (a page reload) only runs while FLAT, never mid-trade.
  */
-let popupTimer: ReturnType<typeof setInterval> | null = null;
-function startPopupWatch(): void {
-  if (popupTimer) return;
-  popupTimer = setInterval(() => {
-    if (!browser.status().loggedIn) return;
-    void enqueue(() => browser.dismissPopups()).catch(() => {});
+let healthTimer: ReturnType<typeof setInterval> | null = null;
+function startHealthWatch(): void {
+  if (healthTimer) return;
+  healthTimer = setInterval(() => {
+    if (!browser.status().connected) return;
+    void enqueue(healthCheck).catch(() => {});
   }, 45_000);
+}
+
+async function healthCheck(): Promise<void> {
+  if (!browser.status().connected) return;
+  // Is the trading screen actually there? (Buy/Sell only exist when logged in.)
+  const onTrader = await browser.refreshLoginState(4_000);
+  if (onTrader) {
+    await browser.dismissPopups().catch(() => {});
+    return;
+  }
+  // The trading screen is gone — logged out, timed out, or navigated away.
+  const anyTradeOpen = GROUPS.some((g) => !rotations[g].isFlat);
+  if (anyTradeOpen) {
+    // Never reload under an open trade — just raise the alarm loudly.
+    pushEvent("error", "Tradovate isn't showing the trading screen while a trade is open — check it now.");
+    notifyActionNeeded("Tradovate logged out / left the trading screen WHILE A TRADE IS OPEN. Check the bot computer and Tradovate right away.");
+    return;
+  }
+  // Flat — safe to try fixing it ourselves.
+  pushEvent("warn", "Tradovate isn't on the trading screen — trying to log back in automatically…");
+  const status = await browser.recover().catch(() => null);
+  if (status?.loggedIn) {
+    pushEvent("info", "Recovered — Tradovate is logged back in.");
+    armNext(lastAlertGroup);
+  } else {
+    pushEvent("error", "Couldn't log back into Tradovate automatically.");
+    notifyActionNeeded("Tradovate logged out and I couldn't sign back in by myself. Please log in on the bot computer — trades won't fire until you do.");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +633,7 @@ async function main() {
     pushEvent("info", `Bot server started. Mode: ${store.mode.toUpperCase()}. Open the dashboard to manage it.`);
     autoStartTunnel();
     monitor.start(); // watches the open trade's balance to cut at the target
-    startPopupWatch(); // proactively clear Tradovate popups before they block a trade
+    startHealthWatch(); // clears popups + catches/recovers a lost Tradovate login
 
     // Startup self-check: if the notes say a trade was open when we went down,
     // don't guess — this genuinely needs a human to verify, so it buzzes.
@@ -645,7 +676,7 @@ async function main() {
 const shutdown = async () => {
   log.info("Shutting down…");
   monitor.stop();
-  if (popupTimer) clearInterval(popupTimer);
+  if (healthTimer) clearInterval(healthTimer);
   await disconnectTunnel().catch(() => {});
   await browser.disconnect();
   process.exit(0);

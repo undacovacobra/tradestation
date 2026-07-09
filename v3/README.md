@@ -16,6 +16,9 @@ untouched and stays the live bot until V3 proves itself.** What V3 adds:
   Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`.
 - **Proactive popup sweep** — every ~45s the bot clears any Tradovate dialog on
   its own, so one that pops up between trades is gone before the next entry.
+- **Connection health check** — the same ~45s watch verifies the trading screen
+  is still there; if Tradovate logged out or wandered off (and no trade is
+  open), it reloads and logs back in by itself, only buzzing you if it can't.
 - **Crash watchdog** — `run-bot.cmd` relaunches the bot in 5s if it ever dies;
   `Start Trading Bot.cmd` uses it automatically.
 - **Startup self-check** — after a restart, if the bot's notes say a trade was
