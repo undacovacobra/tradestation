@@ -36,6 +36,43 @@ config: `ORDER_CONFIRM_WAIT_MS` (250), `SWITCH_SETTLE_MS` (250), `SCREENSHOTS`
 (off). Pre-arming (`armFor` = switch only) + `switchAccount` fast-path (skip menu
 when top bar already shows the target) keep the live entry to ~a click. 7 tests.
 
+## 🧪 V3 EXISTS (2026-07-09) — self-healing TEST copy in `v3/`, V2 stays live
+After real-world failures (overnight Windows restart took the bot down all
+night; a Tradovate popup blocked the exit click and stranded a live 10-lot),
+the user asked for the reliability upgrades to be built in a **separate copy**
+to test before replacing V2 — same pattern as V1→V2. `v3/` is a full copy of
+`v2/` on **port 3400** (own package.json `tradovate-account-cycler-v3`, own
+data/session dirs, dashboard titled "Trading Bot V3 🧪"). **`v2/` is untouched
+and remains the user's live bot.** V3 adds (all verified, 23 tests pass):
+- **Auto-connect on boot** (`config.autoConnect`, `AUTO_CONNECT` default true):
+  server main() enqueues `browser.connect()` on listen; if logged in (saved
+  session) it arms; if not, a warn event fires (→ phone).
+- **Popup-killer** (`browser.dismissPopups()`): finds visible
+  `.modal-backdrop/.modal.in/.modal.show/[role=dialog|alertdialog]`, clicks
+  ONLY dismiss-style buttons (ok/close/got it/×/accept/aria-label=Close/class
+  contains "close"), else presses Escape, verifies gone, screenshots+false if
+  not. Called: on connect, at armFor, and via `clickThroughPopups()` which
+  wraps clickOrder/clickExit — on a blocked click it clears + retries ONCE.
+  Inline evaluates only (esbuild `__name` gotcha). Guarded by
+  `test/popup.browser.test.ts` + `fixtures/mock-popup.html` which recreates the
+  exact live failure (backdrop intercepts Exit click).
+- **Telegram phone notifications** (`src/notify.ts` `notifyPhone`): fire-and-
+  forget fetch to api.telegram.org, 60s dedupe, never throws. `pushEvent` in
+  events.ts auto-notifies every **warn/error**; explicit "bot started" ping in
+  main(). Config `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` (blank = disabled).
+- **Crash watchdog**: new `run-bot.cmd` (loop: npm start → wait 5s → again);
+  `Start Trading Bot.cmd` starts it and opens :3400.
+- **Startup self-check**: on boot, any group whose state says a trade is open
+  → warn event telling the user to verify / use Mark closed / reset.
+- NOT yet done in V3 (user does these by hand / later): ATM bracket is a
+  Tradovate-side setting (user was setting up 50pt stop/75pt target = 200/300
+  ticks on MNQ); Windows-side auto-start scheduled task + auto-logon + never-
+  sleep settings; Telegram BotFather walkthrough for the user.
+User context: bot now runs on a NEW dedicated laptop (the user set it up from
+SETUP-GUIDE.md); a friend was given repo access and a copy of that guide (each
+person runs their own ngrok domain + secret). Secret/token appeared in chat
+screenshots — user was advised to rotate the ngrok token.
+
 ## ✅ DYNAMIC ORDER SIZE re-added — fast (2026-07-05) — read this third
 The user needs the contract size to come from the alert (it's dynamic inside the
 strategy) but **without** re-introducing the lag. Key realization stated to them:

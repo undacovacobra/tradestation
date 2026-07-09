@@ -12,3 +12,9 @@ v2/data/balances.json
 # test env files should never be committed
 .env.test
 v2/.env
+
+# V3 (self-healing test copy) — same private files as v2
+v3/.env
+v3/data/settings.json
+v3/data/state-*.json
+v3/data/balances.json
