@@ -1,5 +1,4 @@
 import { log } from "./logger.js";
-import { notifyPhone } from "./notify.js";
 import type { Group } from "./types.js";
 
 export type EventKind = "info" | "trade" | "warn" | "error";
@@ -26,9 +25,10 @@ export function pushEvent(kind: EventKind, message: string, group?: Group): BotE
   else if (kind === "warn") log.warn(line);
   else if (kind === "trade") log.trade(line);
   else log.info(line);
-  // Anything wrong buzzes the phone (if Telegram is configured) — problems
-  // should find the user, not wait to be discovered on the dashboard.
-  if (kind === "error" || kind === "warn") notifyPhone(`⚠️ ${line}`);
+  // NOTE: events no longer auto-buzz the phone. Everything still shows in the
+  // dashboard Activity feed; the phone is reserved for deliberate
+  // notifyActionNeeded() / notifyGoodNews() calls, so it only rings when you're
+  // actually needed or you won.
   return event;
 }
 

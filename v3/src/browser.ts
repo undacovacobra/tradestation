@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { Config } from "./config.js";
 import { extractEquity } from "./balanceParse.js";
+import { notifyActionNeeded } from "./notify.js";
 import { log } from "./logger.js";
 
 /**
@@ -300,6 +301,9 @@ export class TradovateBrowser {
     if (still) {
       await this.snapshot("popup-could-not-dismiss", true);
       log.warn("A popup is covering the Tradovate screen and I couldn't safely dismiss it.");
+      notifyActionNeeded(
+        "A popup is stuck on the Tradovate screen and I can't clear it myself — it may block trades. Please check the bot computer and close it.",
+      );
       return false;
     }
     log.warn("Cleared a popup that was covering the Tradovate screen.");

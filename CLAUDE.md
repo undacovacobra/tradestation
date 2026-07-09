@@ -56,10 +56,20 @@ and remains the user's live bot.** V3 adds (all verified, 23 tests pass):
   Inline evaluates only (esbuild `__name` gotcha). Guarded by
   `test/popup.browser.test.ts` + `fixtures/mock-popup.html` which recreates the
   exact live failure (backdrop intercepts Exit click).
-- **Telegram phone notifications** (`src/notify.ts` `notifyPhone`): fire-and-
-  forget fetch to api.telegram.org, 60s dedupe, never throws. `pushEvent` in
-  events.ts auto-notifies every **warn/error**; explicit "bot started" ping in
-  main(). Config `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` (blank = disabled).
+- **Telegram phone notifications** (`src/notify.ts`): fire-and-forget fetch to
+  api.telegram.org, 60s dedupe, never throws. Reads `TELEGRAM_BOT_TOKEN`/
+  `TELEGRAM_CHAT_ID` from `process.env` directly (NOT via config.js — so
+  browser tests importing browser→notify don't trip config's required-var
+  check). **Notifications reworked to be action-oriented (user asked: stop
+  buzzing on every event):** events.ts NO LONGER auto-notifies warn/error;
+  instead deliberate `notifyActionNeeded()` (🔴 NEEDS YOU) fires only on
+  trade-execution failure (webhook catch), popup-stuck (dismissPopups can't
+  clear), auto-connect needs-login/failed, and startup-with-open-trade; and
+  `notifyGoodNews()` fires on a WON trade and on hitting the $53k target. A
+  clean auto-recovered restart is SILENT (no generic "bot started" ping).
+- **Proactive popup sweep**: server `startPopupWatch()` — a 45s setInterval
+  that enqueues `browser.dismissPopups()` whenever logged in, so a dialog that
+  appears between trades is cleared before the next entry (cleared in shutdown).
 - **Crash watchdog**: new `run-bot.cmd` (loop: npm start → wait 5s → again);
   `Start Trading Bot.cmd` starts it and opens :3400.
 - **Startup self-check**: on boot, any group whose state says a trade is open

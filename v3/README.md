@@ -8,9 +8,14 @@ untouched and stays the live bot until V3 proves itself.** What V3 adds:
 - **Popup-killer** — if a Tradovate dialog covers the screen, the bot clears it
   (safe dismiss-only buttons / Escape) and retries the blocked click, instead
   of stranding a trade.
-- **Phone notifications** — every error/warning buzzes your phone via Telegram
-  (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`), plus a "bot started"
-  ping so you know when a restart happened.
+- **Phone notifications — action-oriented, not noisy.** Your phone only buzzes
+  when you're actually **needed** (a trade didn't go through, a popup is stuck, a
+  login is required, or a restart left a trade open) or with **good news** (you
+  won a trade / passed an account). Routine trades, self-healed popups, and
+  clean restarts stay silent — everything still shows in the dashboard feed.
+  Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`.
+- **Proactive popup sweep** — every ~45s the bot clears any Tradovate dialog on
+  its own, so one that pops up between trades is gone before the next entry.
 - **Crash watchdog** — `run-bot.cmd` relaunches the bot in 5s if it ever dies;
   `Start Trading Bot.cmd` uses it automatically.
 - **Startup self-check** — after a restart, if the bot's notes say a trade was

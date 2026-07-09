@@ -11,7 +11,7 @@ import { Monitor } from "./monitor.js";
 import { tradingDayKey } from "./tradingDay.js";
 import { connectTunnel, disconnectTunnel, tunnelStatus, autoStartTunnel } from "./tunnel.js";
 import { pushEvent, listEvents } from "./events.js";
-import { notifyPhone } from "./notify.js";
+import { notifyActionNeeded, notifyGoodNews } from "./notify.js";
 import { log } from "./logger.js";
 
 const store = new SettingsStore(config.settingsPath);
@@ -157,6 +157,10 @@ async function handleClose(group: Group, symbol: string): Promise<string> {
       : "";
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
   pushEvent("info", `Round-trip finished on ${closed.accountName}.${wonMsg} ${nextMsg}`, group);
+  // Good news only: a WIN gets a happy ping. Routine trades stay silent.
+  if (won) {
+    notifyGoodNews(`🏅 Won a trade on ${closed.accountName}${pnl != null ? ` (+${money(pnl)})` : ""}. It's resting for the rest of today.`);
+  }
   armNext(group); // get the browser sitting on the next account, ready to click
   return `Closed ${closed.symbol} on ${closed.accountName}.${wonMsg} ${nextMsg}`;
 }
@@ -179,6 +183,7 @@ async function forceClose(group: Group, reason: string): Promise<void> {
   store.markPassed(closed.tradovateLabel);
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
   pushEvent("info", `🏆 ${closed.accountName} retired at the target. ${nextMsg}`, group);
+  notifyGoodNews(`🎉 ${closed.accountName} hit the ${money(store.evalTarget)} target and was retired! ${nextMsg}`);
   armNext(group);
 }
 
@@ -208,6 +213,21 @@ const monitor = new Monitor(monitorTick, {
   activeMs: config.monitorActiveSeconds * 1_000,
   isActive: () => GROUPS.some((g) => !rotations[g].isFlat),
 });
+
+/**
+ * Proactively clear Tradovate popups on a slow cadence — even when idle — so a
+ * dialog that appears between trades is dismissed before the next entry has to
+ * click through it. Cheap (one in-page check, no account switching) and
+ * serialized behind the trade queue, so it never contends with a real order.
+ */
+let popupTimer: ReturnType<typeof setInterval> | null = null;
+function startPopupWatch(): void {
+  if (popupTimer) return;
+  popupTimer = setInterval(() => {
+    if (!browser.status().loggedIn) return;
+    void enqueue(() => browser.dismissPopups()).catch(() => {});
+  }, 45_000);
+}
 
 // ---------------------------------------------------------------------------
 // App + dashboard authentication
@@ -293,6 +313,11 @@ app.post("/webhook/:group", async (req, res) => {
     return res.json({ ok: true, message });
   } catch (err) {
     pushEvent("error", `Something went wrong handling a ${alert.action} alert: ${(err as Error).message}`, group);
+    // A trade that didn't go through is the #1 "you're needed" case — it can
+    // leave a position open or a signal missed. This buzzes the phone.
+    notifyActionNeeded(
+      `A ${alert.action.toUpperCase()} on ${group} didn't go through. Check the bot computer — a trade may need placing or closing by hand. (${(err as Error).message})`,
+    );
     return res.status(500).json({ ok: false, error: (err as Error).message });
   }
 });
@@ -572,13 +597,15 @@ async function main() {
   app.listen(config.port, () => {
     log.info(`Dashboard + webhooks listening on http://localhost:${config.port}`);
     log.info(`Webhooks: /webhook/evals and /webhook/funded | mode=${store.mode} | running=${store.running}`);
+    // Note: no phone ping on a normal start. A clean restart that recovers on
+    // its own isn't something you need to act on — so it stays quiet.
     pushEvent("info", `Bot server started. Mode: ${store.mode.toUpperCase()}. Open the dashboard to manage it.`);
-    notifyPhone(`🤖 Trading bot V3 started (${store.mode} mode). If this was a surprise, the computer probably restarted.`);
     autoStartTunnel();
     monitor.start(); // watches the open trade's balance to cut at the target
+    startPopupWatch(); // proactively clear Tradovate popups before they block a trade
 
     // Startup self-check: if the notes say a trade was open when we went down,
-    // don't guess — tell the user to verify reality against the bot's memory.
+    // don't guess — this genuinely needs a human to verify, so it buzzes.
     for (const group of GROUPS) {
       const open = rotations[group].getState().openTrade;
       if (open) {
@@ -587,12 +614,15 @@ async function main() {
           `Heads-up: I just started and my notes say a trade is still open on ${open.accountName} (${open.symbol}). Please check Tradovate — if it isn't real, press "Mark closed / reset".`,
           group,
         );
+        notifyActionNeeded(
+          `The computer restarted while a trade was open on ${open.accountName} (${open.symbol}). Please check Tradovate — close it if needed, then press "Mark closed / reset".`,
+        );
       }
     }
 
     // Self-healing: connect the Tradovate browser without a human click. The
-    // saved session usually means it comes back logged in; if it needs a real
-    // login (2FA), the warn event buzzes the phone.
+    // saved session usually means it comes back logged in silently; only a real
+    // login requirement (2FA) or a failure is worth a phone buzz.
     if (config.autoConnect) {
       void enqueue(() => browser.connect())
         .then((status) => {
@@ -601,9 +631,13 @@ async function main() {
             armNext(lastAlertGroup);
           } else {
             pushEvent("warn", "Browser opened but Tradovate needs a manual login — finish it in the browser window on the bot PC.");
+            notifyActionNeeded("Tradovate needs you to log in on the bot computer (it couldn't sign in automatically). Trades won't fire until you do.");
           }
         })
-        .catch((err) => pushEvent("error", `Automatic browser connect failed: ${(err as Error).message}`));
+        .catch((err) => {
+          pushEvent("error", `Automatic browser connect failed: ${(err as Error).message}`);
+          notifyActionNeeded(`I couldn't open the Tradovate browser on startup. Please check the bot computer. (${(err as Error).message})`);
+        });
     }
   });
 }
@@ -611,6 +645,7 @@ async function main() {
 const shutdown = async () => {
   log.info("Shutting down…");
   monitor.stop();
+  if (popupTimer) clearInterval(popupTimer);
   await disconnectTunnel().catch(() => {});
   await browser.disconnect();
   process.exit(0);
