@@ -11,6 +11,9 @@ export interface ConnectionAdapter {
   discoverAccounts(): Promise<string[]>;
   enter(account: AccountDefinition, alert: V4Alert): Promise<void>;
   close(account: AccountDefinition): Promise<void>;
+  readBalance(account: AccountDefinition): Promise<number | null>;
+  readSelectedBalance(): Promise<number | null>;
+  readSettledBalance(account: AccountDefinition): Promise<number | null>;
 }
 
 /** One queue per login: safe serialization inside a browser, parallelism across logins. */
@@ -68,6 +71,15 @@ class TradovateAdapter implements ConnectionAdapter {
     await this.browser.switchAccount(account.platformLabel);
     await this.browser.clickExit(account.platformLabel);
   }
+  async readBalance(account: AccountDefinition): Promise<number | null> {
+    await this.browser.switchAccount(account.platformLabel);
+    return this.browser.readSelectedEquity();
+  }
+  readSelectedBalance(): Promise<number | null> { return this.browser.readSelectedEquity(); }
+  async readSettledBalance(account: AccountDefinition): Promise<number | null> {
+    await this.browser.switchAccount(account.platformLabel);
+    return this.browser.readSettledEquity();
+  }
 }
 
 class SimulatedAdapter implements ConnectionAdapter {
@@ -81,13 +93,18 @@ class SimulatedAdapter implements ConnectionAdapter {
   async discoverAccounts(): Promise<string[]> { return []; }
   async enter(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async close(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
+  async readBalance(): Promise<number | null> { return null; }
+  async readSelectedBalance(): Promise<number | null> { return null; }
+  async readSettledBalance(): Promise<number | null> { return null; }
 }
 
 export function createWorkers(definitions: ConnectionDefinition[]): Map<string, ConnectionWorker> {
   const workers = new Map<string, ConnectionWorker>();
-  for (const definition of definitions) {
-    const adapter = definition.adapter === "simulated" ? new SimulatedAdapter(definition) : new TradovateAdapter(definition);
-    workers.set(definition.id, new ConnectionWorker(definition, adapter));
-  }
+  for (const definition of definitions) workers.set(definition.id, createWorker(definition));
   return workers;
+}
+
+export function createWorker(definition: ConnectionDefinition): ConnectionWorker {
+  const adapter = definition.adapter === "simulated" ? new SimulatedAdapter(definition) : new TradovateAdapter(definition);
+  return new ConnectionWorker(definition, adapter);
 }

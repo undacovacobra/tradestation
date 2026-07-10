@@ -23,7 +23,8 @@
       "accountIds": [],
       "enabled": true,
       "benchWinnersForDay": true,
-      "executionLane": "evals"
+      "executionLane": "evals",
+      "balanceTarget": 53000
     },
     {
       "id": "funded-primary",

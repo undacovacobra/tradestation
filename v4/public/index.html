@@ -1,22 +1,11 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trading Bot V4</title>
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <main>
-    <header>
-      <div><p class="eyebrow">MULTI-FIRM ORCHESTRATOR</p><h1>Trading Bot V4</h1></div>
-      <div id="overall" class="pill">Loading…</div>
-    </header>
-    <p class="notice">Use <a href="/onboarding.html"><strong>Account Onboarding</strong></a> to scan browser logins and classify accounts. This status page does not send trades. Use the separate <a href="/sender.html">webhook test sender</a> for safe routing tests.</p>
-    <section><h2>Connections</h2><div id="connections" class="grid"></div></section>
-    <section><h2>Rotation pools</h2><div id="pools" class="grid"></div></section>
-    <footer>Auto-refreshes every five seconds · V2 and V3 remain separate</footer>
-  </main>
-  <script src="/app.js"></script>
-</body>
-</html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V4 Control Center</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="control-center">
+  <header><div><p class="eyebrow">MULTI-FIRM ORCHESTRATOR</p><h1>V4 Control Center</h1></div><div class="header-actions"><span id="overall" class="pill">Loading</span><a class="tag" href="/onboarding.html">Account onboarding</a></div></header>
+  <section id="summary" class="summary-grid"></section>
+  <section class="control-layout">
+    <aside><div class="section-head"><h2>Login connections</h2><a href="/onboarding.html" class="small-link">+ Add login</a></div><div id="connections" class="connection-stack"></div></aside>
+    <div><div class="section-head"><h2>Rotation pools</h2><button id="refresh-balances" type="button">Refresh balances</button></div><div id="pool-tabs" class="pool-tabs"></div><div id="pool-detail"></div></div>
+  </section>
+  <section><h2>Recent activity</h2><div id="events" class="event-list"></div></section>
+  <p id="action-result" class="save-result"></p>
+</main><script src="/app.js"></script></body></html>

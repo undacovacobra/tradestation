@@ -32,3 +32,43 @@ test("execution lane can be changed and persists", () => {
   registry.setPoolExecutionLane("eval-primary", "weekday-cycle");
   assert.equal(new Registry(path).pool("eval-primary")?.executionLane, "weekday-cycle");
 });
+
+test("connection can be added dynamically and persists", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-connection-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({ version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] }));
+  const registry = new Registry(path);
+  registry.addConnection({ id: "firm-two", name: "Firm Two", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".sessions/firm-two", accountPattern: ".+", enabled: true, autoConnect: false });
+  assert.equal(new Registry(path).connection("firm-two")?.name, "Firm Two");
+});
+
+test("referenced connection cannot be removed", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-remove-connection-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [{ id: "a1", name: "Account", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] }],
+    pools: [{ id: "p1", name: "Pool", accountIds: ["a1"], enabled: true, benchWinnersForDay: false }],
+  }));
+  assert.throws(() => new Registry(path).removeConnection("c1"), /still has accounts/i);
+});
+
+test("pool order and account status can be managed", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-manage-pool-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [
+      { id: "a1", name: "One", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] },
+      { id: "a2", name: "Two", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A2", enabled: true, status: "active", tags: [] },
+    ],
+    pools: [{ id: "p1", name: "Pool", accountIds: ["a1", "a2"], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  registry.movePoolAccount("p1", "a2", "up");
+  registry.setAccountStatus("a1", "held");
+  assert.deepEqual(registry.pool("p1")?.accountIds, ["a2", "a1"]);
+  assert.equal(registry.account("a1")?.status, "held");
+});

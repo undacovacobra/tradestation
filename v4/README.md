@@ -13,6 +13,9 @@ V4 is an isolated, multi-login account-rotation orchestrator. V2 and V3 remain u
 - A standalone `Send Test Webhook.cmd` tool works independently of the dashboard.
 - A broadcast webhook can fan one signal out to several pools.
 - Every pool has its own `/webhook/:poolId` URL and configurable execution lane.
+- The Control Center shows full pool order, next account, last-known balances, login health, and activity.
+- Add any practical number of Tradovate logins from Account Onboarding without restarting V4.
+- Evaluation pools may define `balanceTarget: 53000`; funded pools omit it and never use that automatic close.
 
 ## Safety model
 
@@ -62,7 +65,8 @@ Edit `data/registry.json` to define the real-world model:
       "accountIds": ["firm-a-eval-01"],
       "enabled": true,
       "benchWinnersForDay": true,
-      "executionLane": "evals"
+      "executionLane": "evals",
+      "balanceTarget": 53000
     }
   ]
 }
@@ -141,6 +145,10 @@ npm test
 npm start
 ```
 
-Open `http://localhost:3500` for the read-only V4 status dashboard.
+Open `http://localhost:3500` for the interactive V4 Control Center.
+
+The Control Center is interactive: reorder accounts, set the next account, hold/reactivate, mark passed, remove pool membership, refresh safe last-known balances, and configure execution lanes. Balance refreshes defer any login that has an open trade.
 
 Open `http://localhost:3500/onboarding.html` to connect a login, scan the account labels visible in its browser, classify unknown accounts, assign pools, and save them directly to `data/registry.json`. Direct local setup actions are trusted automatically, so this page does not ask for the webhook secret. External trade webhooks still require the secret stored in `.env`.
+
+Use **Add another login** on that page to create a separate persistent Chromium session. Each login is isolated and serialized; separate logins can work concurrently through different pool execution lanes.

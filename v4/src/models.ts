@@ -36,6 +36,7 @@ export const PoolSchema = z.object({
   enabled: z.boolean().default(true),
   benchWinnersForDay: z.boolean().default(true),
   executionLane: z.string().min(1).optional(),
+  balanceTarget: z.number().positive().optional(),
 });
 export type PoolDefinition = z.infer<typeof PoolSchema>;
 
@@ -77,6 +78,7 @@ export interface OpenPoolTrade {
   signalId?: string;
   openedAt: string;
   simulated: boolean;
+  entryBalance?: number;
 }
 
 export interface PoolState {

@@ -58,3 +58,11 @@ async function saveAccount(button) {
 }
 window.saveAccount = saveAccount;
 loadStatus().catch((error) => { document.querySelector("#scan-status").textContent = error.message; });
+
+document.querySelector("#show-add-login").addEventListener("click", () => { document.querySelector("#add-login-panel").hidden = !document.querySelector("#add-login-panel").hidden; });
+document.querySelector("#save-login").addEventListener("click", async () => {
+  const result = document.querySelector("#login-result"); result.textContent = "Creating saved browser session…";
+  const response = await fetch("/api/connections", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ name:document.querySelector("#login-name").value.trim(), firm:document.querySelector("#login-firm").value.trim(), url:document.querySelector("#login-url").value, accountPattern:document.querySelector("#login-pattern").value.trim(), autoConnect:document.querySelector("#login-auto").checked }) });
+  const body = await response.json(); result.textContent = body.ok ? "Login created. Select it above, open its browser, sign in, then scan." : body.error;
+  if (body.ok) { await loadStatus(); document.querySelector("#connection").value = body.connection.id; }
+});

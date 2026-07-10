@@ -11,6 +11,8 @@ import { ConnectionWorker, type ConnectionAdapter } from "../src/workers.js";
 let active = 0;
 let maxActive = 0;
 class FakeAdapter implements ConnectionAdapter {
+  balance = 50_000;
+  closes = 0;
   constructor(private readonly id: string) {}
   async connect() {}
   async recover() {}
@@ -23,10 +25,13 @@ class FakeAdapter implements ConnectionAdapter {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
     active--;
   }
-  async close() {}
+  async close() { this.closes++; }
+  async readBalance() { return this.balance; }
+  async readSelectedBalance() { return this.balance; }
+  async readSettledBalance() { return this.balance; }
 }
 
-function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string]) {
+function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number) {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-coordinator-"));
   const connections: ConnectionDefinition[] = [
     { id: "c1", name: "Login 1", firm: "Firm A", adapter: "simulated", url: "https://example.com", sessionDir: ".s1", accountPattern: ".+", enabled: true, autoConnect: false },
@@ -39,12 +44,14 @@ function setup(mode: "practice" | "live" = "live", executionLanes?: [string, str
       { id: "a2", name: "B", firm: "Firm B", stage: "funded", connectionId: "c2", platformLabel: "Y2", enabled: true, status: "active", tags: [] },
     ],
     pools: [
-      { id: "p1", name: "Pool 1", accountIds: ["a1"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[0] },
+      { id: "p1", name: "Pool 1", accountIds: ["a1"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[0], balanceTarget: evalTarget },
       { id: "p2", name: "Pool 2", accountIds: ["a2"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[1] },
     ],
   }));
-  const workers = new Map<string, ConnectionWorker>(connections.map((c) => [c.id, new ConnectionWorker(c, new FakeAdapter(c.id))]));
-  return { coordinator: new TradeCoordinator(new Registry(resolve(dir, "registry.json")), workers, resolve(dir, "state"), () => "2026-07-10") };
+  const adapters = new Map(connections.map((connection) => [connection.id, new FakeAdapter(connection.id)]));
+  const workers = new Map<string, ConnectionWorker>(connections.map((connection) => [connection.id, new ConnectionWorker(connection, adapters.get(connection.id)!)]));
+  const registry = new Registry(resolve(dir, "registry.json"));
+  return { coordinator: new TradeCoordinator(registry, workers, resolve(dir, "state"), () => "2026-07-10"), registry, adapters };
 }
 
 test("broadcast runs independent logins concurrently", async () => {
@@ -70,4 +77,24 @@ test("test webhook is plan-only and never opens pool state", async () => {
   const result = await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: true });
   assert.match(result.message, /TEST ONLY/);
   assert.equal(coordinator.status().find((p) => p.id === "p1")?.state?.openTrade, null);
+});
+
+test("evaluation pool automatically closes and passes account at 53000", async () => {
+  const { coordinator, registry, adapters } = setup("live", undefined, 53_000);
+  await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  adapters.get("c1")!.balance = 53_000;
+  const results = await coordinator.monitorBalanceTargets();
+  assert.equal(results[0]?.ok, true);
+  assert.equal(adapters.get("c1")!.closes, 1);
+  assert.equal(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
+  assert.equal(registry.account("a1")?.status, "passed");
+});
+
+test("funded pool never uses the evaluation balance target", async () => {
+  const { coordinator, adapters } = setup("live", undefined, 53_000);
+  await coordinator.handle("p2", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  adapters.get("c2")!.balance = 60_000;
+  const results = await coordinator.monitorBalanceTargets();
+  assert.equal(results.length, 0);
+  assert.equal(adapters.get("c2")!.closes, 0);
 });

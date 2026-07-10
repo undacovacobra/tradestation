@@ -4,6 +4,7 @@ import { isCloseAlert } from "./models.js";
 import { PoolRotation } from "./poolRotation.js";
 import type { Registry } from "./registry.js";
 import type { ConnectionWorker } from "./workers.js";
+import type { BalanceLog } from "./balances.js";
 
 export class TradeCoordinator {
   private readonly rotations = new Map<string, PoolRotation>();
@@ -11,12 +12,14 @@ export class TradeCoordinator {
   private readonly recentSignals = new Map<string, number>();
   private readonly reservedAccounts = new Map<string, string>();
   private readonly reservedLanes = new Map<string, string>();
+  private readonly targetChecks = new Set<string>();
 
   constructor(
     private readonly registry: Registry,
-    private readonly workers: Map<string, ConnectionWorker>,
+    private readonly workers: { get(id: string): ConnectionWorker | undefined },
     stateDir: string,
     today: () => string,
+    private readonly balances?: BalanceLog,
   ) {
     for (const pool of registry.pools()) {
       this.rotations.set(pool.id, new PoolRotation(pool.id, resolve(stateDir, `${pool.id}.json`), pool.benchWinnersForDay, today));
@@ -24,12 +27,32 @@ export class TradeCoordinator {
   }
 
   status() {
-    return this.registry.pools().map((pool) => ({
-      ...pool,
-      executionLane: pool.executionLane ?? pool.id,
-      state: this.rotations.get(pool.id)?.snapshot(),
-      accounts: this.registry.accountsInPool(pool.id),
-    }));
+    const balanceSnapshot = this.balances?.snapshot() ?? {};
+    return this.registry.pools().map((pool) => {
+      const rotation = this.rotations.get(pool.id);
+      const state = rotation?.snapshot();
+      let nextAccountId: string | null = state?.openTrade?.accountId ?? null;
+      if (!state?.openTrade && rotation) {
+        try { nextAccountId = rotation.select(this.registry.accountsInPool(pool.id), this.lockedAccounts(pool.id)).id; }
+        catch { nextAccountId = null; }
+      }
+      return {
+        ...pool,
+        executionLane: pool.executionLane ?? pool.id,
+        state: state ? { ...state, nextAccountId } : undefined,
+        accounts: pool.accountIds.map((id) => this.registry.account(id)).filter((account): account is AccountDefinition => Boolean(account)).map((account) => {
+          const record = balanceSnapshot[account.id];
+          return {
+            ...account,
+            balance: record?.balance ?? null,
+            balanceUpdatedAt: record?.updatedAt ?? null,
+            balanceHistory: record?.history ?? [],
+            isNext: nextAccountId === account.id,
+            toTarget: pool.balanceTarget && record ? Math.max(0, pool.balanceTarget - record.balance) : null,
+          };
+        }),
+      };
+    });
   }
 
   private enqueuePool<T>(poolId: string, task: () => Promise<T>): Promise<T> {
@@ -109,13 +132,18 @@ export class TradeCoordinator {
 
       this.reservedAccounts.set(account.id, poolId);
       this.reservedLanes.set(lane, poolId);
+      let entryBalance: number | null = null;
       try {
         if (!simulated) {
           const status = worker.status();
           if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-          await worker.run((adapter) => adapter.enter(account, alert));
+          await worker.run(async (adapter) => {
+            entryBalance = await adapter.readBalance(account);
+            await adapter.enter(account, alert);
+          });
+          if (entryBalance != null) this.balances?.set(account.id, entryBalance);
         }
-        rotation.recordOpen(account, alert, simulated);
+        rotation.recordOpen(account, alert, simulated, entryBalance ?? undefined);
       } finally {
         this.reservedAccounts.delete(account.id);
         this.reservedLanes.delete(lane);
@@ -150,12 +178,18 @@ export class TradeCoordinator {
         message: `TEST ONLY — would close ${open.symbol} on ${account.name}; no state or broker was changed`,
       };
     }
+    let exitBalance: number | null = null;
     if (!simulated) {
       const status = worker.status();
       if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected; the open trade was not touched`);
-      await worker.run((adapter) => adapter.close(account));
+      await worker.run(async (adapter) => {
+        await adapter.close(account);
+        exitBalance = await adapter.readSettledBalance(account);
+      });
+      if (exitBalance != null) this.balances?.set(account.id, exitBalance);
     }
-    rotation.recordClose(this.registry.accountsInPool(poolId));
+    const won = exitBalance != null && open.entryBalance != null ? exitBalance > open.entryBalance : undefined;
+    rotation.recordClose(this.registry.accountsInPool(poolId), won);
     return {
       ok: true,
       poolId,
@@ -177,5 +211,62 @@ export class TradeCoordinator {
   accountForOpenTrade(poolId: string): AccountDefinition | undefined {
     const id = this.rotations.get(poolId)?.snapshot().openTrade?.accountId;
     return id ? this.registry.account(id) : undefined;
+  }
+
+  hasOpenTradeForConnection(connectionId: string): boolean {
+    return [...this.rotations.values()].some((rotation) => rotation.snapshot().openTrade?.connectionId === connectionId);
+  }
+
+  setNext(poolId: string, accountId: string): void {
+    const rotation = this.rotations.get(poolId);
+    if (!rotation) throw new Error(`Unknown pool: ${poolId}`);
+    rotation.setNext(accountId, this.registry.accountsInPool(poolId));
+  }
+
+  async refreshBalances(): Promise<Array<{ connectionId: string; refreshed: number; deferred: boolean; error?: string }>> {
+    const results = [];
+    for (const connection of this.registry.connections()) {
+      const worker = this.workers.get(connection.id);
+      if (!worker) continue;
+      if (this.hasOpenTradeForConnection(connection.id)) {
+        results.push({ connectionId: connection.id, refreshed: 0, deferred: true });
+        continue;
+      }
+      let refreshed = 0;
+      try {
+        for (const account of this.registry.snapshot().accounts.filter((item) => item.connectionId === connection.id && item.enabled)) {
+          const balance = await worker.run((adapter) => adapter.readBalance(account));
+          if (balance != null) { this.balances?.set(account.id, balance); refreshed++; }
+        }
+        results.push({ connectionId: connection.id, refreshed, deferred: false });
+      } catch (error) {
+        results.push({ connectionId: connection.id, refreshed, deferred: false, error: (error as Error).message });
+      }
+    }
+    return results;
+  }
+
+  async monitorBalanceTargets(): Promise<TradeResult[]> {
+    const results: TradeResult[] = [];
+    for (const pool of this.registry.pools()) {
+      const open = this.rotations.get(pool.id)?.snapshot().openTrade;
+      if (!pool.balanceTarget || !open || open.simulated || this.targetChecks.has(pool.id)) continue;
+      const worker = this.workers.get(open.connectionId);
+      if (!worker) continue;
+      this.targetChecks.add(pool.id);
+      try {
+        const balance = await worker.run((adapter) => adapter.readSelectedBalance());
+        if (balance != null) this.balances?.set(open.accountId, balance);
+        if (balance == null || balance < pool.balanceTarget) continue;
+        const result = await this.handle(pool.id, { action: "close", symbol: open.symbol, test: false, signalId: `balance-target-${open.accountId}-${balance}` });
+        if (result.ok) this.registry.setAccountStatus(open.accountId, "passed");
+        results.push(result);
+      } catch (error) {
+        throw new Error(`Target check failed for ${pool.id} on ${open.accountName}: ${(error as Error).message}`);
+      } finally {
+        this.targetChecks.delete(pool.id);
+      }
+    }
+    return results;
   }
 }
