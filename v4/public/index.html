@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trading Bot V4</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">MULTI-FIRM ORCHESTRATOR</p><h1>Trading Bot V4</h1></div>
+      <div id="overall" class="pill">Loading…</div>
+    </header>
+    <p class="notice">This status page does not send trades. Use <strong>Send Test Webhook.cmd</strong> or the separate <a href="/sender.html">webhook test sender</a> for safe routing tests.</p>
+    <section><h2>Connections</h2><div id="connections" class="grid"></div></section>
+    <section><h2>Rotation pools</h2><div id="pools" class="grid"></div></section>
+    <footer>Auto-refreshes every five seconds · V2 and V3 remain separate</footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

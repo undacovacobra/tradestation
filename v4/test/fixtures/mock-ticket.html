@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>Mock order ticket</title></head>
+<body>
+  <div id="topbar">ACCOUNT LFE05079261220006 EQUITY 50,000.00 USD OPEN P/L 0.00 USD</div>
+  <!-- Buy Mkt is the "logged in" marker the bot checks for. -->
+  <button>Buy Mkt</button>
+  <button>Sell Mkt</button>
+
+  <!-- The order ticket lives inside a shadow root, like Tradovate's, and has a
+       decoy numeric field (price) BEFORE the real quantity field to prove the
+       label heuristic prefers the qty box, not just the first number input. -->
+  <order-ticket></order-ticket>
+
+  <script>
+    class OrderTicket extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML =
+          '<label>Limit Price <input type="number" aria-label="Limit Price" value="0" /></label>' +
+          '<label>Order Qty <input type="number" aria-label="Order Qty" value="1" /></label>';
+      }
+    }
+    customElements.define("order-ticket", OrderTicket);
+  </script>
+</body>
+</html>

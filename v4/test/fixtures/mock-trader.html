@@ -1,0 +1,26 @@
+<!doctype html>
+<html><body>
+<div id="topbar"><span class="acctid">LFE05079261220006</span></div>
+<div id="menu" style="display:none">
+  <div class="row">LFE05079261220006</div>
+  <div class="row">LFE05079261220007</div>
+</div>
+<button>Buy Mkt</button><button>Sell Mkt</button>
+<script>
+  // Test spies: did we open the account menu? what was clicked?
+  window.__menuOpened = false;
+  window.__lastClick = null;
+  const topbar = document.getElementById('topbar');
+  const menu = document.getElementById('menu');
+  topbar.addEventListener('click', () => { window.__menuOpened = true; menu.style.display = 'block'; });
+  for (const row of menu.querySelectorAll('.row')) {
+    row.addEventListener('click', () => {
+      document.querySelector('.acctid').textContent = row.textContent;
+      menu.style.display = 'none';
+    });
+  }
+  for (const b of document.querySelectorAll('button')) {
+    b.addEventListener('click', () => { window.__lastClick = b.textContent.toLowerCase().includes('buy') ? 'buy' : 'sell'; });
+  }
+</script>
+</body></html>
