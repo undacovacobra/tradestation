@@ -1,0 +1,58 @@
+{
+  "version": 4,
+  "running": true,
+  "mode": "practice",
+  "connections": [
+    {
+      "id": "tradovate-main",
+      "name": "Tradovate Main Login",
+      "firm": "replace-with-your-firm",
+      "adapter": "simulated",
+      "url": "https://trader.tradovate.com",
+      "sessionDir": ".sessions/tradovate-main",
+      "accountPattern": "[A-Z0-9][A-Z0-9_-]{5,}",
+      "enabled": true,
+      "autoConnect": true
+    }
+  ],
+  "accounts": [
+    {
+      "id": "sample-eval-01",
+      "name": "Sample Evaluation Account",
+      "firm": "replace-with-your-firm",
+      "stage": "eval",
+      "connectionId": "tradovate-main",
+      "platformLabel": "REPLACE_WITH_ACCOUNT_LABEL",
+      "enabled": true,
+      "status": "active",
+      "tags": ["lfe"]
+    },
+    {
+      "id": "sample-funded-01",
+      "name": "Sample Funded Account",
+      "firm": "replace-with-your-firm",
+      "stage": "funded",
+      "connectionId": "tradovate-main",
+      "platformLabel": "REPLACE_WITH_FUNDED_LABEL",
+      "enabled": true,
+      "status": "active",
+      "tags": ["lff"]
+    }
+  ],
+  "pools": [
+    {
+      "id": "eval-primary",
+      "name": "Primary Evaluation Rotation",
+      "accountIds": ["sample-eval-01"],
+      "enabled": true,
+      "benchWinnersForDay": true
+    },
+    {
+      "id": "funded-primary",
+      "name": "Primary Funded Rotation",
+      "accountIds": ["sample-funded-01"],
+      "enabled": true,
+      "benchWinnersForDay": true
+    }
+  ]
+}

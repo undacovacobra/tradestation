@@ -1,0 +1,23 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#08101d; color:#e8eef8; }
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; background:radial-gradient(circle at top left,#142f4d 0,#08101d 42%); }
+main { width:min(1120px,92vw); margin:0 auto; padding:48px 0; }
+header,.row { display:flex; align-items:center; justify-content:space-between; gap:20px; }
+h1 { margin:2px 0 0; font-size:clamp(2rem,5vw,4rem); letter-spacing:-.04em; }
+h2 { margin:42px 0 16px; font-size:1.15rem; color:#aabbd0; }
+h3 { margin:0; font-size:1.05rem; }
+p { color:#9db0c7; }
+a { color:#77ddc8; }
+.eyebrow { color:#55d6be; font-size:.72rem; font-weight:800; letter-spacing:.18em; }
+.notice { padding:15px 18px; border:1px solid #274661; border-radius:14px; background:#0d1b2b; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(275px,1fr)); gap:14px; }
+article { padding:20px; border:1px solid #233950; border-radius:16px; background:rgba(14,28,44,.9); box-shadow:0 14px 36px rgba(0,0,0,.18); }
+.pill,.tag { padding:7px 11px; border-radius:999px; background:#1a2a3d; font-size:.78rem; }
+.pill.good { background:#123c34; color:#7ff2ce; }.pill.bad { background:#482126; color:#ff9da5; }
+.dot { width:10px; height:10px; border-radius:50%; background:#7b8795; }.dot.good { background:#55d6be; box-shadow:0 0 16px #55d6be; }.dot.bad { background:#ff6f7d; }
+dl { display:grid; grid-template-columns:88px 1fr; gap:8px; margin:18px 0 0; font-size:.88rem; } dt { color:#667d96; } dd { margin:0; overflow-wrap:anywhere; }
+.error { color:#ff9da5; font-size:.82rem; } footer { margin-top:44px; color:#60758e; font-size:.8rem; }
+.sender { max-width:720px; }.form-card { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:22px; border:1px solid #233950; border-radius:16px; background:#0e1c2c; }
+label { display:grid; gap:7px; color:#91a6bd; font-size:.82rem; } input,select,button { width:100%; padding:11px 12px; border:1px solid #304961; border-radius:9px; background:#091522; color:#edf5ff; } button { align-self:end; background:#36bfa5; border-color:#36bfa5; color:#04110e; font-weight:800; cursor:pointer; }
+pre { white-space:pre-wrap; overflow-wrap:anywhere; margin-top:18px; padding:18px; min-height:110px; border:1px solid #233950; border-radius:12px; background:#07111c; color:#9debd9; }
+@media (max-width:620px) { .form-card { grid-template-columns:1fr; } header { align-items:flex-start; } }

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V4 Test Webhook Sender</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="sender">
+  <header><div><p class="eyebrow">SEPARATE SAFE TOOL</p><h1>Test webhook sender</h1></div><a class="tag" href="/">Status</a></header>
+  <p class="notice"><strong>Test only.</strong> This page always sends <code>test: true</code>. It can show routing and account selection but cannot click a broker or modify rotation state.</p>
+  <form id="sender-form" class="form-card">
+    <label>Pool id<input name="pool" value="eval-primary" required></label>
+    <label>Webhook secret<input name="secret" type="password" autocomplete="off" required></label>
+    <label>Action<select name="action"><option>buy</option><option>sell</option><option>close</option></select></label>
+    <label>Symbol<input name="symbol" value="MNQ" required></label>
+    <label>Quantity<input name="quantity" type="number" min="1" step="1" value="1" required></label>
+    <button type="submit">Send safe test</button>
+  </form>
+  <pre id="result">No test sent yet.</pre>
+</main><script src="/sender.js"></script></body>
+</html>
