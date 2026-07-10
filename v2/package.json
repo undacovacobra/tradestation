@@ -1,0 +1,28 @@
+{
+  "name": "tradovate-account-cycler-v2",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "V2 of the account-cycler bot: web dashboard, two account groups (Evals/Funded) with separate webhooks, on-screen account management. Browser automation, no API.",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "testhook": "tsx src/testhook.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "playwright": "^1.49.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "optionalDependencies": {
+    "@ngrok/ngrok": "^1.7.0"
+  }
+}

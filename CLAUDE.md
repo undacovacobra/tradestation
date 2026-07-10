@@ -18,7 +18,284 @@ The firm (Lucid Trading) **blocks API access**, so order execution is done by
 **browser automation** (Playwright) of the Tradovate web trader. Runs on the user's
 **always-on Windows home PC**. Node 22, TypeScript, Playwright (Chromium).
 
-## Current status (2026-06-28)
+## ⚠️ STRIPPED TO LEAN EXECUTION (2026-07-03) — read this first
+After chasing a 1.3-7s fill lag through many additions, the user asked to remove
+everything except execution ("I will handle balances/targets/quantity myself").
+So V2 was cut back to: **connect → switch account → click Buy/Sell/Exit**, plus the
+two lanes, rotation, on-screen account management, Scan, ⏭ next-account pick,
+practice/live, pause, remote access (ngrok), and the ⏱ speed-test button.
+**DELETED:** `monitor.ts`, `balanceParse.ts`, `tradingDay.ts` and all balance
+reading / EQUITY parsing, the $53k profit-target auto-close, win/loss detection &
+the daily win-bench, the "Passed" column, the "Contracts per trade" setter
+(`setQuantity`/`findQtyControl` — the whole-DOM scan was the prime latency
+suspect), and their tests/fixtures. The changelog below is KEPT as history (it
+explains *why* each thing was removed) but no longer describes current code.
+Rotation constructor is now `(group, statePath)` only; `OrderRequest` is just
+`{action, symbol, tradeId?}`; `StoredAccount` has no `status`. Speed knobs live in
+config: `ORDER_CONFIRM_WAIT_MS` (250), `SWITCH_SETTLE_MS` (250), `SCREENSHOTS`
+(off). Pre-arming (`armFor` = switch only) + `switchAccount` fast-path (skip menu
+when top bar already shows the target) keep the live entry to ~a click. 7 tests.
+
+## 🧪 V3 EXISTS (2026-07-09) — self-healing TEST copy in `v3/`, V2 stays live
+After real-world failures (overnight Windows restart took the bot down all
+night; a Tradovate popup blocked the exit click and stranded a live 10-lot),
+the user asked for the reliability upgrades to be built in a **separate copy**
+to test before replacing V2 — same pattern as V1→V2. `v3/` is a full copy of
+`v2/` on **port 3400** (own package.json `tradovate-account-cycler-v3`, own
+data/session dirs, dashboard titled "Trading Bot V3 🧪"). **`v2/` is untouched
+and remains the user's live bot.** V3 adds (all verified, 23 tests pass):
+- **Auto-connect on boot** (`config.autoConnect`, `AUTO_CONNECT` default true):
+  server main() enqueues `browser.connect()` on listen; if logged in (saved
+  session) it arms; if not, a warn event fires (→ phone).
+- **Popup-killer** (`browser.dismissPopups()`): finds visible
+  `.modal-backdrop/.modal.in/.modal.show/[role=dialog|alertdialog]`, clicks
+  ONLY dismiss-style buttons (ok/close/got it/×/accept/aria-label=Close/class
+  contains "close"), else presses Escape, verifies gone, screenshots+false if
+  not. Called: on connect, at armFor, and via `clickThroughPopups()` which
+  wraps clickOrder/clickExit — on a blocked click it clears + retries ONCE.
+  Inline evaluates only (esbuild `__name` gotcha). Guarded by
+  `test/popup.browser.test.ts` + `fixtures/mock-popup.html` which recreates the
+  exact live failure (backdrop intercepts Exit click).
+- **Telegram phone notifications** (`src/notify.ts`): fire-and-forget fetch to
+  api.telegram.org, 60s dedupe, never throws. Reads `TELEGRAM_BOT_TOKEN`/
+  `TELEGRAM_CHAT_ID` from `process.env` directly (NOT via config.js — so
+  browser tests importing browser→notify don't trip config's required-var
+  check). **Notifications reworked to be action-oriented (user asked: stop
+  buzzing on every event):** events.ts NO LONGER auto-notifies warn/error;
+  instead deliberate `notifyActionNeeded()` (🔴 NEEDS YOU) fires only on
+  trade-execution failure (webhook catch), popup-stuck (dismissPopups can't
+  clear), auto-connect needs-login/failed, and startup-with-open-trade; and
+  `notifyGoodNews()` fires on a WON trade and on hitting the $53k target. A
+  clean auto-recovered restart is SILENT (no generic "bot started" ping).
+- **Health watch**: server `startHealthWatch()` — a 45s setInterval (enqueued,
+  cleared in shutdown) running `healthCheck()`: `refreshLoginState()` verifies
+  the trader (Buy Mkt marker); if present → `dismissPopups()`; if the trading
+  screen is GONE and flat → `browser.recover()` (reload + auto-login), notify if
+  it can't; if gone WHILE a trade is open → alarm only (never reload mid-trade).
+  `browser.recover()` reloads `tradovateUrl`, re-runs tryAutoLogin, resets
+  currentAccount/lastQty. Replaced the popup-only sweep.
+- SETUP-GUIDE.md now V3/port-3400 with AUTO_CONNECT=true + NGROK_AUTOSTART=true
+  in the live .env and a Telegram section.
+- **Crash watchdog**: new `run-bot.cmd` (loop: npm start → wait 5s → again);
+  `Start Trading Bot.cmd` starts it and opens :3400.
+- **Startup self-check**: on boot, any group whose state says a trade is open
+  → warn event telling the user to verify / use Mark closed / reset.
+- NOT yet done in V3 (user does these by hand / later): ATM bracket is a
+  Tradovate-side setting (user was setting up 50pt stop/75pt target = 200/300
+  ticks on MNQ); Windows-side auto-start scheduled task + auto-logon + never-
+  sleep settings; Telegram BotFather walkthrough for the user.
+User context: bot now runs on a NEW dedicated laptop (the user set it up from
+SETUP-GUIDE.md); a friend was given repo access and a copy of that guide (each
+person runs their own ngrok domain + secret). Secret/token appeared in chat
+screenshots — user was advised to rotate the ngrok token.
+
+## ✅ DYNAMIC ORDER SIZE re-added — fast (2026-07-05) — read this third
+The user needs the contract size to come from the alert (it's dynamic inside the
+strategy) but **without** re-introducing the lag. Key realization stated to them:
+*the old lag was the SEARCH for the qty box (a whole-DOM boundingBox scan), not
+the act of setting it.* How it's built now:
+- Alert carries `quantity` (`{{strategy.order.contracts}}`); `AlertSchema` already
+  had the field. `OrderRequest.quantity` added; the webhook passes it through.
+- `browser.setQuantity(qty, force?)`: **cached** (`lastQty` — same size = pure
+  no-op), finds the ticket's qty input in **ONE** shadow-DOM-piercing
+  `page.evaluate` (no per-element round-trips), sets it via the native value
+  setter + input/change events, then **reads it back and THROWS if it can't
+  confirm** the exact number → the caller places no order, so a wrong size can't
+  fire. Pass-2 fallback types it via `locator('[data-bot-qty]').fill()`. All
+  inline (no nested fns — esbuild `__name` gotcha). `lastQty` resets on
+  connect/disconnect and on any real account switch.
+- `executeEntry` calls `setQuantity(order.quantity)` **before** clickOrder only
+  when the alert carries a size; omitted `quantity` = leave the ticket as-is.
+- **🔢 Test size button** (dashboard) → `POST /api/test-quantity` sets+verifies a
+  typed number with `force:true` and returns the ms (no order). Modal lets the
+  user type a new number and re-time repeatedly.
+- **⚠️ Selector unverified against the real Tradovate ticket** — heuristic
+  (qty/size/contract-labelled input, else first numeric/spinbutton); saves a
+  `set-quantity-failed` screenshot + throws (skips the trade) on a miss. Guarded
+  by `test/quantity.browser.test.ts` + `test/fixtures/mock-ticket.html` (real
+  shadow-DOM ticket, prefers the qty box over a decoy price field). Needs one
+  live calibration pass. **18 tests pass**, type-checks clean, practice webhook +
+  test endpoint verified.
+
+## ✅ FEATURES RE-ADDED — the LOG way (2026-07-04) — read this second
+After the strip proved the entry path was finally fast (user confirmed the
+dropdown no longer opens before Buy/Sell), the user asked for three things back
+**without** the monitoring that caused the lag: (1) track which accounts have
+WON that day and keep the rest in the cycle, (2) cut a trade when its balance
+hits the target ($53k), (3) "when it exits a trade, log if it won/lost and the
+balance at exit; when IN a trade, watch only THAT one account's balance." Key
+instruction: **"there should be a log it refers to so it doesn't slow down
+executions at all."** How it was built — the golden rule is *balance reads never
+touch the entry click and never switch accounts*:
+- **`v2/src/balances.ts` `BalanceLog`** — the "log". Per-account last balance +
+  short history in `data/balances.json`. Read from **memory** on the entry path
+  (`get(label)` is instant); written only at the three idle/after moments below.
+- **WHEN balances are read (never on the Buy/Sell click):** (a) **at arm time** —
+  after a round-trip closes, `armNext` selects the next account AND reads its
+  top-bar EQUITY into the log; that becomes the trade's **entry baseline** at zero
+  entry cost. (b) **during a trade** — `v2/src/monitor.ts` `Monitor` is a lazy
+  self-scheduling timer: does NOTHING while flat, and while a trade is open reads
+  ONLY the already-selected account (`browser.readSelectedEquity`, top bar, no
+  switch) every `MONITOR_ACTIVE_SECONDS` (3). (c) **at exit** — after the close
+  click, `readSettledEquity` (1.2s settle, AFTER the click so it never delays the
+  order) records the exit balance.
+- **Win/loss + daily bench** (`rotation.ts`, restored): `recordClose({exitBalance})`
+  → won = exitBalance > entryBalance (or explicit). A winner sets `lastWonDay`
+  and `isBenchedToday` skips it for the rest of the **futures trading day**
+  (6pm ET reset via `tradingDay.ts`, injected). Losers/breakeven keep cycling.
+  Toggle with `ONCE_PER_DAY` (default true). Practice moves no money → never a win.
+- **$53k profit target, two guards:** (a) in-trade — the monitor force-closes +
+  retires the account the instant the read hits target (`forceClose`, no webhook,
+  the exit is a pure click since that account is already selected); (b) entry-time
+  — `handleEntry` checks the **in-memory** balance before entering and retires any
+  account already at/over target (no browser read), then picks the next. Target is
+  `settings.evalTarget` (default 53000), set on the dashboard.
+- **Retired accounts** get `status:"passed"` (`store.ts`), leave rotation, and show
+  in a new **🏆 Passed** dashboard card with a "Put back in rotation" button
+  (`/api/accounts/reactivate`). Dashboard also shows each account's balance,
+  "$X to $53,000", a balance sparkline, and a "😴 WON TODAY" rest tag.
+- **What we did NOT bring back:** the background balance SWEEP that switched
+  through every account (the original lag source) — it's gone for good. The
+  monitor only ever reads the selected account. Also NOT back: the qty setter
+  (user sets size on the Tradovate screen).
+- Rotation constructor is now `(group, statePath, benchWinnersForDay, today?)`.
+  `StoredAccount` has `status`. `OpenTrade` has `entryBalance`. Config adds
+  `benchWinnersForDay`, `tradingDayTz`, `tradingDayResetHour`,
+  `monitorActiveSeconds`, `balancesPath`. **16 tests pass**, type-checks clean,
+  server boots + full practice round-trip verified. Live UI reads still unverified
+  against the real Tradovate top bar (same caveat as always).
+
+## ⭐ V2 exists (2026-07-01) — see `v2/` — (historical changelog below)
+The user asked for a big upgrade but **kept separate** from the working V1. V2 lives
+entirely in the `v2/` folder (own package.json, port **3300**); V1 in the repo root is
+untouched and still works. V2 adds:
+- **Web dashboard** (`http://localhost:3300`, vanilla HTML/JS served by the same
+  Express server): start/pause button, Practice↔LIVE switch with a big red warning
+  modal, status pills (running / Tradovate login / mode), live activity feed in plain
+  English, optional password login (`DASHBOARD_PASSWORD` in `v2/.env`).
+- **Two independent lanes**: `POST /webhook/evals` and `POST /webhook/funded`, one
+  `GroupRotation` each (state in `v2/data/state-<group>.json`).
+- **Single alert per strategy** (2026-07-02): one TradingView alert handles both
+  open and close. Payload carries `marketPosition` (`{{strategy.market_position}}`);
+  when it's `flat` the bot closes+rotates, otherwise it opens. `isCloseAlert()` in
+  `v2/src/types.ts`. Old two-alert style (`"action":"close"`) still works.
+- **Accounts managed on screen** (never by hand): add/remove/reorder/enable per group,
+  stored in `v2/data/settings.json` via `SettingsStore`. Plus **"Scan Tradovate
+  accounts"**: opens the Tradovate account menu, reads all `LF[EF]…` ids, user ticks
+  Evals/Funded (pre-sorted by LFE/LFF prefix).
+- **Rotation is label-keyed, not index-keyed** (`v2/src/rotation.ts`) so it survives
+  account add/remove/reorder mid-rotation.
+- **Daily rule is WIN-based, not trade-based** (2026-07-02): `ONCE_PER_DAY` now
+  means an account that closes a WINNER sits out the rest of the (UTC) day
+  (`lastWonDay` + `isBenchedToday`); losers/breakeven keep cycling. Win = EQUITY
+  read just before entry vs. after close (`executeEntry`/`executeClose` return
+  balances; `readSettledBalance()` waits ~1.5s post-close). Only meaningful in
+  LIVE (practice moves no money → never a win). Force-close on target passes
+  `won:true`. Dashboard shows "😴 WON TODAY" (`restingToday`).
+- **Order path sped up + reliable qty control** (2026-07-02): the ~2s fill lag
+  was from (a) a 1.5s confirm-modal wait every order, (b) hundreds of per-element
+  boundingBox round-trips in the qty scan, (c) a pre-order balance read, (d)
+  success screenshots. Fixes: `confirmIfPrompted` waits `ORDER_CONFIRM_WAIT_MS`
+  (350); `findQtyControl`/`findQtyOption` are ONE shadow-piercing `page.evaluate`
+  each; entry-balance read moved AFTER clickOrder; success screenshots gated by
+  `SCREENSHOTS` (failures always shot, `snapshot(name,true)`); switch settle =
+  `SWITCH_SETTLE_MS` (300). **⚠️ esbuild/tsx `__name` gotcha**: NO nested named
+  functions inside `page.evaluate` (esbuild injects a `__name` helper absent in
+  the page → throws, was swallowed by `.catch`). Real-browser regression test
+  `test/quantity.browser.test.ts` + `test/fixtures/mock-ticket.html` (shadow DOM)
+  guards it; skips if no Chromium.
+- **Manual next-account pick** (2026-07-02): `⏭` button per account →
+  `POST /api/next` → `rotation.setNext(label)` (only when flat).
+- **Event-driven speed architecture** (2026-07-02, after user saw 6-7s fills):
+  root cause was the idle balance sweep (switch+read EVERY account, seconds
+  long) holding the single serialized browser queue while a webhook waited.
+  Fixes: (a) `pendingTrades` counter — webhooks increment it; the sweep is now
+  per-account queue jobs that BAIL between accounts when a trade is pending
+  (`readAll` impl in server.ts); (b) **pre-arming** — after every close /
+  setNext / contracts change / connect / mode→live / sweep end, `armNext(group)`
+  selects the next account and pre-sets qty (`browser.armFor`), so an entry is
+  just topbar-check → qty-check (no-op) → click Buy/Sell; `switchAccount` has a
+  fast path (skips menu when top bar already shows the target);
+  (c) `lastAlertGroup` tracks which lane to arm for; (d) **⚡ stopwatch event**
+  per webhook ("Handled in Xms (waited Yms)") separates bot latency from
+  TradingView/ngrok delivery latency. MONITOR_ACTIVE_SECONDS default 3 (min 1).
+  Practice-mode webhook measured 1-19ms server-side.
+- **Background balance sweep OFF by default** (2026-07-02, after user saw
+  1.7s-11s variance): the every-60s full sweep switched through EVERY account
+  (~seconds) and any trade landing mid-sweep waited behind it — the source of
+  the variance. Now `monitor.sweep()` when flat does NOTHING unless
+  `BALANCE_SWEEP_MINUTES>0` (default 0); during a trade it does the cheap
+  top-bar live-account read only (no switching). Heartbeat every
+  `MONITOR_ACTIVE_SECONDS` (3s) but only touches the browser when a trade is
+  open. Idle balances refresh on Scan + during trades. `$53k` stop still works
+  (live-account read). This removes account-switching contention from the trade
+  path entirely.
+- **Bot now SETS position size** (2026-07-02): per-group "Contracts per trade"
+  on the dashboard (`settings.contracts.{evals,funded}`, default 1). Live entry
+  calls `browser.setQuantity(n)` which fills Tradovate's order-ticket qty field
+  and **reads it back to verify** — throws (→ no order) if it can't confirm, so
+  a wrong size can't fire. Alert `quantity` is ignored for sizing (handleEntry
+  overrides `order.quantity = store.contractsFor(group)`). "Test size on
+  Tradovate" button (`/api/test-quantity`) sets+verifies with no order. ⚠️
+  `setQuantity` selector is heuristic/unverified (getByRole spinbutton →
+  number input → qty-ish attrs); saves `set-quantity-failed` screenshot on miss.
+- **Trading-day boundary is 6pm ET, not midnight** (`v2/src/tradingDay.ts`,
+  `tradingDayKey`): futures session reset. Configurable via `TRADING_DAY_TZ`
+  (default America/New_York) + `TRADING_DAY_RESET_HOUR` (default 18); server
+  injects `tradingDay()` into both `GroupRotation`s; DST-aware. 22 tests pass.
+- **Practice mode is the default** and persisted; LIVE requires a confirm flag on the
+  API and a warning modal in the UI. Pause makes webhooks no-ops.
+- Browser automation unchanged from V1 (same confirmed UI labels, one shared
+  serialized queue for both lanes + scans) — still **no API**. Browser is now
+  connected from the dashboard ("Connect browser"), independent of trade mode.
+- **Remote access built in** (2026-07-02): dashboard **"Remote access"** button
+  turns the ngrok tunnel on/off in-process via the official `@ngrok/ngrok` SDK
+  (`v2/src/tunnel.ts`), no separate ngrok window/command. Configured by
+  `NGROK_AUTHTOKEN` + `NGROK_DOMAIN` in `.env`; auto-starts on boot
+  (`NGROK_AUTOSTART`, default true). SDK is an **optionalDependency** loaded
+  lazily, so a failed/absent install never breaks the bot (button just reports
+  unavailable; CLI ngrok remains a fallback). User's domain:
+  `antennae-compress-panning.ngrok-free.dev`.
+- **Friendlier startup**: `Start Trading Bot.cmd` launches the bot in its own
+  window and opens the dashboard; remote access comes up on its own. Only the
+  initial double-click is unavoidable (can't start a program from a web button
+  that isn't running yet).
+- **Account monitor** (2026-07-02, `v2/src/monitor.ts`): while the browser is
+  logged in, re-reads the Tradovate account menu on an **adaptive cadence** —
+  `MONITOR_SECONDS` (60s) idle, `MONITOR_ACTIVE_SECONDS` (5s) while any trade is
+  open (self-scheduling `tick()`), so the target stop reacts fast on the live
+  account. **Balance = Tradovate's top-bar "EQUITY"** for the SELECTED account
+  (confirmed 2026-07-02 from user screenshots — the account MENU shows no
+  dollars, only "Demo & Active"). `readSelectedAccount()` reads the top bar
+  (cheap, used during a trade since the live account is already selected);
+  `readAllBalances()` cycles every account (menu ids → switch → read top bar,
+  idle cadence + Scan); `extractEquity()` parses the number after "EQUITY".
+  **Scan** uses `readAllBalances` + `monitor.scanIngest()` so balances populate
+  immediately on scan. Powers: (a) balance + history per
+  account (`data/balances.json`) with sparkline, "$X to go", shown on the
+  dashboard; (b) auto-adding accounts that appear in Tradovate (LFE→evals,
+  LFF→funded); (c) **eval profit target** (`evalTarget` in settings.json,
+  default $53,000): at/above target → account retired to `status:"passed"`
+  (new 🏆 Passed column, excluded from rotation, "Put back in rotation" undo),
+  and if it held the open trade the bot **force-flattens without a webhook**
+  (`forceClose` in server.ts) + entry-time guard in `handleEntry`. Open-trade
+  banner shows the alert's contract count (actual size = Tradovate screen).
+  **⚠️ Balance READING is unverified against the real Tradovate UI** — parser
+  is heuristic (row text near `LF[EF]…` ids); if the menu shows no dollars the
+  bot pushes a warn event and saves a `balances-not-visible` screenshot for
+  calibration. 14 unit tests pass (rotation + parser + monitor force-close).
+- Login is tolerant of tunnel hiccups (one 401 retry before showing the password
+  screen) so the dashboard doesn't flicker over ngrok.
+- Windows: double-click `v2/Start Trading Bot.cmd` starts the server and opens the
+  dashboard.
+
+**V2 verified in this session (practice mode only):** unit tests, type-check, server
+boot, login protection, account add/remove via API, both webhooks (entry/close/
+one-open-rule/bad-secret/paused), live-confirm guard, and dashboard rendering
+(screenshots via Playwright). **Not yet tested:** anything against the real Tradovate
+UI (scan, live clicks) — the confirmed V1 selectors were carried over unchanged.
+
+## Current status of V1 (2026-06-28)
 **Working & verified:**
 - Rotation logic (cycle accounts, one open round-trip at a time, advance + wrap,
   optional once-per-day). Unit-tested (`npm test`, 4/4 pass).

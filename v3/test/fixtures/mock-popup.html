@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>Mock trader with a blocking popup</title>
+<style>
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); }
+  .modal { position: fixed; top: 30%; left: 30%; background: #fff; padding: 20px; }
+</style>
+</head>
+<body>
+  <!-- Recreates the real failure: a dialog + full-screen backdrop covering the
+       trader, so the Exit button exists but every click is intercepted. -->
+  <div id="topbar">ACCOUNT LFE05079261220006 EQUITY 50,000.00 USD</div>
+  <button>Buy Mkt</button>
+  <button>Sell Mkt</button>
+  <button onclick="window.__lastClick='exit'">Exit at Mkt &amp; Cxl</button>
+
+  <div class="modal-backdrop" id="backdrop"></div>
+  <div class="modal" id="dialog" role="dialog">
+    <p>Important notice from Tradovate.</p>
+    <button onclick="document.getElementById('backdrop').remove(); document.getElementById('dialog').remove();">Close</button>
+  </div>
+
+  <script>window.__lastClick = null;</script>
+</body>
+</html>
