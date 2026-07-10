@@ -32,7 +32,7 @@ export type AccountDefinition = z.infer<typeof AccountSchema>;
 export const PoolSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9_-]*$/i),
   name: z.string().min(1),
-  accountIds: z.array(z.string().min(1)).min(1),
+  accountIds: z.array(z.string().min(1)).default([]),
   enabled: z.boolean().default(true),
   benchWinnersForDay: z.boolean().default(true),
 });

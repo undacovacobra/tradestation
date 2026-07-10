@@ -67,6 +67,7 @@ Edit `data/registry.json` to define the real-world model:
 ```
 
 Account labels can use any convention. They do not determine whether an account is evaluation or funded.
+New installations may leave `accounts` and pool `accountIds` empty, then populate them from the browser through `/onboarding.html`.
 
 ## Webhooks
 
