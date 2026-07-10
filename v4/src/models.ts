@@ -32,9 +32,11 @@ export type AccountDefinition = z.infer<typeof AccountSchema>;
 export const PoolSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9_-]*$/i),
   name: z.string().min(1),
-  accountIds: z.array(z.string().min(1)).min(1),
+  accountIds: z.array(z.string().min(1)).default([]),
   enabled: z.boolean().default(true),
   benchWinnersForDay: z.boolean().default(true),
+  executionLane: z.string().min(1).optional(),
+  balanceTarget: z.number().positive().optional(),
 });
 export type PoolDefinition = z.infer<typeof PoolSchema>;
 
@@ -76,6 +78,7 @@ export interface OpenPoolTrade {
   signalId?: string;
   openedAt: string;
   simulated: boolean;
+  entryBalance?: number;
 }
 
 export interface PoolState {

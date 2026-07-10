@@ -15,44 +15,24 @@
       "autoConnect": true
     }
   ],
-  "accounts": [
-    {
-      "id": "sample-eval-01",
-      "name": "Sample Evaluation Account",
-      "firm": "replace-with-your-firm",
-      "stage": "eval",
-      "connectionId": "tradovate-main",
-      "platformLabel": "REPLACE_WITH_ACCOUNT_LABEL",
-      "enabled": true,
-      "status": "active",
-      "tags": ["lfe"]
-    },
-    {
-      "id": "sample-funded-01",
-      "name": "Sample Funded Account",
-      "firm": "replace-with-your-firm",
-      "stage": "funded",
-      "connectionId": "tradovate-main",
-      "platformLabel": "REPLACE_WITH_FUNDED_LABEL",
-      "enabled": true,
-      "status": "active",
-      "tags": ["lff"]
-    }
-  ],
+  "accounts": [],
   "pools": [
     {
       "id": "eval-primary",
       "name": "Primary Evaluation Rotation",
-      "accountIds": ["sample-eval-01"],
+      "accountIds": [],
       "enabled": true,
-      "benchWinnersForDay": true
+      "benchWinnersForDay": true,
+      "executionLane": "evals",
+      "balanceTarget": 53000
     },
     {
       "id": "funded-primary",
       "name": "Primary Funded Rotation",
-      "accountIds": ["sample-funded-01"],
+      "accountIds": [],
       "enabled": true,
-      "benchWinnersForDay": true
+      "benchWinnersForDay": true,
+      "executionLane": "funded"
     }
   ]
 }

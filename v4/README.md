@@ -12,12 +12,16 @@ V4 is an isolated, multi-login account-rotation orchestrator. V2 and V3 remain u
 - Test webhooks are plan-only: they never click a broker and never alter rotation state.
 - A standalone `Send Test Webhook.cmd` tool works independently of the dashboard.
 - A broadcast webhook can fan one signal out to several pools.
+- Every pool has its own `/webhook/:poolId` URL and configurable execution lane.
+- The Control Center shows full pool order, next account, last-known balances, login health, and activity.
+- Add any practical number of Tradovate logins from Account Onboarding without restarting V4.
+- Evaluation pools may define `balanceTarget: 53000`; funded pools omit it and never use that automatic close.
 
 ## Safety model
 
 V4 defaults to `practice` mode and the included sample connection uses the `simulated` adapter. Change both intentionally before expecting live browser actions.
 
-Within one login, actions are serialized. Across independent logins, workers run concurrently. Browser-based execution cannot be atomic across firms; a broadcast response reports each leg separately.
+Within one login, actions are serialized. Across independent logins, workers run concurrently. Pools with different execution-lane names may hold trades at the same time; pools sharing a lane are mutually exclusive, so a conflicting entry is rejected while that lane is occupied. Browser-based execution cannot be atomic across firms; a broadcast response reports each leg separately.
 
 ## Registry
 
@@ -60,13 +64,16 @@ Edit `data/registry.json` to define the real-world model:
       "name": "Primary Evaluation Rotation",
       "accountIds": ["firm-a-eval-01"],
       "enabled": true,
-      "benchWinnersForDay": true
+      "benchWinnersForDay": true,
+      "executionLane": "evals",
+      "balanceTarget": 53000
     }
   ]
 }
 ```
 
 Account labels can use any convention. They do not determine whether an account is evaluation or funded.
+New installations may leave `accounts` and pool `accountIds` empty, then populate them from the browser through `/onboarding.html`.
 
 ## Webhooks
 
@@ -107,6 +114,8 @@ POST http://localhost:3500/webhook
 
 Use `marketPosition: "flat"` or `action: "close"` to close the pool's recorded position.
 
+The Status page shows each pool's individual webhook path and lets you change its execution lane. Give funded and evaluation pools different lane names to allow simultaneous positions. Give pools the same lane name when they must take turns.
+
 ## Standalone test sender
 
 Open `http://localhost:3500/sender.html`, double-click `Send Test Webhook.cmd`, or run:
@@ -136,4 +145,10 @@ npm test
 npm start
 ```
 
-Open `http://localhost:3500` for the read-only V4 status dashboard.
+Open `http://localhost:3500` for the interactive V4 Control Center.
+
+The Control Center is interactive: reorder accounts, set the next account, hold/reactivate, mark passed, remove pool membership, refresh safe last-known balances, and configure execution lanes. Balance refreshes defer any login that has an open trade.
+
+Open `http://localhost:3500/onboarding.html` to connect a login, scan the account labels visible in its browser, classify unknown accounts, assign pools, and save them directly to `data/registry.json`. Direct local setup actions are trusted automatically, so this page does not ask for the webhook secret. External trade webhooks still require the secret stored in `.env`.
+
+Use **Add another login** on that page to create a separate persistent Chromium session. Each login is isolated and serialized; separate logins can work concurrently through different pool execution lanes.

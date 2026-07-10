@@ -4,15 +4,18 @@ import { config } from "./config.js";
 import { TradeCoordinator } from "./coordinator.js";
 import { Registry } from "./registry.js";
 import { V4AlertSchema } from "./models.js";
-import { createWorkers } from "./workers.js";
 import { tradingDayKey } from "./tradingDay.js";
 import { log } from "./logger.js";
-import { notifyActionNeeded } from "./notify.js";
+import { notifyActionNeeded, notifyGoodNews } from "./notify.js";
+import { BalanceLog } from "./balances.js";
+import { ConnectionManager } from "./connectionManager.js";
+import { listEvents, pushEvent } from "./events.js";
 
 const registry = new Registry(config.registryPath);
-const workers = createWorkers(registry.connections());
+const workers = new ConnectionManager(registry.connections());
+const balances = new BalanceLog(config.balancesPath);
 const today = () => tradingDayKey(new Date(), config.tradingDayTz, config.tradingDayResetHour);
-const coordinator = new TradeCoordinator(registry, workers, config.poolStateDir, today);
+const coordinator = new TradeCoordinator(registry, workers, config.poolStateDir, today, balances);
 const app = express();
 app.use(express.json({ limit: "128kb" }));
 app.use(express.static(config.publicDir));
@@ -22,6 +25,16 @@ function validSecret(value: unknown): boolean {
   const expected = Buffer.from(config.webhookSecret);
   const actual = Buffer.from(value);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function isDirectLocalRequest(req: express.Request): boolean {
+  const address = req.socket.remoteAddress ?? "";
+  const loopback = address === "127.0.0.1" || address === "::1" || address.startsWith("::ffff:127.");
+  return loopback && !req.header("x-forwarded-for");
+}
+
+function adminAuthorized(req: express.Request): boolean {
+  return isDirectLocalRequest(req) || validSecret(req.header("x-webhook-secret") ?? req.body?.secret ?? req.query.secret);
 }
 
 function parseAuthorizedAlert(req: express.Request) {
@@ -37,7 +50,7 @@ app.get("/health", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
-    connections: [...workers.values()].map((worker) => worker.status()),
+    connections: workers.values().map((worker) => worker.status()),
   });
 });
 
@@ -46,13 +59,62 @@ app.get("/api/status", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
-    connections: [...workers.values()].map((worker) => ({ ...worker.definition, status: worker.status() })),
+    connections: workers.values().map((worker) => ({ ...worker.definition, accountCount: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).length, status: worker.status() })),
     pools: coordinator.status(),
+    events: listEvents(80),
   });
 });
 
+app.post("/api/connections", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const base = String(req.body?.name ?? "login").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "login";
+    let id = base; let suffix = 2;
+    while (registry.connection(id)) id = `${base}-${suffix++}`;
+    const connection = registry.addConnection({ id, name: String(req.body?.name ?? "").trim(), firm: String(req.body?.firm ?? "").trim(), adapter: "tradovate", url: String(req.body?.url ?? "https://trader.tradovate.com"), sessionDir: `.sessions/${id}`, accountPattern: String(req.body?.accountPattern ?? "[A-Z0-9][A-Z0-9_-]{5,}"), enabled: true, autoConnect: req.body?.autoConnect === true });
+    workers.add(connection);
+    pushEvent("info", `Added login ${connection.name} for ${connection.firm}.`);
+    return res.status(201).json({ ok: true, connection });
+  } catch (error) { return res.status(400).json({ ok: false, error: (error as Error).message }); }
+});
+
+app.delete("/api/connections/:id", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    if (coordinator.hasOpenTradeForConnection(req.params.id)) throw new Error("Connection has an open trade");
+    registry.removeConnection(req.params.id);
+    await workers.remove(req.params.id);
+    return res.json({ ok: true });
+  } catch (error) { return res.status(400).json({ ok: false, error: (error as Error).message }); }
+});
+
+app.post("/api/balances/refresh", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  const results = await coordinator.refreshBalances();
+  pushEvent("info", `Balance refresh finished: ${results.reduce((sum, item) => sum + item.refreshed, 0)} accounts updated.`);
+  return res.json({ ok: true, results });
+});
+
+app.post("/api/pools/:poolId/accounts/:accountId", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const { poolId, accountId } = req.params;
+    if (coordinator.accountForOpenTrade(poolId)?.id === accountId) throw new Error("This account has an open trade");
+    const action = String(req.body?.action ?? "");
+    if (action === "up" || action === "down") registry.movePoolAccount(poolId, accountId, action);
+    else if (action === "hold") registry.setAccountStatus(accountId, "held");
+    else if (action === "activate") registry.setAccountStatus(accountId, "active");
+    else if (action === "pass") registry.setAccountStatus(accountId, "passed");
+    else if (action === "remove") registry.removeAccountFromPool(poolId, accountId);
+    else if (action === "next") coordinator.setNext(poolId, accountId);
+    else throw new Error(`Unsupported action: ${action}`);
+    pushEvent("info", `${action} applied to ${accountId} in ${poolId}.`);
+    return res.json({ ok: true });
+  } catch (error) { return res.status(400).json({ ok: false, error: (error as Error).message }); }
+});
+
 app.post("/api/connections/:id/connect", async (req, res) => {
-  if (!validSecret(req.header("x-webhook-secret") ?? req.body?.secret)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
   try { await worker.connect(); return res.json({ ok: true, status: worker.status() }); }
@@ -60,7 +122,7 @@ app.post("/api/connections/:id/connect", async (req, res) => {
 });
 
 app.get("/api/connections/:id/accounts", async (req, res) => {
-  if (!validSecret(req.header("x-webhook-secret") ?? req.query.secret)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
   try {
@@ -68,6 +130,34 @@ app.get("/api/connections/:id/accounts", async (req, res) => {
     const known = registry.snapshot().accounts.filter((a) => a.connectionId === req.params.id).map((a) => a.platformLabel);
     return res.json({ ok: true, accounts, unknown: accounts.filter((label) => !known.includes(label)), missing: known.filter((label) => !accounts.includes(label)) });
   } catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
+});
+
+app.post("/api/accounts/onboard", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const account = registry.onboardAccount({
+      id: String(req.body?.id ?? "").trim(),
+      name: String(req.body?.name ?? "").trim(),
+      firm: String(req.body?.firm ?? "").trim(),
+      stage: req.body?.stage,
+      connectionId: String(req.body?.connectionId ?? "").trim(),
+      platformLabel: String(req.body?.platformLabel ?? "").trim(),
+      poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
+    });
+    return res.status(201).json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
+app.post("/api/pools/:id/lane", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const pool = registry.setPoolExecutionLane(req.params.id, String(req.body?.executionLane ?? ""));
+    return res.json({ ok: true, pool });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
 });
 
 app.post("/webhook/:poolId", async (req, res) => {
@@ -96,7 +186,7 @@ app.post("/webhook", async (req, res) => {
 });
 
 async function autoConnect(): Promise<void> {
-  await Promise.allSettled([...workers.values()].filter((w) => w.definition.autoConnect).map(async (worker) => {
+  await Promise.allSettled(workers.values().filter((w) => w.definition.autoConnect).map(async (worker) => {
     try { await worker.connect(); log.info(`Connected ${worker.definition.name}`); }
     catch (error) {
       const message = `${worker.definition.name} needs attention: ${(error as Error).message}`;
@@ -116,6 +206,21 @@ const healthTimer = setInterval(() => {
 }, config.healthCheckSeconds * 1_000);
 healthTimer.unref();
 
+const targetTimer = setInterval(() => {
+  void coordinator.monitorBalanceTargets().then((results) => {
+    for (const result of results) {
+      const message = `Evaluation target reached. ${result.message}`;
+      pushEvent("trade", message);
+      notifyGoodNews(message);
+    }
+  }).catch((error) => {
+    const message = `Balance target monitor needs attention: ${(error as Error).message}`;
+    pushEvent("error", message);
+    notifyActionNeeded(message);
+  });
+}, config.monitorActiveSeconds * 1_000);
+targetTimer.unref();
+
 const server = app.listen(config.port, config.host, () => {
   log.info(`V4 listening at http://${config.host}:${config.port}`);
   log.info(`Pools: ${registry.pools().map((pool) => pool.id).join(", ") || "none configured"}`);
@@ -124,7 +229,8 @@ const server = app.listen(config.port, config.host, () => {
 
 async function shutdown() {
   clearInterval(healthTimer);
-  await Promise.allSettled([...workers.values()].map((worker) => worker.disconnect()));
+  clearInterval(targetTimer);
+  await Promise.allSettled(workers.values().map((worker) => worker.disconnect()));
   server.close(() => process.exit(0));
 }
 process.on("SIGINT", () => void shutdown());

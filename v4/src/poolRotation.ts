@@ -32,6 +32,13 @@ export class PoolRotation {
   snapshot(): PoolState { return structuredClone(this.state); }
   get isFlat(): boolean { return this.state.openTrade === null; }
 
+  setNext(accountId: string, accounts: AccountDefinition[]): void {
+    if (this.state.openTrade) throw new Error(`Pool ${this.poolId} has an open trade`);
+    if (!accounts.some((account) => account.id === accountId)) throw new Error(`Account ${accountId} is not active in pool ${this.poolId}`);
+    this.state.nextAccountId = accountId;
+    this.save();
+  }
+
   select(accounts: AccountDefinition[], lockedAccountIds: Set<string>): AccountDefinition {
     if (this.state.openTrade) throw new Error(`Pool ${this.poolId} already has an open trade on ${this.state.openTrade.accountName}`);
     if (!accounts.length) throw new Error(`Pool ${this.poolId} has no enabled active accounts`);
@@ -45,7 +52,7 @@ export class PoolRotation {
     throw new Error(`Pool ${this.poolId} has no available accounts; every account is busy, held, or benched`);
   }
 
-  recordOpen(account: AccountDefinition, alert: V4Alert, simulated: boolean): OpenPoolTrade {
+  recordOpen(account: AccountDefinition, alert: V4Alert, simulated: boolean, entryBalance?: number): OpenPoolTrade {
     const open: OpenPoolTrade = {
       accountId: account.id,
       accountName: account.name,
@@ -57,6 +64,7 @@ export class PoolRotation {
       signalId: alert.signalId ?? alert.tradeId,
       openedAt: new Date().toISOString(),
       simulated,
+      entryBalance,
     };
     this.state.openTrade = open;
     this.state.nextAccountId = account.id;
