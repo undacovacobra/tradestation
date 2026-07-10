@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V4 Account Onboarding</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+  <header><div><p class="eyebrow">SCAN · CLASSIFY · SAVE</p><h1>Account onboarding</h1></div><a class="tag" href="/">Status</a></header>
+  <p class="notice">Connect each login, then scan the browser. V4 reads the account labels shown by that login. New accounts can be classified and assigned to pools here—no manual JSON editing required.</p>
+  <section class="toolbar form-card">
+    <label>Webhook secret<input id="secret" type="password" autocomplete="off" placeholder="From your .env file"></label>
+    <label>Login connection<select id="connection"></select></label>
+    <button id="connect" type="button">Connect login</button>
+    <button id="scan" type="button">Scan browser</button>
+  </section>
+  <p id="scan-status"></p>
+  <section><h2>Discovered accounts</h2><div id="discovered" class="stack"><p>Choose a connection and scan its browser.</p></div></section>
+  <section><h2>Configured but not found</h2><div id="missing" class="stack"><p>Nothing scanned yet.</p></div></section>
+</main><script src="/onboarding.js"></script></body>
+</html>

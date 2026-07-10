@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { RegistrySchema, type AccountDefinition, type ConnectionDefinition, type PoolDefinition, type RegistryData } from "./models.js";
+import { AccountSchema, RegistrySchema, type AccountDefinition, type ConnectionDefinition, type PoolDefinition, type RegistryData } from "./models.js";
 
 const EMPTY: RegistryData = { version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] };
 
@@ -50,6 +50,43 @@ export class Registry {
     const pool = this.pool(poolId);
     if (!pool) return [];
     return pool.accountIds.map((id) => this.account(id)).filter((a): a is AccountDefinition => Boolean(a?.enabled && a.status === "active"));
+  }
+
+  /** Save one browser-discovered account and attach it to existing rotation pools. */
+  onboardAccount(input: {
+    id: string;
+    name: string;
+    firm: string;
+    stage: "eval" | "funded";
+    connectionId: string;
+    platformLabel: string;
+    poolIds: string[];
+  }): AccountDefinition {
+    if (!this.connection(input.connectionId)) throw new Error(`Unknown connection: ${input.connectionId}`);
+    if (this.account(input.id)) throw new Error(`Account id already exists: ${input.id}`);
+    const sameLabel = this.data.accounts.find((account) => account.connectionId === input.connectionId && account.platformLabel === input.platformLabel);
+    if (sameLabel) throw new Error(`${input.platformLabel} is already configured as ${sameLabel.name}`);
+    const pools = [...new Set(input.poolIds)].map((id) => {
+      const pool = this.pool(id);
+      if (!pool) throw new Error(`Unknown pool: ${id}`);
+      return pool;
+    });
+    const account = AccountSchema.parse({
+      id: input.id,
+      name: input.name,
+      firm: input.firm,
+      stage: input.stage,
+      connectionId: input.connectionId,
+      platformLabel: input.platformLabel,
+      enabled: true,
+      status: "active",
+      tags: [],
+    });
+    this.data.accounts.push(account);
+    for (const pool of pools) if (!pool.accountIds.includes(account.id)) pool.accountIds.push(account.id);
+    this.validateReferences();
+    this.save();
+    return account;
   }
 
   replace(next: RegistryData): void {

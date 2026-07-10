@@ -70,6 +70,24 @@ app.get("/api/connections/:id/accounts", async (req, res) => {
   } catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
 });
 
+app.post("/api/accounts/onboard", (req, res) => {
+  if (!validSecret(req.header("x-webhook-secret") ?? req.body?.secret)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const account = registry.onboardAccount({
+      id: String(req.body?.id ?? "").trim(),
+      name: String(req.body?.name ?? "").trim(),
+      firm: String(req.body?.firm ?? "").trim(),
+      stage: req.body?.stage,
+      connectionId: String(req.body?.connectionId ?? "").trim(),
+      platformLabel: String(req.body?.platformLabel ?? "").trim(),
+      poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
+    });
+    return res.status(201).json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
 app.post("/webhook/:poolId", async (req, res) => {
   try {
     const alert = parseAuthorizedAlert(req);

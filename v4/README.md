@@ -137,3 +137,5 @@ npm start
 ```
 
 Open `http://localhost:3500` for the read-only V4 status dashboard.
+
+Open `http://localhost:3500/onboarding.html` to connect a login, scan the account labels visible in its browser, classify unknown accounts, assign pools, and save them directly to `data/registry.json`.
