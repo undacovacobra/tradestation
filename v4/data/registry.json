@@ -22,14 +22,16 @@
       "name": "Primary Evaluation Rotation",
       "accountIds": [],
       "enabled": true,
-      "benchWinnersForDay": true
+      "benchWinnersForDay": true,
+      "executionLane": "evals"
     },
     {
       "id": "funded-primary",
       "name": "Primary Funded Rotation",
       "accountIds": [],
       "enabled": true,
-      "benchWinnersForDay": true
+      "benchWinnersForDay": true,
+      "executionLane": "funded"
     }
   ]
 }

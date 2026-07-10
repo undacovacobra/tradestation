@@ -12,12 +12,13 @@ V4 is an isolated, multi-login account-rotation orchestrator. V2 and V3 remain u
 - Test webhooks are plan-only: they never click a broker and never alter rotation state.
 - A standalone `Send Test Webhook.cmd` tool works independently of the dashboard.
 - A broadcast webhook can fan one signal out to several pools.
+- Every pool has its own `/webhook/:poolId` URL and configurable execution lane.
 
 ## Safety model
 
 V4 defaults to `practice` mode and the included sample connection uses the `simulated` adapter. Change both intentionally before expecting live browser actions.
 
-Within one login, actions are serialized. Across independent logins, workers run concurrently. Browser-based execution cannot be atomic across firms; a broadcast response reports each leg separately.
+Within one login, actions are serialized. Across independent logins, workers run concurrently. Pools with different execution-lane names may hold trades at the same time; pools sharing a lane are mutually exclusive, so a conflicting entry is rejected while that lane is occupied. Browser-based execution cannot be atomic across firms; a broadcast response reports each leg separately.
 
 ## Registry
 
@@ -60,7 +61,8 @@ Edit `data/registry.json` to define the real-world model:
       "name": "Primary Evaluation Rotation",
       "accountIds": ["firm-a-eval-01"],
       "enabled": true,
-      "benchWinnersForDay": true
+      "benchWinnersForDay": true,
+      "executionLane": "evals"
     }
   ]
 }
@@ -108,6 +110,8 @@ POST http://localhost:3500/webhook
 
 Use `marketPosition: "flat"` or `action: "close"` to close the pool's recorded position.
 
+The Status page shows each pool's individual webhook path and lets you change its execution lane. Give funded and evaluation pools different lane names to allow simultaneous positions. Give pools the same lane name when they must take turns.
+
 ## Standalone test sender
 
 Open `http://localhost:3500/sender.html`, double-click `Send Test Webhook.cmd`, or run:
@@ -139,4 +143,4 @@ npm start
 
 Open `http://localhost:3500` for the read-only V4 status dashboard.
 
-Open `http://localhost:3500/onboarding.html` to connect a login, scan the account labels visible in its browser, classify unknown accounts, assign pools, and save them directly to `data/registry.json`.
+Open `http://localhost:3500/onboarding.html` to connect a login, scan the account labels visible in its browser, classify unknown accounts, assign pools, and save them directly to `data/registry.json`. Direct local setup actions are trusted automatically, so this page does not ask for the webhook secret. External trade webhooks still require the secret stored in `.env`.

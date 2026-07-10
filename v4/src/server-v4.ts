@@ -24,6 +24,16 @@ function validSecret(value: unknown): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+function isDirectLocalRequest(req: express.Request): boolean {
+  const address = req.socket.remoteAddress ?? "";
+  const loopback = address === "127.0.0.1" || address === "::1" || address.startsWith("::ffff:127.");
+  return loopback && !req.header("x-forwarded-for");
+}
+
+function adminAuthorized(req: express.Request): boolean {
+  return isDirectLocalRequest(req) || validSecret(req.header("x-webhook-secret") ?? req.body?.secret ?? req.query.secret);
+}
+
 function parseAuthorizedAlert(req: express.Request) {
   const parsed = V4AlertSchema.parse(req.body);
   const supplied = req.header("x-webhook-secret") ?? parsed.secret;
@@ -52,7 +62,7 @@ app.get("/api/status", (_req, res) => {
 });
 
 app.post("/api/connections/:id/connect", async (req, res) => {
-  if (!validSecret(req.header("x-webhook-secret") ?? req.body?.secret)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
   try { await worker.connect(); return res.json({ ok: true, status: worker.status() }); }
@@ -60,7 +70,7 @@ app.post("/api/connections/:id/connect", async (req, res) => {
 });
 
 app.get("/api/connections/:id/accounts", async (req, res) => {
-  if (!validSecret(req.header("x-webhook-secret") ?? req.query.secret)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
   try {
@@ -71,7 +81,7 @@ app.get("/api/connections/:id/accounts", async (req, res) => {
 });
 
 app.post("/api/accounts/onboard", (req, res) => {
-  if (!validSecret(req.header("x-webhook-secret") ?? req.body?.secret)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const account = registry.onboardAccount({
       id: String(req.body?.id ?? "").trim(),
@@ -83,6 +93,16 @@ app.post("/api/accounts/onboard", (req, res) => {
       poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
     });
     return res.status(201).json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
+app.post("/api/pools/:id/lane", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const pool = registry.setPoolExecutionLane(req.params.id, String(req.body?.executionLane ?? ""));
+    return res.json({ ok: true, pool });
   } catch (error) {
     return res.status(400).json({ ok: false, error: (error as Error).message });
   }

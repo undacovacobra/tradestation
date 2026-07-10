@@ -35,6 +35,7 @@ export const PoolSchema = z.object({
   accountIds: z.array(z.string().min(1)).default([]),
   enabled: z.boolean().default(true),
   benchWinnersForDay: z.boolean().default(true),
+  executionLane: z.string().min(1).optional(),
 });
 export type PoolDefinition = z.infer<typeof PoolSchema>;
 

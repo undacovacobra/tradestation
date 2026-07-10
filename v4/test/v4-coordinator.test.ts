@@ -26,7 +26,7 @@ class FakeAdapter implements ConnectionAdapter {
   async close() {}
 }
 
-function setup(mode: "practice" | "live" = "live") {
+function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string]) {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-coordinator-"));
   const connections: ConnectionDefinition[] = [
     { id: "c1", name: "Login 1", firm: "Firm A", adapter: "simulated", url: "https://example.com", sessionDir: ".s1", accountPattern: ".+", enabled: true, autoConnect: false },
@@ -39,8 +39,8 @@ function setup(mode: "practice" | "live" = "live") {
       { id: "a2", name: "B", firm: "Firm B", stage: "funded", connectionId: "c2", platformLabel: "Y2", enabled: true, status: "active", tags: [] },
     ],
     pools: [
-      { id: "p1", name: "Pool 1", accountIds: ["a1"], enabled: true, benchWinnersForDay: false },
-      { id: "p2", name: "Pool 2", accountIds: ["a2"], enabled: true, benchWinnersForDay: false },
+      { id: "p1", name: "Pool 1", accountIds: ["a1"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[0] },
+      { id: "p2", name: "Pool 2", accountIds: ["a2"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[1] },
     ],
   }));
   const workers = new Map<string, ConnectionWorker>(connections.map((c) => [c.id, new ConnectionWorker(c, new FakeAdapter(c.id))]));
@@ -53,6 +53,16 @@ test("broadcast runs independent logins concurrently", async () => {
   const results = await coordinator.handleMany(["p1", "p2"], { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   assert.equal(results.every((r) => r.ok), true);
   assert.equal(maxActive, 2);
+});
+
+test("pools in the same execution lane cannot open at the same time", async () => {
+  active = 0; maxActive = 0;
+  const { coordinator } = setup("live", ["shared", "shared"]);
+  const results = await coordinator.handleMany(["p1", "p2"], { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.equal(results.filter((result) => !result.ok).length, 1);
+  assert.match(results.find((result) => !result.ok)?.message ?? "", /execution lane shared is already in use/i);
+  assert.equal(maxActive, 1);
 });
 
 test("test webhook is plan-only and never opens pool state", async () => {

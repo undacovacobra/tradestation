@@ -89,6 +89,16 @@ export class Registry {
     return account;
   }
 
+  setPoolExecutionLane(poolId: string, executionLane: string): PoolDefinition {
+    const pool = this.pool(poolId);
+    if (!pool) throw new Error(`Unknown pool: ${poolId}`);
+    const lane = executionLane.trim();
+    if (!lane) throw new Error("Execution lane is required");
+    pool.executionLane = lane;
+    this.save();
+    return structuredClone(pool);
+  }
+
   replace(next: RegistryData): void {
     this.data = RegistrySchema.parse(next);
     this.validateReferences();

@@ -8,12 +8,11 @@ async function loadStatus() {
   document.querySelector("#connection").innerHTML = statusData.connections.map((c) => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.firm)}</option>`).join("");
 }
 
-function secret() { return document.querySelector("#secret").value.trim(); }
 function selectedConnection() { return statusData.connections.find((c) => c.id === document.querySelector("#connection").value); }
 
 document.querySelector("#connect").addEventListener("click", async () => {
   const connection = selectedConnection();
-  const response = await fetch(`/api/connections/${encodeURIComponent(connection.id)}/connect`, { method:"POST", headers:{"content-type":"application/json","x-webhook-secret":secret()}, body:"{}" });
+  const response = await fetch(`/api/connections/${encodeURIComponent(connection.id)}/connect`, { method:"POST", headers:{"content-type":"application/json"}, body:"{}" });
   const body = await response.json();
   document.querySelector("#scan-status").textContent = body.ok ? `${connection.name} is connected. Complete login/MFA in its browser if prompted, then scan.` : body.error;
 });
@@ -22,7 +21,7 @@ document.querySelector("#scan").addEventListener("click", async () => {
   const connection = selectedConnection();
   const message = document.querySelector("#scan-status");
   message.textContent = `Scanning ${connection.name}…`;
-  const response = await fetch(`/api/connections/${encodeURIComponent(connection.id)}/accounts`, { headers:{"x-webhook-secret":secret()} });
+  const response = await fetch(`/api/connections/${encodeURIComponent(connection.id)}/accounts`);
   const body = await response.json();
   if (!body.ok) { message.textContent = body.error; return; }
   message.textContent = `Found ${body.accounts.length} account label${body.accounts.length === 1 ? "" : "s"}.`;
@@ -47,7 +46,7 @@ async function saveAccount(button) {
   const card = button.closest("article");
   const connection = selectedConnection();
   const payload = {
-    secret: secret(), connectionId: connection.id, platformLabel: card.dataset.label,
+    connectionId: connection.id, platformLabel: card.dataset.label,
     id: card.querySelector('[name="id"]').value.trim(), name: card.querySelector('[name="name"]').value.trim(),
     firm: card.querySelector('[name="firm"]').value.trim(), stage: card.querySelector('[name="stage"]').value,
     poolIds: [...card.querySelectorAll('[name="pool"]:checked')].map((input) => input.value),

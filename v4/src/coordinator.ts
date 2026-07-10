@@ -10,6 +10,7 @@ export class TradeCoordinator {
   private readonly poolQueues = new Map<string, Promise<unknown>>();
   private readonly recentSignals = new Map<string, number>();
   private readonly reservedAccounts = new Map<string, string>();
+  private readonly reservedLanes = new Map<string, string>();
 
   constructor(
     private readonly registry: Registry,
@@ -25,6 +26,7 @@ export class TradeCoordinator {
   status() {
     return this.registry.pools().map((pool) => ({
       ...pool,
+      executionLane: pool.executionLane ?? pool.id,
       state: this.rotations.get(pool.id)?.snapshot(),
       accounts: this.registry.accountsInPool(pool.id),
     }));
@@ -53,6 +55,19 @@ export class TradeCoordinator {
     return locked;
   }
 
+  private executionLane(poolId: string): string {
+    return this.registry.pool(poolId)?.executionLane ?? poolId;
+  }
+
+  private laneOwner(lane: string, exceptPoolId: string): string | undefined {
+    const reservedBy = this.reservedLanes.get(lane);
+    if (reservedBy && reservedBy !== exceptPoolId) return reservedBy;
+    for (const [poolId, rotation] of this.rotations) {
+      if (poolId !== exceptPoolId && this.executionLane(poolId) === lane && rotation.snapshot().openTrade) return poolId;
+    }
+    return undefined;
+  }
+
   async handle(poolId: string, alert: V4Alert): Promise<TradeResult> {
     return this.enqueuePool(poolId, async () => {
       if (!this.registry.running) throw new Error("V4 is paused");
@@ -70,6 +85,10 @@ export class TradeCoordinator {
 
       if (isCloseAlert(alert)) return this.close(poolId, alert, rotation);
       if (alert.action !== "buy" && alert.action !== "sell") throw new Error(`Unsupported entry action: ${alert.action}`);
+
+      const lane = this.executionLane(poolId);
+      const laneOwner = this.laneOwner(lane, poolId);
+      if (laneOwner) throw new Error(`Execution lane ${lane} is already in use by pool ${laneOwner}`);
 
       const accounts = this.registry.accountsInPool(poolId);
       const account = rotation.select(accounts, this.lockedAccounts(poolId));
@@ -89,6 +108,7 @@ export class TradeCoordinator {
       }
 
       this.reservedAccounts.set(account.id, poolId);
+      this.reservedLanes.set(lane, poolId);
       try {
         if (!simulated) {
           const status = worker.status();
@@ -98,6 +118,7 @@ export class TradeCoordinator {
         rotation.recordOpen(account, alert, simulated);
       } finally {
         this.reservedAccounts.delete(account.id);
+        this.reservedLanes.delete(lane);
       }
       if (duplicateKey) this.recentSignals.set(duplicateKey, now);
       return {

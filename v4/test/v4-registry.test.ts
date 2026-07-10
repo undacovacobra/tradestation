@@ -20,3 +20,15 @@ test("browser-discovered account can be classified and attached to pools", () =>
   assert.deepEqual(registry.pool("eval-primary")?.accountIds, ["seed", "firm-eval-2"]);
   assert.equal(new Registry(path).account("firm-eval-2")?.stage, "eval");
 });
+
+test("execution lane can be changed and persists", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-lane-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice", connections: [], accounts: [],
+    pools: [{ id: "eval-primary", name: "Eval", accountIds: [], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  registry.setPoolExecutionLane("eval-primary", "weekday-cycle");
+  assert.equal(new Registry(path).pool("eval-primary")?.executionLane, "weekday-cycle");
+});
