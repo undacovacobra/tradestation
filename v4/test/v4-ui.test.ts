@@ -72,6 +72,7 @@ test("V4 server exposes and manages the public ngrok tunnel", () => {
   assert.match(server, /tunnelStatus/);
   assert.match(server, /tunnel:\s*tunnelStatus\(\)/);
   assert.match(server, /\/api\/tunnel\/connect/);
+  assert.match(server, /config\.ngrokAutostart[\s\S]*connectTunnel\(\)/);
 });
 
 test("control center shows whether each next account is actually pre-armed", () => {

@@ -288,6 +288,10 @@ async function autoConnect(): Promise<void> {
 }
 
 const healthTimer = setInterval(() => {
+  const tunnel = tunnelStatus();
+  if (config.ngrokAutostart && tunnel.state !== "on" && tunnel.state !== "connecting") {
+    void connectTunnel().catch((error) => log.warn(`Ngrok reconnect failed: ${(error as Error).message}`));
+  }
   for (const worker of workers.values()) {
     const status = worker.status();
     if (worker.definition.autoConnect && (!status.connected || !status.loggedIn) && !status.busy) {
