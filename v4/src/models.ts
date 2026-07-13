@@ -26,6 +26,12 @@ export const AccountSchema = z.object({
   enabled: z.boolean().default(true),
   status: z.enum(["active", "passed", "held"]).default("active"),
   tags: z.array(z.string().min(1)).default([]),
+  targetPerContract: z.number().nonnegative().default(0),
+  stopPerContract: z.number().nonnegative().default(0),
+}).superRefine((account, ctx) => {
+  const targetSet = account.targetPerContract > 0;
+  const stopSet = account.stopPerContract > 0;
+  if (targetSet !== stopSet) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Take profit and stop loss must both be positive or both be zero" });
 });
 export type AccountDefinition = z.infer<typeof AccountSchema>;
 

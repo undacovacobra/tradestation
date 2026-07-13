@@ -43,6 +43,8 @@ function accountForm(connection, label, account) {
     <label>Friendly name<input name="name" value="${esc(account?.name || label)}"></label>
     <label>Firm<input name="firm" value="${esc(account?.firm || connection.firm)}"></label>
     <label>Stage<select name="stage"><option value="eval"${stage === "eval" ? " selected" : ""}>Evaluation</option><option value="funded"${stage === "funded" ? " selected" : ""}>Funded</option></select></label>
+    <label>Take profit / contract ($)<input name="targetPerContract" type="number" min="0" step="0.01" value="${esc(account?.targetPerContract ?? 0)}"></label>
+    <label>Stop loss / contract ($)<input name="stopPerContract" type="number" min="0" step="0.01" value="${esc(account?.stopPerContract ?? 0)}"></label>
   </div><div class="pool-list"><strong>Rotation pools</strong>${poolChecks || "<p>No rotation pools are configured.</p>"}</div><button type="button" onclick="saveAccount(this)">${account ? "Save changes" : "Save account"}</button><p class="save-result"></p></article>`;
 }
 
@@ -52,6 +54,8 @@ async function saveAccount(button) {
     name: card.querySelector('[name="name"]').value.trim(),
     firm: card.querySelector('[name="firm"]').value.trim(), stage: card.querySelector('[name="stage"]').value,
     poolIds: [...card.querySelectorAll('[name="pool"]:checked')].map((input) => input.value),
+    targetPerContract: Number(card.querySelector('[name="targetPerContract"]').value),
+    stopPerContract: Number(card.querySelector('[name="stopPerContract"]').value),
   };
   const accountId = card.dataset.accountId;
   if (!accountId) {
@@ -74,6 +78,19 @@ async function saveAccount(button) {
 }
 window.saveAccount = saveAccount;
 loadStatus().catch((error) => { document.querySelector("#scan-status").textContent = error.message; });
+
+document.querySelector("#test-bracket").addEventListener("click", async () => {
+  const connection = selectedConnection();
+  const result = document.querySelector("#bracket-result");
+  const targetPerContract = Number(document.querySelector("#test-target").value);
+  const stopPerContract = Number(document.querySelector("#test-stop").value);
+  result.textContent = `Checking ${connection.name} — no trade will be placed…`;
+  const response = await fetch(`/api/connections/${encodeURIComponent(connection.id)}/test-bracket`, {
+    method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ targetPerContract, stopPerContract }),
+  });
+  const body = await response.json();
+  result.textContent = body.ok ? `Verified: +$${body.targetPerContract} take profit / -$${body.stopPerContract} stop per contract. No trade placed.` : body.error;
+});
 
 document.querySelector("#show-add-login").addEventListener("click", () => { document.querySelector("#add-login-panel").hidden = !document.querySelector("#add-login-panel").hidden; });
 document.querySelector("#save-login").addEventListener("click", async () => {

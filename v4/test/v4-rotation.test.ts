@@ -7,8 +7,8 @@ import { PoolRotation } from "../src/poolRotation.js";
 import type { AccountDefinition, V4Alert } from "../src/models.js";
 
 const accounts: AccountDefinition[] = [
-  { id: "a1", name: "Eval 1", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "ANY-LABEL-1", enabled: true, status: "active", tags: [] },
-  { id: "a2", name: "Funded 1", firm: "Other Firm", stage: "funded", connectionId: "c2", platformLabel: "NO_PREFIX_REQUIRED", enabled: true, status: "active", tags: [] },
+  { id: "a1", name: "Eval 1", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "ANY-LABEL-1", enabled: true, status: "active", tags: [], targetPerContract: 0, stopPerContract: 0 },
+  { id: "a2", name: "Funded 1", firm: "Other Firm", stage: "funded", connectionId: "c2", platformLabel: "NO_PREFIX_REQUIRED", enabled: true, status: "active", tags: [], targetPerContract: 0, stopPerContract: 0 },
 ];
 const entry: V4Alert = { action: "buy", symbol: "MNQ", quantity: 1, test: false };
 

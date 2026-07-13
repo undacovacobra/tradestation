@@ -19,6 +19,13 @@
     <button id="save-login" type="button">Create saved login</button><p id="login-result"></p>
   </section>
   <p id="scan-status"></p>
+  <section class="form-card">
+    <div><h2>Test dollar bracket</h2><p>Sets and verifies the selected login's Tradovate ATM values without placing a trade.</p></div>
+    <label>Take profit per contract ($)<input id="test-target" type="number" min="0.01" step="0.01" value="30"></label>
+    <label>Stop loss per contract ($)<input id="test-stop" type="number" min="0.01" step="0.01" value="20"></label>
+    <button id="test-bracket" type="button">Test bracket — no trade</button>
+    <p id="bracket-result"></p>
+  </section>
   <section><h2>Discovered accounts</h2><div id="discovered" class="stack"><p>Choose a connection and scan its browser.</p></div></section>
   <section><h2>Configured but not found</h2><div id="missing" class="stack"><p>Nothing scanned yet.</p></div></section>
 </main><script src="/onboarding.js"></script></body>
