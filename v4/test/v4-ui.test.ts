@@ -38,7 +38,7 @@ test("control center renders every rotation with explicit account controls", () 
   assert.match(app, /Make next/);
   assert.match(app, /Skip today/);
   assert.match(app, /Resume today/);
-  assert.match(app, /Remove from rotation/);
+  assert.match(app, /Delete account/);
   assert.match(app, /targetPerContract/);
   assert.match(app, /stopPerContract/);
   assert.match(app, /TP \$/);
@@ -52,6 +52,16 @@ test("control center renders every rotation with explicit account controls", () 
   assert.match(app, /button\.disabled\s*=\s*true/);
   assert.match(app, /balances updated/);
   assert.match(app, /not updated/);
+  assert.match(app, /accountErrors/);
+  assert.match(app, /platformLabel/);
+});
+
+test("control center shows a real copyable URL for every pool webhook", () => {
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  assert.match(app, /new URL\(`\/webhook\/\$\{encodeURIComponent\(poolId\)\}`,\s*window\.location\.origin\)\.href/);
+  assert.match(app, /navigator\.clipboard\.writeText/);
+  assert.match(app, /Copy webhook/);
+  assert.match(app, /Permanently delete this account from V4 and every rotation\?/);
 });
 
 test("control center shows whether each next account is actually pre-armed", () => {

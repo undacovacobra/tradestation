@@ -26,7 +26,7 @@ function renderPool(pool) {
     : pool.prearmError
       ? `<p class="error"><span class="pill bad">Pre-arm failed</span> ${esc(pool.prearmError)}</p>`
       : `<p><span class="pill">Not armed</span> Click Make next to prepare the account.</p>`;
-  return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>/webhook/${esc(pool.id)} · lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
+  return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>Lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p><p><strong>Webhook:</strong> <code>${esc(poolWebhookUrl(pool.id))}</code> <button onclick="copyWebhook('${esc(pool.id)}')">Copy webhook</button></p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
   ${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
   <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button></div></article>`;
 }
@@ -47,10 +47,16 @@ function renderAccountRow(pool, account, index) {
   const key = `${pool.id}-${account.id}`;
   const bracketStatus = configured ? `TP +${money(account.targetPerContract)} / SL -${money(account.stopPerContract)} per contract` : `<span class="bracket-warning">Unconfigured — trade blocked</span>`;
   const bracket = `${bracketStatus}<span class="bracket-controls"><label>TP $<input id="tp-${esc(key)}" type="number" min="0" step="0.01" value="${esc(account.targetPerContract)}"></label><label>SL $<input id="sl-${esc(key)}" type="number" min="0" step="0.01" value="${esc(account.stopPerContract)}"></label><button ${hasOpenTrade ? "disabled" : ""} onclick="saveBracket('${esc(pool.id)}','${esc(account.id)}')">Save bracket</button></span>`;
-  return `<tr class="${rowClass}"><td>${index+1}</td><td><strong>${account.isNext?"→ NEXT · ":""}${esc(account.name)}</strong><small>${esc(account.platformLabel)} · ${esc(account.stage)}</small><small>${bracket}</small></td><td>${esc(data.connections.find((connection)=>connection.id===account.connectionId)?.name || account.connectionId)}<small>${esc(account.firm)}</small></td><td><strong>${money(account.balance)}</strong><small>${age(account.balanceUpdatedAt)}${account.toTarget!=null ? ` · ${money(account.toTarget)} to target` : ""}</small></td><td><span class="pill ${statusClass}">${esc(status)}</span></td><td><div class="account-actions"><button ${nextDisabled ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','next')">Make next</button>${dailyControl}${persistentControl}<button class="danger" ${hasOpenTrade ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','remove',true)">Remove from rotation</button></div></td></tr>`;
+  return `<tr class="${rowClass}"><td>${index+1}</td><td><strong>${account.isNext?"→ NEXT · ":""}${esc(account.name)}</strong><small>${esc(account.platformLabel)} · ${esc(account.stage)}</small><small>${bracket}</small></td><td>${esc(data.connections.find((connection)=>connection.id===account.connectionId)?.name || account.connectionId)}<small>${esc(account.firm)}</small></td><td><strong>${money(account.balance)}</strong><small>${age(account.balanceUpdatedAt)}${account.toTarget!=null ? ` · ${money(account.toTarget)} to target` : ""}</small></td><td><span class="pill ${statusClass}">${esc(status)}</span></td><td><div class="account-actions"><button ${nextDisabled ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','next')">Make next</button>${dailyControl}${persistentControl}<button class="danger" ${hasOpenTrade ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','remove',true)">Delete account</button></div></td></tr>`;
 }
 
-async function accountAction(poolId, accountId, action, confirmFirst=false) { if (confirmFirst && !confirm("Remove this account from this pool?")) return; await post(`/api/pools/${encodeURIComponent(poolId)}/accounts/${encodeURIComponent(accountId)}`, { action }); }
+function poolWebhookUrl(poolId) { return new URL(`/webhook/${encodeURIComponent(poolId)}`, window.location.origin).href; }
+async function copyWebhook(poolId) {
+  const url = poolWebhookUrl(poolId);
+  await navigator.clipboard.writeText(url);
+  document.querySelector("#action-result").textContent = `Copied ${url}`;
+}
+async function accountAction(poolId, accountId, action, confirmFirst=false) { if (confirmFirst && !confirm("Permanently delete this account from V4 and every rotation?")) return; await post(`/api/pools/${encodeURIComponent(poolId)}/accounts/${encodeURIComponent(accountId)}`, { action }); }
 async function saveLane(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/lane`, { executionLane:document.getElementById(`lane-${poolId}`).value.trim() }); }
 async function saveBracket(poolId, accountId) {
   const key = `${poolId}-${accountId}`;
@@ -64,11 +70,15 @@ async function saveBracket(poolId, accountId) {
 async function post(url, body) { const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); const result=await response.json(); document.querySelector("#action-result").textContent=result.ok?"Saved.":result.error; await refresh(); }
 function summarizeBalanceRefresh(results) {
   const updated = results.reduce((sum, item) => sum + item.refreshed, 0);
-  const enabled = data.accounts.filter((account) => account.enabled).length;
+  const activeIds = new Set(data.pools.filter((pool) => pool.enabled !== false).flatMap((pool) => pool.accounts.filter((account) => account.enabled).map((account) => account.id)));
+  const enabled = activeIds.size;
   const notUpdated = Math.max(0, enabled - updated);
   const deferred = results.filter((item) => item.deferred).length;
-  const errors = results.filter((item) => item.error).map((item) => item.error);
-  return `${updated} balances updated; ${notUpdated} not updated.${deferred ? ` ${deferred} login${deferred === 1 ? "" : "s"} deferred because a trade is open.` : ""}${errors.length ? ` ${errors[0]}` : ""}`;
+  const errors = results.flatMap((item) => [
+    ...(item.error ? [item.error] : []),
+    ...(item.accountErrors || []).map((accountError) => `${accountError.platformLabel}: ${accountError.error}`),
+  ]);
+  return `${updated} balances updated; ${notUpdated} not updated.${deferred ? ` ${deferred} login${deferred === 1 ? "" : "s"} deferred because a trade is open.` : ""}${errors.length ? ` Problems: ${errors.join(" | ")}` : ""}`;
 }
 document.querySelector("#refresh-balances").addEventListener("click", async () => {
   const button = document.querySelector("#refresh-balances");
@@ -86,5 +96,5 @@ document.querySelector("#refresh-balances").addEventListener("click", async () =
     button.disabled = false;
   }
 });
-window.accountAction=accountAction; window.saveLane=saveLane; window.saveBracket=saveBracket;
+window.accountAction=accountAction; window.saveLane=saveLane; window.saveBracket=saveBracket; window.copyWebhook=copyWebhook;
 refresh().catch((error)=>{ document.querySelector("#overall").textContent="Offline"; document.querySelector("#action-result").textContent=error.message; }); setInterval(refresh,5000);
