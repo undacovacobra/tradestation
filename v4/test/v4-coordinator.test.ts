@@ -14,11 +14,12 @@ class FakeAdapter implements ConnectionAdapter {
   balance = 50_000;
   closes = 0;
   prepares: string[] = [];
+  connected = true;
   constructor(private readonly id: string) {}
   async connect() {}
   async recover() {}
   async disconnect() {}
-  status(): WorkerStatus { return { connectionId: this.id, connected: true, loggedIn: true, busy: false, selectedAccount: null }; }
+  status(): WorkerStatus { return { connectionId: this.id, connected: this.connected, loggedIn: this.connected, busy: false, selectedAccount: null }; }
   async discoverAccounts() { return []; }
   async setBracket() {}
   async inspectFields() { return []; }
@@ -37,7 +38,7 @@ class FakeAdapter implements ConnectionAdapter {
   async readSettledBalance() { return this.balance; }
 }
 
-function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number) {
+function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number, sameConnection = false) {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-coordinator-"));
   const connections: ConnectionDefinition[] = [
     { id: "c1", name: "Login 1", firm: "Firm A", adapter: "simulated", url: "https://example.com", sessionDir: ".s1", accountPattern: ".+", enabled: true, autoConnect: false },
@@ -47,7 +48,7 @@ function setup(mode: "practice" | "live" = "live", executionLanes?: [string, str
     version: 4, running: true, mode, connections,
     accounts: [
       { id: "a1", name: "A", firm: "Firm A", stage: "eval", connectionId: "c1", platformLabel: "X1", enabled: true, status: "active", tags: [] },
-      { id: "a2", name: "B", firm: "Firm B", stage: "funded", connectionId: "c2", platformLabel: "Y2", enabled: true, status: "active", tags: [] },
+      { id: "a2", name: "B", firm: "Firm B", stage: "funded", connectionId: sameConnection ? "c1" : "c2", platformLabel: "Y2", enabled: true, status: "active", tags: [] },
     ],
     pools: [
       { id: "p1", name: "Pool 1", accountIds: ["a1"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[0], balanceTarget: evalTarget },
@@ -105,16 +106,16 @@ test("funded pool never uses the evaluation balance target", async () => {
   assert.equal(adapters.get("c2")!.closes, 0);
 });
 
-test("coordinator exposes skip-today status and allows resuming the account", () => {
+test("coordinator exposes skip-today status and allows resuming the account", async () => {
   const { coordinator } = setup("live");
-  coordinator.skipToday("p1", "a1");
+  await coordinator.skipToday("p1", "a1");
   const skipped = coordinator.status().find((pool) => pool.id === "p1")?.accounts.find((account) => account.id === "a1");
   assert.equal(skipped?.skippedToday, true);
   assert.equal(skipped?.isNext, false);
-  assert.throws(() => coordinator.setNext("p1", "a1"), /skipped for today/i);
+  await assert.rejects(() => coordinator.setNext("p1", "a1"), /skipped for today/i);
 
-  coordinator.resumeToday("p1", "a1");
-  coordinator.setNext("p1", "a1");
+  await coordinator.resumeToday("p1", "a1");
+  await coordinator.setNext("p1", "a1");
   const resumed = coordinator.status().find((pool) => pool.id === "p1")?.accounts.find((account) => account.id === "a1");
   assert.equal(resumed?.skippedToday, false);
   assert.equal(resumed?.isNext, true);
@@ -124,6 +125,54 @@ test("daily rotation controls reject the account holding an open trade", async (
   const { coordinator } = setup("live");
   await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   assert.equal(coordinator.hasOpenTradeForAccount("a1"), true);
-  assert.throws(() => coordinator.skipToday("p1", "a1"), /open trade/i);
-  assert.throws(() => coordinator.resumeToday("p1", "a1"), /open trade/i);
+  await assert.rejects(() => coordinator.skipToday("p1", "a1"), /open trade/i);
+  await assert.rejects(() => coordinator.resumeToday("p1", "a1"), /open trade/i);
+});
+
+test("Make Next pre-arms that account and status reports the exact armed bracket", async () => {
+  const { coordinator, adapters } = setup("live");
+  await coordinator.setNext("p1", "a1");
+  const pool = coordinator.status().find((item) => item.id === "p1");
+  assert.equal(pool?.armed, true);
+  assert.equal(pool?.armedAccountId, "a1");
+  assert.equal(pool?.prearmError, undefined);
+  assert.deepEqual(adapters.get("c1")?.prepares, ["a1"]);
+});
+
+test("different logins can stay armed independently and entry uses the prepared fast path", async () => {
+  const { coordinator, adapters } = setup("live");
+  await coordinator.prearmConnection("c1");
+  await coordinator.prearmConnection("c2");
+  const status = coordinator.status();
+  assert.equal(status.find((pool) => pool.id === "p1")?.armed, true);
+  assert.equal(status.find((pool) => pool.id === "p2")?.armed, true);
+  await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  assert.deepEqual(adapters.get("c1")?.prepares, ["a1"]);
+});
+
+test("closing a trade advances and immediately re-arms the resulting next account", async () => {
+  const { coordinator, adapters } = setup("live");
+  await coordinator.prearmPool("p1");
+  await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  await coordinator.handle("p1", { action: "close", symbol: "MNQ", test: false });
+  assert.equal(coordinator.status().find((pool) => pool.id === "p1")?.armed, true);
+  assert.deepEqual(adapters.get("c1")?.prepares, ["a1", "a1"]);
+});
+
+test("one login exposes only its last prepared account as armed across multiple pools", async () => {
+  const { coordinator, adapters } = setup("live", undefined, undefined, true);
+  await coordinator.prearmConnection("c1");
+  const status = coordinator.status();
+  assert.equal(status.find((pool) => pool.id === "p1")?.armed, false);
+  assert.equal(status.find((pool) => pool.id === "p2")?.armed, true);
+  assert.deepEqual(adapters.get("c1")?.prepares, ["a1", "a2"]);
+});
+
+test("a failed pre-arm is visible and never claims the pool is ready", async () => {
+  const { coordinator, adapters } = setup("live");
+  adapters.get("c1")!.connected = false;
+  await coordinator.prearmPool("p1");
+  const pool = coordinator.status().find((item) => item.id === "p1");
+  assert.equal(pool?.armed, false);
+  assert.match(pool?.prearmError ?? "", /not connected and logged in/i);
 });

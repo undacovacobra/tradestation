@@ -13,6 +13,7 @@ export class TradeCoordinator {
   private readonly reservedAccounts = new Map<string, string>();
   private readonly reservedLanes = new Map<string, string>();
   private readonly targetChecks = new Set<string>();
+  private readonly prearmErrors = new Map<string, string>();
 
   constructor(
     private readonly registry: Registry,
@@ -36,10 +37,16 @@ export class TradeCoordinator {
         try { nextAccountId = rotation.select(this.registry.accountsInPool(pool.id), this.lockedAccounts(pool.id)).id; }
         catch { nextAccountId = null; }
       }
+      const nextAccount = nextAccountId ? this.registry.account(nextAccountId) : undefined;
+      const nextWorker = nextAccount ? this.workers.get(nextAccount.connectionId) : undefined;
+      const armedAccountId = nextWorker?.status().armed?.accountId;
       return {
         ...pool,
         executionLane: pool.executionLane ?? pool.id,
         state: state ? { ...state, nextAccountId } : undefined,
+        armed: Boolean(nextAccount && nextWorker?.isArmed(nextAccount)),
+        armedAccountId: armedAccountId ?? null,
+        prearmError: this.prearmErrors.get(pool.id),
         accounts: pool.accountIds.map((id) => this.registry.account(id)).filter((account): account is AccountDefinition => Boolean(account)).map((account) => {
           const record = balanceSnapshot[account.id];
           return {
@@ -138,10 +145,7 @@ export class TradeCoordinator {
         if (!simulated) {
           const status = worker.status();
           if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-          await worker.run(async (adapter) => {
-            entryBalance = await adapter.readBalance(account);
-            await adapter.enter(account, alert);
-          });
+          entryBalance = await worker.enter(account, alert);
           if (entryBalance != null) this.balances?.set(account.id, entryBalance);
         }
         rotation.recordOpen(account, alert, simulated, entryBalance ?? undefined);
@@ -183,6 +187,7 @@ export class TradeCoordinator {
     if (!simulated) {
       const status = worker.status();
       if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected; the open trade was not touched`);
+      worker.invalidateArmed();
       await worker.run(async (adapter) => {
         await adapter.close(account);
         exitBalance = await adapter.readSettledBalance(account);
@@ -191,6 +196,7 @@ export class TradeCoordinator {
     }
     const won = exitBalance != null && open.entryBalance != null ? exitBalance > open.entryBalance : undefined;
     rotation.recordClose(this.registry.accountsInPool(poolId), won);
+    await this.prearmPool(poolId);
     return {
       ok: true,
       poolId,
@@ -222,24 +228,61 @@ export class TradeCoordinator {
     return [...this.rotations.values()].some((rotation) => rotation.snapshot().openTrade?.accountId === accountId);
   }
 
-  setNext(poolId: string, accountId: string): void {
+  async setNext(poolId: string, accountId: string): Promise<void> {
     const rotation = this.rotations.get(poolId);
     if (!rotation) throw new Error(`Unknown pool: ${poolId}`);
     rotation.setNext(accountId, this.registry.accountsInPool(poolId));
+    await this.prearmPool(poolId);
   }
 
-  skipToday(poolId: string, accountId: string): void {
+  async skipToday(poolId: string, accountId: string): Promise<void> {
     const rotation = this.rotations.get(poolId);
     if (!rotation) throw new Error(`Unknown pool: ${poolId}`);
     rotation.skipToday(accountId, this.registry.accountsInPool(poolId));
+    await this.prearmPool(poolId);
   }
 
-  resumeToday(poolId: string, accountId: string): void {
+  async resumeToday(poolId: string, accountId: string): Promise<void> {
     const rotation = this.rotations.get(poolId);
     const pool = this.registry.pool(poolId);
     if (!rotation || !pool) throw new Error(`Unknown pool: ${poolId}`);
     if (!pool.accountIds.includes(accountId)) throw new Error(`Account ${accountId} is not in pool ${poolId}`);
     rotation.resumeToday(accountId);
+    await this.prearmPool(poolId);
+  }
+
+  async prearmPool(poolId: string): Promise<void> {
+    const rotation = this.rotations.get(poolId);
+    if (!rotation) throw new Error(`Unknown pool: ${poolId}`);
+    if (rotation.snapshot().openTrade) return;
+    try {
+      const account = rotation.select(this.registry.accountsInPool(poolId), this.lockedAccounts(poolId));
+      const worker = this.workers.get(account.connectionId);
+      if (!worker) throw new Error(`No worker for connection ${account.connectionId}`);
+      const status = worker.status();
+      if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
+      await worker.prearm(account);
+      this.prearmErrors.delete(poolId);
+    } catch (error) {
+      this.prearmErrors.set(poolId, (error as Error).message);
+    }
+  }
+
+  async prearmConnection(connectionId: string): Promise<void> {
+    for (const pool of this.registry.pools()) {
+      const rotation = this.rotations.get(pool.id);
+      if (!pool.enabled || !rotation || rotation.snapshot().openTrade) continue;
+      try {
+        const next = rotation.select(this.registry.accountsInPool(pool.id), this.lockedAccounts(pool.id));
+        if (next.connectionId === connectionId) await this.prearmPool(pool.id);
+      } catch (error) {
+        this.prearmErrors.set(pool.id, (error as Error).message);
+      }
+    }
+  }
+
+  async prearmPoolsForAccount(accountId: string): Promise<void> {
+    for (const pool of this.registry.pools()) if (pool.accountIds.includes(accountId)) await this.prearmPool(pool.id);
   }
 
   async refreshBalances(): Promise<Array<{ connectionId: string; refreshed: number; deferred: boolean; error?: string }>> {
@@ -253,11 +296,13 @@ export class TradeCoordinator {
       }
       let refreshed = 0;
       try {
+        worker.invalidateArmed();
         for (const account of this.registry.snapshot().accounts.filter((item) => item.connectionId === connection.id && item.enabled)) {
           const balance = await worker.run((adapter) => adapter.readBalance(account));
           if (balance != null) { this.balances?.set(account.id, balance); refreshed++; }
         }
         results.push({ connectionId: connection.id, refreshed, deferred: false });
+        await this.prearmConnection(connection.id);
       } catch (error) {
         results.push({ connectionId: connection.id, refreshed, deferred: false, error: (error as Error).message });
       }

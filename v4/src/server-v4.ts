@@ -96,21 +96,22 @@ app.post("/api/balances/refresh", async (req, res) => {
   return res.json({ ok: true, results });
 });
 
-app.post("/api/pools/:poolId/accounts/:accountId", (req, res) => {
+app.post("/api/pools/:poolId/accounts/:accountId", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const { poolId, accountId } = req.params;
     if (coordinator.hasOpenTradeForAccount(accountId)) throw new Error("This account has an open trade");
     const action = String(req.body?.action ?? "");
     if (action === "up" || action === "down") registry.movePoolAccount(poolId, accountId, action);
-    else if (action === "skip-today") coordinator.skipToday(poolId, accountId);
-    else if (action === "resume-today") coordinator.resumeToday(poolId, accountId);
+    else if (action === "skip-today") await coordinator.skipToday(poolId, accountId);
+    else if (action === "resume-today") await coordinator.resumeToday(poolId, accountId);
     else if (action === "hold") registry.setAccountStatus(accountId, "held");
     else if (action === "activate") registry.setAccountStatus(accountId, "active");
     else if (action === "pass") registry.setAccountStatus(accountId, "passed");
     else if (action === "remove") registry.removeAccountFromPool(poolId, accountId);
-    else if (action === "next") coordinator.setNext(poolId, accountId);
+    else if (action === "next") await coordinator.setNext(poolId, accountId);
     else throw new Error(`Unsupported action: ${action}`);
+    if (!["skip-today", "resume-today", "next"].includes(action)) await coordinator.prearmPool(poolId);
     pushEvent("info", `${action} applied to ${accountId} in ${poolId}.`);
     return res.json({ ok: true });
   } catch (error) { return res.status(400).json({ ok: false, error: (error as Error).message }); }
@@ -120,7 +121,7 @@ app.post("/api/connections/:id/connect", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
-  try { await worker.connect(); return res.json({ ok: true, status: worker.status() }); }
+  try { await worker.connect(); await coordinator.prearmConnection(worker.definition.id); return res.json({ ok: true, status: worker.status() }); }
   catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
 });
 
@@ -134,6 +135,7 @@ app.post("/api/connections/:id/test-bracket", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Enter a positive take profit and stop loss." });
   }
   try {
+    worker.invalidateArmed();
     await worker.run((adapter) => adapter.setBracket(targetPerContract, stopPerContract, true));
     pushEvent("info", `Verified +$${targetPerContract} / -$${stopPerContract} ATM bracket on ${worker.definition.name}; no trade placed.`);
     return res.json({ ok: true, targetPerContract, stopPerContract, placedTrade: false });
@@ -164,7 +166,7 @@ app.get("/api/connections/:id/accounts", async (req, res) => {
   } catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
 });
 
-app.post("/api/accounts/onboard", (req, res) => {
+app.post("/api/accounts/onboard", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const account = registry.onboardAccount({
@@ -178,13 +180,14 @@ app.post("/api/accounts/onboard", (req, res) => {
       targetPerContract: Number(req.body?.targetPerContract ?? 0),
       stopPerContract: Number(req.body?.stopPerContract ?? 0),
     });
+    await coordinator.prearmPoolsForAccount(account.id);
     return res.status(201).json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
   } catch (error) {
     return res.status(400).json({ ok: false, error: (error as Error).message });
   }
 });
 
-app.patch("/api/accounts/:accountId", (req, res) => {
+app.patch("/api/accounts/:accountId", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const accountId = req.params.accountId;
@@ -197,13 +200,14 @@ app.patch("/api/accounts/:accountId", (req, res) => {
       targetPerContract: req.body?.targetPerContract == null ? undefined : Number(req.body.targetPerContract),
       stopPerContract: req.body?.stopPerContract == null ? undefined : Number(req.body.stopPerContract),
     });
+    await coordinator.prearmPoolsForAccount(account.id);
     return res.json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
   } catch (error) {
     return res.status(400).json({ ok: false, error: (error as Error).message });
   }
 });
 
-app.post("/api/accounts/:accountId/bracket", (req, res) => {
+app.post("/api/accounts/:accountId/bracket", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const accountId = req.params.accountId;
@@ -214,6 +218,7 @@ app.post("/api/accounts/:accountId/bracket", (req, res) => {
       Number(req.body?.stopPerContract),
     );
     pushEvent("info", `Saved +$${account.targetPerContract} / -$${account.stopPerContract} bracket for ${account.name}.`);
+    await coordinator.prearmPoolsForAccount(account.id);
     return res.json({ ok: true, account });
   } catch (error) {
     return res.status(400).json({ ok: false, error: (error as Error).message });
@@ -257,7 +262,7 @@ app.post("/webhook", async (req, res) => {
 
 async function autoConnect(): Promise<void> {
   await Promise.allSettled(workers.values().filter((w) => w.definition.autoConnect).map(async (worker) => {
-    try { await worker.connect(); log.info(`Connected ${worker.definition.name}`); }
+    try { await worker.connect(); await coordinator.prearmConnection(worker.definition.id); log.info(`Connected ${worker.definition.name}`); }
     catch (error) {
       const message = `${worker.definition.name} needs attention: ${(error as Error).message}`;
       log.warn(message);
@@ -270,7 +275,9 @@ const healthTimer = setInterval(() => {
   for (const worker of workers.values()) {
     const status = worker.status();
     if (worker.definition.autoConnect && (!status.connected || !status.loggedIn) && !status.busy) {
-      void worker.recover().catch((error) => log.warn(`Health recovery failed for ${worker.definition.name}: ${(error as Error).message}`));
+      void worker.recover()
+        .then(() => coordinator.prearmConnection(worker.definition.id))
+        .catch((error) => log.warn(`Health recovery failed for ${worker.definition.name}: ${(error as Error).message}`));
     }
   }
 }, config.healthCheckSeconds * 1_000);
