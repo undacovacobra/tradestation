@@ -28,3 +28,29 @@ test("rotation skips accounts already reserved by another pool", () => {
   const rotation = new PoolRotation("pool", resolve(dir, "state.json"), false, () => "2026-07-10");
   assert.equal(rotation.select(accounts, new Set(["a1"])).id, "a2");
 });
+
+test("account can be skipped for today, resumed, and automatically returns next trading day", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-daily-skip-"));
+  let day = "2026-07-10";
+  const statePath = resolve(dir, "state.json");
+  const rotation = new PoolRotation("pool", statePath, false, () => day);
+  rotation.skipToday("a1", accounts);
+  assert.equal(rotation.isSkippedToday("a1"), true);
+  assert.equal(rotation.select(accounts, new Set()).id, "a2");
+
+  rotation.resumeToday("a1");
+  assert.equal(rotation.isSkippedToday("a1"), false);
+  assert.equal(rotation.select(accounts, new Set()).id, "a1");
+
+  rotation.skipToday("a1", accounts);
+  day = "2026-07-11";
+  assert.equal(rotation.isSkippedToday("a1"), false);
+  assert.equal(new PoolRotation("pool", statePath, false, () => day).select(accounts, new Set()).id, "a1");
+});
+
+test("a skipped account cannot be manually selected as next", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-skipped-next-"));
+  const rotation = new PoolRotation("pool", resolve(dir, "state.json"), false, () => "2026-07-10");
+  rotation.skipToday("a1", accounts);
+  assert.throws(() => rotation.setNext("a1", accounts), /skipped for today/i);
+});
