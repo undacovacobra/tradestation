@@ -35,13 +35,48 @@ function renderAccountRow(pool, account, index) {
   const nextDisabled = poolOpen || account.status !== "active" || account.skippedToday;
   const dailyControl = account.status === "active" ? `<button ${poolOpen ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','${account.skippedToday ? "resume-today" : "skip-today"}')">${account.skippedToday ? "Resume today" : "Skip today"}</button>` : "";
   const persistentControl = `<button ${hasOpenTrade ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','${account.status === "held" ? "activate" : "hold"}')">${account.status === "held" ? "Reactivate" : "Hold"}</button>`;
-  const bracket = account.targetPerContract > 0 && account.stopPerContract > 0 ? `TP +${money(account.targetPerContract)} / SL -${money(account.stopPerContract)} per contract` : "No dollar bracket";
+  const configured = account.targetPerContract > 0 && account.stopPerContract > 0;
+  const key = `${pool.id}-${account.id}`;
+  const bracketStatus = configured ? `TP +${money(account.targetPerContract)} / SL -${money(account.stopPerContract)} per contract` : `<span class="bracket-warning">Unconfigured — trade blocked</span>`;
+  const bracket = `${bracketStatus}<span class="bracket-controls"><label>TP $<input id="tp-${esc(key)}" type="number" min="0" step="0.01" value="${esc(account.targetPerContract)}"></label><label>SL $<input id="sl-${esc(key)}" type="number" min="0" step="0.01" value="${esc(account.stopPerContract)}"></label><button ${hasOpenTrade ? "disabled" : ""} onclick="saveBracket('${esc(pool.id)}','${esc(account.id)}')">Save bracket</button></span>`;
   return `<tr class="${rowClass}"><td>${index+1}</td><td><strong>${account.isNext?"→ NEXT · ":""}${esc(account.name)}</strong><small>${esc(account.platformLabel)} · ${esc(account.stage)}</small><small>${bracket}</small></td><td>${esc(data.connections.find((connection)=>connection.id===account.connectionId)?.name || account.connectionId)}<small>${esc(account.firm)}</small></td><td><strong>${money(account.balance)}</strong><small>${age(account.balanceUpdatedAt)}${account.toTarget!=null ? ` · ${money(account.toTarget)} to target` : ""}</small></td><td><span class="pill ${statusClass}">${esc(status)}</span></td><td><div class="account-actions"><button ${nextDisabled ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','next')">Make next</button>${dailyControl}${persistentControl}<button class="danger" ${hasOpenTrade ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','remove',true)">Remove from rotation</button></div></td></tr>`;
 }
 
 async function accountAction(poolId, accountId, action, confirmFirst=false) { if (confirmFirst && !confirm("Remove this account from this pool?")) return; await post(`/api/pools/${encodeURIComponent(poolId)}/accounts/${encodeURIComponent(accountId)}`, { action }); }
 async function saveLane(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/lane`, { executionLane:document.getElementById(`lane-${poolId}`).value.trim() }); }
+async function saveBracket(poolId, accountId) {
+  const key = `${poolId}-${accountId}`;
+  const targetPerContract = Number(document.getElementById(`tp-${key}`).value);
+  const stopPerContract = Number(document.getElementById(`sl-${key}`).value);
+  const response = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/bracket`, { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ targetPerContract, stopPerContract }) });
+  const result = await response.json();
+  document.querySelector("#action-result").textContent = result.ok ? `Bracket saved for ${result.account.name}.` : result.error;
+  if (result.ok) await refresh();
+}
 async function post(url, body) { const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); const result=await response.json(); document.querySelector("#action-result").textContent=result.ok?"Saved.":result.error; await refresh(); }
-document.querySelector("#refresh-balances").addEventListener("click", async () => { document.querySelector("#action-result").textContent="Refreshing idle logins…"; await post("/api/balances/refresh",{}); });
-window.accountAction=accountAction; window.saveLane=saveLane;
+function summarizeBalanceRefresh(results) {
+  const updated = results.reduce((sum, item) => sum + item.refreshed, 0);
+  const enabled = data.accounts.filter((account) => account.enabled).length;
+  const notUpdated = Math.max(0, enabled - updated);
+  const deferred = results.filter((item) => item.deferred).length;
+  const errors = results.filter((item) => item.error).map((item) => item.error);
+  return `${updated} balances updated; ${notUpdated} not updated.${deferred ? ` ${deferred} login${deferred === 1 ? "" : "s"} deferred because a trade is open.` : ""}${errors.length ? ` ${errors[0]}` : ""}`;
+}
+document.querySelector("#refresh-balances").addEventListener("click", async () => {
+  const button = document.querySelector("#refresh-balances");
+  const resultArea = document.querySelector("#action-result");
+  button.disabled = true;
+  resultArea.textContent = "Refreshing idle logins…";
+  try {
+    const response = await fetch("/api/balances/refresh", { method:"POST", headers:{"content-type":"application/json"}, body:"{}" });
+    const result = await response.json();
+    resultArea.textContent = result.ok ? summarizeBalanceRefresh(result.results) : result.error;
+    await refresh();
+  } catch (error) {
+    resultArea.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+window.accountAction=accountAction; window.saveLane=saveLane; window.saveBracket=saveBracket;
 refresh().catch((error)=>{ document.querySelector("#overall").textContent="Offline"; document.querySelector("#action-result").textContent=error.message; }); setInterval(refresh,5000);

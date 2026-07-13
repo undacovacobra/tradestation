@@ -28,6 +28,15 @@ test("control center renders every rotation with explicit account controls", () 
   assert.match(app, /Remove from rotation/);
   assert.match(app, /targetPerContract/);
   assert.match(app, /stopPerContract/);
+  assert.match(app, /TP \$/);
+  assert.match(app, /SL \$/);
+  assert.match(app, /Save bracket/);
+  assert.match(app, /Unconfigured.*trade blocked/i);
+  assert.match(app, /api\/accounts\/\$\{encodeURIComponent\(accountId\)\}\/bracket/);
   assert.doesNotMatch(app, /selectedPool/);
   assert.doesNotMatch(app, /choosePool/);
+  assert.match(app, /summarizeBalanceRefresh/);
+  assert.match(app, /button\.disabled\s*=\s*true/);
+  assert.match(app, /balances updated/);
+  assert.match(app, /not updated/);
 });

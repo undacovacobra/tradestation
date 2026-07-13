@@ -223,7 +223,7 @@ export class TradovateBrowser {
     log.info(`Switching active account to ${label}`);
     try {
       await this.p.getByText(this.accountIdPattern).first().click({ timeout: 10_000 });
-      await this.p.getByText(label, { exact: false }).last().click({ timeout: 10_000 });
+      await this.p.getByText(label, { exact: true }).filter({ visible: true }).last().click({ timeout: 10_000 });
       await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
       this.currentAccount = label;
       this.lastQty = null; // new account — ticket size unknown, re-set on next order
@@ -523,7 +523,6 @@ export class TradovateBrowser {
       this.p.locator('[aria-label*="atm" i][aria-label*="setting" i]'),
       this.p.locator('[title*="atm" i][title*="setting" i]'),
       this.p.locator('[aria-label*="setting" i]'),
-      this.p.locator('[class*="cog" i], [class*="gear" i]'),
     ];
     for (const candidate of candidates) {
       const el = candidate.first();
@@ -534,6 +533,46 @@ export class TradovateBrowser {
         await this.p.waitForTimeout(150).catch(() => {});
       }
     }
+
+    // Tradovate's current ATM gear is an unlabeled icon. Anchor the fallback
+    // to the exact visible ATM row so the separate DAY/GTC gear is never used.
+    const marked = await this.p.evaluate(() => {
+      const labels = [...document.querySelectorAll("*")]
+        .filter((el) => {
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return (el.textContent || "").trim() === "ATM" && rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        })
+        .sort((a, b) => (a as HTMLElement).getBoundingClientRect().width - (b as HTMLElement).getBoundingClientRect().width);
+      const label = labels[0] as HTMLElement | undefined;
+      if (!label) return false;
+      const labelRect = label.getBoundingClientRect();
+      const labelY = labelRect.top + labelRect.height / 2;
+      let container: Element | null = label.parentElement;
+      for (let up = 0; up < 6 && container; up++, container = container.parentElement) {
+        const choices = [...container.querySelectorAll('button,[role="button"]')]
+          .filter((el) => {
+            const rect = (el as HTMLElement).getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+          })
+          .map((el) => ({ el: el as HTMLElement, rect: (el as HTMLElement).getBoundingClientRect(), text: (el.textContent || "").trim() }))
+          .filter(({ rect, text }) => {
+            const centerY = rect.top + rect.height / 2;
+            return rect.left >= labelRect.right && Math.abs(centerY - labelY) <= 24 && rect.width <= 52 && text === "";
+          })
+          .sort((a, b) => a.rect.left - b.rect.left);
+        if (choices.length) {
+          choices[0]!.el.setAttribute("data-bot-atm-settings", "1");
+          return true;
+        }
+      }
+      return false;
+    }).catch(() => false);
+    if (!marked) return;
+    const fallback = this.p.locator("[data-bot-atm-settings]").first();
+    await fallback.click({ timeout: 3_000 }).catch(() => {});
+    await fallback.evaluate((el) => el.removeAttribute("data-bot-atm-settings")).catch(() => {});
   }
 
   private async ensureShowInDollars(): Promise<boolean> {

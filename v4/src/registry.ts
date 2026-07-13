@@ -122,6 +122,15 @@ export class Registry {
     return structuredClone(updated);
   }
 
+  updateAccountBracket(id: string, targetPerContract: number, stopPerContract: number): AccountDefinition {
+    const index = this.data.accounts.findIndex((account) => account.id === id);
+    if (index < 0) throw new Error(`Unknown account: ${id}`);
+    const updated = AccountSchema.parse({ ...this.data.accounts[index]!, targetPerContract, stopPerContract });
+    this.data.accounts[index] = updated;
+    this.save();
+    return structuredClone(updated);
+  }
+
   setPoolExecutionLane(poolId: string, executionLane: string): PoolDefinition {
     const pool = this.pool(poolId);
     if (!pool) throw new Error(`Unknown pool: ${poolId}`);
