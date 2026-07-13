@@ -11,9 +11,9 @@ import { log } from "./logger.js";
  * user's demo accounts. We use text locators (not CSS classes) because
  * Tradovate's React class names are auto-generated and unstable.
  *
- * Design choice: the bot does NOT set the symbol or quantity. You pick your
- * contract and size on the Tradovate screen; the bot only switches account and
- * clicks Buy / Sell / Exit. Fewer moving parts = far faster and more reliable.
+ * Design choice: the bot does not change the chart symbol. It receives the
+ * strategy quantity from each webhook, verifies that size, then clicks the
+ * requested Buy/Sell button for the already prepared account and ATM.
  */
 const TXT = {
   loggedInMarker: "Buy Mkt", // only renders once logged in + trader loaded

@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add safe dashboard-controlled live execution and reduce an armed webhook to a single prepared Buy/Sell click with measurable latency.
+**Goal:** Add safe dashboard-controlled live execution and reduce an armed webhook to dynamic quantity verification followed by a Buy/Sell click with measurable latency.
 
-**Architecture:** Persist Practice/Live in the registry behind a confirmation API. Treat each saved login as one execution session with an exact armed signature containing account, bracket, quantity, cached balance, and preparation time; reject live entries that do not match it. Independent sessions remain concurrent while shared-session conflicts are made explicit.
+**Architecture:** Persist Practice/Live in the registry behind a confirmation API. Treat each saved login as one execution session with an exact armed signature containing account, bracket, cached balance, and preparation time; require and verify the strategy quantity supplied by every entry webhook. Independent sessions remain concurrent while shared-session conflicts are made explicit.
 
 **Tech Stack:** TypeScript, Express, Playwright, Zod, Node test runner, browser JavaScript.
 
 ## Global Constraints
 
 - Test webhooks never call an order-producing method or create open-trade state.
-- An armed live webhook performs no account switch, ATM dialog work, quantity write, balance read, or fixed wait before the Buy/Sell click.
+- An armed live webhook performs no account switch, ATM dialog work, balance read, or fixed wait; its only setup step is setting and verifying the dynamic webhook quantity.
 - Practice remains the default and Live requires deliberate confirmation.
 - One saved login is one execution session and can instantly prepare one lane at a time.
 - Internal armed-entry target is under 500 ms; already-armed local test target is under 250 ms.

@@ -1,13 +1,14 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ATLAS Command Center</title><link rel="stylesheet" href="/style.css"></head>
 <body><main class="control-center">
   <header><div><p class="eyebrow">ACCOUNT TRADING LANE AUTOMATION SYSTEM</p><h1>ATLAS</h1></div><div class="header-actions"><div class="mode-switch" aria-label="Execution mode"><button id="mode-practice" type="button">Practice</button><button id="mode-live" type="button">Live</button></div><span id="overall" class="pill">Loading</span><a class="tag" href="/onboarding.html">Account onboarding</a></div></header>
-  <p id="live-readiness-note" class="live-readiness-note">For near-instant Live execution, the next account, ATM, and execution quantity must show READY. Order confirmations must be disabled in Tradovate. Live signals that are not ready are blocked.</p>
+  <p id="live-readiness-note" class="live-readiness-note">For near-instant Live execution, the next account and ATM must show READY. Quantity comes from each webhook and is set and verified immediately before the order click. Order confirmations must be disabled in Tradovate. Live signals that are not ready are blocked.</p>
   <section class="login-overview"><div class="section-head"><h2>Logged-in sessions</h2><span class="muted">Configured accounts are grouped by saved browser login.</span></div><div id="login-sessions" class="login-session-grid"></div></section>
   <section id="summary" class="summary-grid"></section>
   <section class="control-layout">
     <aside><div class="section-head"><h2>Login connections</h2><a href="/onboarding.html" class="small-link">+ Add login</a></div><div id="connections" class="connection-stack"></div></aside>
     <div><div class="section-head"><h2>Rotation pools</h2><button id="refresh-balances" type="button">Refresh balances</button></div><p class="muted">Manual changes to the selected account or ATM settings in Tradovate require clicking Make next again before the next signal.</p><div id="pool-list" class="pool-list-panels"></div></div>
   </section>
+  <section class="simultaneous-test"><div class="section-head"><div><h2>Simultaneous eval + funded test</h2><p class="muted">Starts both safe tests together, applies each strategy quantity, and never clicks an order.</p></div></div><div class="lane-row"><label>Eval pool<select id="sim-eval-pool"></select></label><label>Eval quantity<input id="sim-eval-quantity" type="number" min="1" step="1" value="1"></label><label>Funded pool<select id="sim-funded-pool"></select></label><label>Funded quantity<input id="sim-funded-quantity" type="number" min="1" step="1" value="1"></label><button id="sim-test-button" type="button">Run both together</button></div><p id="sim-test-result" class="webhook-test-result"></p></section>
   <section><h2>Recent activity</h2><div id="events" class="event-list"></div></section>
   <p id="action-result" class="save-result"></p>
 </main><script src="/app.js"></script></body></html>

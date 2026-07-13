@@ -12,7 +12,8 @@ export interface ConnectionAdapter {
   setBracket(targetPerContract: number, stopPerContract: number, force?: boolean): Promise<void>;
   inspectFields(): Promise<Array<Record<string, string>>>;
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>>;
-  prepare(account: AccountDefinition, quantity: number): Promise<void>;
+  prepare(account: AccountDefinition): Promise<void>;
+  testPreparedQuantity(account: AccountDefinition, quantity: number): Promise<void>;
   verifyPrepared(account: AccountDefinition): Promise<void>;
   enterPrepared(account: AccountDefinition, alert: V4Alert): Promise<void>;
   enter(account: AccountDefinition, alert: V4Alert): Promise<void>;
@@ -22,7 +23,7 @@ export interface ConnectionAdapter {
   readSettledBalance(account: AccountDefinition): Promise<number | null>;
 }
 
-type PreparationBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket" | "setQuantity">;
+type PreparationBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket">;
 type EntryBrowser = PreparationBrowser & Pick<TradovateBrowser, "setQuantity" | "clickOrder">;
 
 function requireBracket(account: AccountDefinition): void {
@@ -32,20 +33,21 @@ function requireBracket(account: AccountDefinition): void {
 }
 
 /** Select and verify the next account's ATM values without placing an order. */
-export async function prepareAccount(browser: PreparationBrowser, account: AccountDefinition, quantity = 1): Promise<void> {
+export async function prepareAccount(browser: PreparationBrowser, account: AccountDefinition): Promise<void> {
   requireBracket(account);
   await browser.switchAccount(account.platformLabel);
   await browser.setBracket(account.targetPerContract, account.stopPerContract);
-  await browser.setQuantity(quantity);
 }
 
 async function enterPrepared(browser: Pick<TradovateBrowser, "setQuantity" | "clickOrder">, account: AccountDefinition, alert: V4Alert): Promise<void> {
+  if (alert.quantity == null) throw new Error("Webhook quantity is required for every entry.");
+  await browser.setQuantity(alert.quantity);
   await browser.clickOrder(alert.action as "buy" | "sell", account.platformLabel);
 }
 
 /** Prepare every account-specific ticket setting before the only order-producing click. */
 export async function prepareEntry(browser: EntryBrowser, account: AccountDefinition, alert: V4Alert): Promise<void> {
-  await prepareAccount(browser, account, alert.quantity ?? 1);
+  await prepareAccount(browser, account);
   await enterPrepared(browser, account, alert);
 }
 
@@ -74,58 +76,60 @@ export class ConnectionWorker {
 
   status(): WorkerStatus { return { ...this.adapter.status(), busy: this.busy, lastError: this.lastError, armed: this.armed ? { ...this.armed } : undefined }; }
 
-  isArmed(account: AccountDefinition, quantity = 1): boolean {
+  isArmed(account: AccountDefinition): boolean {
     return this.armed?.accountId === account.id
       && this.armed.platformLabel === account.platformLabel
       && this.armed.targetPerContract === account.targetPerContract
-      && this.armed.stopPerContract === account.stopPerContract
-      && this.armed.quantity === quantity;
+      && this.armed.stopPerContract === account.stopPerContract;
   }
 
   invalidateArmed(): void { this.armed = undefined; }
 
-  private markArmed(account: AccountDefinition, quantity: number, entryBalance: number | null): void {
+  private markArmed(account: AccountDefinition, entryBalance: number | null): void {
     this.armed = {
       accountId: account.id,
       platformLabel: account.platformLabel,
       targetPerContract: account.targetPerContract,
       stopPerContract: account.stopPerContract,
-      quantity,
       ...(entryBalance == null ? {} : { entryBalance }),
       armedAt: new Date().toISOString(),
     };
   }
 
-  async prearm(account: AccountDefinition, quantity = 1): Promise<void> {
+  async prearm(account: AccountDefinition): Promise<void> {
     this.invalidateArmed();
     await this.run(async (adapter) => {
       const entryBalance = await adapter.readBalance(account);
-      await adapter.prepare(account, quantity);
-      this.markArmed(account, quantity, entryBalance);
+      await adapter.prepare(account);
+      this.markArmed(account, entryBalance);
     });
   }
 
-  async dryRun(account: AccountDefinition, quantity = 1): Promise<{ alreadyArmed: boolean; elapsedMs: number }> {
+  async dryRun(account: AccountDefinition, quantity: number): Promise<{ alreadyArmed: boolean; elapsedMs: number }> {
     const startedAt = Date.now();
-    if (this.isArmed(account, quantity)) return { alreadyArmed: true, elapsedMs: Date.now() - startedAt };
-    this.invalidateArmed();
+    const alreadyArmed = this.isArmed(account);
+    if (!alreadyArmed) this.invalidateArmed();
     await this.run(async (adapter) => {
-      const entryBalance = await adapter.readBalance(account);
-      await adapter.prepare(account, quantity);
-      this.markArmed(account, quantity, entryBalance);
+      let entryBalance = this.armed?.entryBalance ?? null;
+      if (!alreadyArmed) {
+        entryBalance = await adapter.readBalance(account);
+        await adapter.prepare(account);
+        this.markArmed(account, entryBalance);
+      }
+      await adapter.testPreparedQuantity(account, quantity);
     });
-    return { alreadyArmed: false, elapsedMs: Date.now() - startedAt };
+    return { alreadyArmed, elapsedMs: Date.now() - startedAt };
   }
 
   async enter(account: AccountDefinition, alert: V4Alert): Promise<{ balance: number | null; timingMs: { queueWait: number; execution: number; total: number } }> {
     const requestedAt = Date.now();
-    const quantity = alert.quantity ?? 1;
+    if (alert.quantity == null) throw new Error("Webhook quantity is required for every entry.");
     if (this.busy || this.pendingTasks > 0) throw new Error(`${this.definition.name} is busy with preparation or maintenance. The live signal was blocked instead of delayed.`);
-    if (!this.isArmed(account, quantity)) throw new Error(`${account.name} is not ready for quantity ${quantity}. Prepare it with Make next before sending a live signal.`);
+    if (!this.isArmed(account)) throw new Error(`${account.name} is not ready. Prepare it with Make next before sending a live signal.`);
     return this.run(async (adapter) => {
       const queueWait = Date.now() - requestedAt;
-      if (!this.isArmed(account, quantity)) {
-        throw new Error(`${account.name} is not ready for quantity ${quantity}. Prepare it with Make next before sending a live signal.`);
+      if (!this.isArmed(account)) {
+        throw new Error(`${account.name} is not ready. Prepare it with Make next before sending a live signal.`);
       }
       const armed = this.armed!;
       const executionStartedAt = Date.now();
@@ -171,7 +175,11 @@ class TradovateAdapter implements ConnectionAdapter {
   }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.browser.inspectFields(); }
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return this.browser.inspectAtmControls(); }
-  async prepare(account: AccountDefinition, quantity: number): Promise<void> { await prepareAccount(this.browser, account, quantity); }
+  async prepare(account: AccountDefinition): Promise<void> { await prepareAccount(this.browser, account); }
+  async testPreparedQuantity(account: AccountDefinition, quantity: number): Promise<void> {
+    await this.browser.verifySelectedAccount(account.platformLabel);
+    await this.browser.setQuantity(quantity);
+  }
   async verifyPrepared(account: AccountDefinition): Promise<void> {
     await this.browser.verifySelectedAccount(account.platformLabel);
     await this.browser.verifyBracket(account.targetPerContract, account.stopPerContract);
@@ -207,13 +215,14 @@ class SimulatedAdapter implements ConnectionAdapter {
   async setBracket(): Promise<void> {}
   async inspectFields(): Promise<Array<Record<string, string>>> { return []; }
   async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return []; }
-  async prepare(account: AccountDefinition, _quantity: number): Promise<void> { requireBracket(account); this.selected = account.platformLabel; }
+  async prepare(account: AccountDefinition): Promise<void> { requireBracket(account); this.selected = account.platformLabel; }
+  async testPreparedQuantity(account: AccountDefinition, _quantity: number): Promise<void> { this.selected = account.platformLabel; }
   async verifyPrepared(account: AccountDefinition): Promise<void> {
     requireBracket(account);
     if (this.selected !== account.platformLabel) throw new Error(`Selected account is ${this.selected ?? "unknown"}, not ${account.platformLabel}.`);
   }
   async enterPrepared(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
-  async enter(account: AccountDefinition): Promise<void> { await this.prepare(account, 1); }
+  async enter(account: AccountDefinition): Promise<void> { await this.prepare(account); }
   async close(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async readBalance(): Promise<number | null> { return null; }
   async readSelectedBalance(): Promise<number | null> { return null; }

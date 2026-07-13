@@ -25,11 +25,11 @@ The ATLAS dashboard now has an explicit **Practice / Live** control. Enabling Li
 
 ## Near-instant execution sessions
 
-ATLAS does all slow work before the signal arrives. **READY** means the exact next account, dollar ATM bracket, and execution quantity are already selected and verified. An armed live webhook does not switch accounts, open ATM settings, change quantity, read a balance, or wait before the Buy/Sell click. If the exact setup is not READY, ATLAS blocks the signal and sends the existing action-needed alert instead of attempting a slow trade.
+ATLAS does all account and ATM work before the signal arrives. **READY** means the exact next account and dollar ATM bracket are already selected and verified. Every entry webhook must supply the strategy's dynamic `quantity`. ATLAS sets and verifies that quantity immediately before the Buy/Sell click. If the account/ATM setup is not READY, ATLAS blocks the signal and sends the existing action-needed alert instead of attempting a slow trade.
 
 One saved login is one browser execution session and can keep one lane ready at a time. If evaluation and funded pools must enter simultaneously using the same credentials, add that login twice as two saved execution sessions, log into both persistent windows once, and assign each lane's accounts to its own session. Different sessions run concurrently; one shared session cannot safely hold two different accounts and ATM settings at the same instant.
 
-Set each pool's **Execution quantity** on the dashboard, then click **Save quantity & prepare** or **Make next**. TradingView may omit `quantity`; ATLAS then uses the prepared pool quantity. A different explicit webhook quantity is blocked until the pool is reconfigured and prepared.
+The dashboard also has a safe simultaneous eval + funded benchmark. Choose one pool and contract quantity for each side, then run both together. It follows the real pre-click quantity path, reports each side plus total wall-clock time, and never clicks an order.
 
 For the fastest one-click path, disable order confirmations in Tradovate Application Settings. Chromium background throttling is disabled by ATLAS, so the session does not need to be the foreground window. Recent activity reports queue, browser-click, and total internal timing for live entries; this does not include TradingView internet transit or exchange fill time.
 

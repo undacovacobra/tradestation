@@ -11,7 +11,7 @@
 9. Open `/sender.html` or double-click `Send Test Webhook.cmd` and confirm the returned plan is correct.
 10. Send practice-mode entry and close webhooks and inspect the pool state on the status page.
 11. In Tradovate Application Settings, disable order confirmations so entry is one click.
-12. On the ATLAS dashboard, set each pool's Execution quantity and confirm it shows READY.
+12. On the ATLAS dashboard, click Make next and confirm the account and ATM show READY. Quantity must come from every TradingView webhook.
 13. Only after repeated testing, use the dashboard Practice / Live control and confirm Live mode.
 
 If two pools must enter at the same time, each must use a different saved execution session. Add the same credentials as another saved login when necessary, log into its persistent window once, and assign that lane's accounts to it. A NOT READY message explains when two pools are competing for one session.

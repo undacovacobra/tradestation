@@ -309,14 +309,44 @@ app.post("/api/pools/:poolId/test-webhook", async (req, res) => {
   }
 });
 
-app.post("/api/pools/:id/quantity", async (req, res) => {
+app.post("/api/tests/simultaneous", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  const startedAt = Date.now();
   try {
-    const pool = registry.setPoolQuantity(req.params.id, Number(req.body?.quantity));
-    await coordinator.prearmPool(pool.id);
-    return res.json({ ok: true, pool });
+    const evalPoolId = String(req.body?.evalPoolId ?? "");
+    const fundedPoolId = String(req.body?.fundedPoolId ?? "");
+    if (!evalPoolId || !fundedPoolId || evalPoolId === fundedPoolId) throw new Error("Choose one eval pool and one different funded pool");
+    const requests = [
+      { stage: "eval", poolId: evalPoolId, quantity: Number(req.body?.evalQuantity) },
+      { stage: "funded", poolId: fundedPoolId, quantity: Number(req.body?.fundedQuantity) },
+    ] as const;
+    for (const request of requests) {
+      if (!Number.isInteger(request.quantity) || request.quantity <= 0) throw new Error(`${request.stage} quantity must be a positive whole number`);
+      const pool = registry.pool(request.poolId);
+      if (!pool) throw new Error(`Unknown ${request.stage} pool: ${request.poolId}`);
+      const poolStatus = coordinator.status().find((item) => item.id === request.poolId);
+      const nextAccount = poolStatus?.accounts.find((account) => account.isNext);
+      if (!nextAccount || nextAccount.stage !== request.stage) throw new Error(`${pool.name}'s next account is not ${request.stage}`);
+    }
+    const settled = await Promise.allSettled(requests.map(async (request) => {
+      const result = await coordinator.handle(request.poolId, V4AlertSchema.parse({
+        signalId: `simultaneous-${request.stage}-${Date.now()}`,
+        action: "buy",
+        symbol: "MNQ",
+        quantity: request.quantity,
+        marketPosition: "long",
+        test: true,
+      }));
+      return { ...request, result };
+    }));
+    const results = settled.map((item, index) => item.status === "fulfilled"
+      ? { ok: true, ...item.value }
+      : { ok: false, ...requests[index]!, error: item.reason instanceof Error ? item.reason.message : String(item.reason) });
+    const totalMs = Date.now() - startedAt;
+    pushEvent("info", `Simultaneous eval/funded test finished in ${totalMs} ms; no trades were placed.`);
+    return res.json({ ok: results.every((result) => result.ok), totalMs, results, placedTrade: false });
   } catch (error) {
-    return res.status(400).json({ ok: false, error: (error as Error).message });
+    return res.status(400).json({ ok: false, error: (error as Error).message, totalMs: Date.now() - startedAt, placedTrade: false });
   }
 });
 

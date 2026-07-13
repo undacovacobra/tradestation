@@ -117,7 +117,7 @@ test("dashboard exposes deliberate Practice and Live controls with readiness gui
   assert.match(app, /confirmLive/);
   assert.match(app, /real orders|real trades/i);
   assert.match(app, /Order confirmations.*disabled/i);
-  assert.match(app, /Execution quantity/i);
+  assert.match(dashboard, /Quantity comes from each webhook/i);
   assert.match(app, /READY|NOT READY/);
   assert.match(app, /execution session/i);
 });
@@ -143,6 +143,29 @@ test("each pool keeps its own explicit webhook test result", () => {
   assert.match(app, /testResults/);
   assert.match(app, /button\.disabled\s*=\s*true/);
   assert.match(app, /finally[\s\S]*button\.disabled\s*=\s*false/);
+});
+
+test("dashboard offers a simultaneous eval and funded quantity benchmark", () => {
+  const html = readFileSync(resolve("public/index.html"), "utf8");
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(html, /Simultaneous eval.*funded test/i);
+  assert.match(html, /id="sim-eval-quantity"/);
+  assert.match(html, /id="sim-funded-quantity"/);
+  assert.match(app, /\/api\/tests\/simultaneous/);
+  assert.match(app, /Eval \$\{detail\(evalResult\)\}/);
+  assert.match(app, /Funded \$\{detail\(fundedResult\)\}/);
+  assert.match(app, /Total \$\{body\.totalMs\} ms/);
+  assert.match(server, /\/api\/tests\/simultaneous/);
+  assert.match(server, /Promise\.allSettled/);
+});
+
+test("READY excludes quantity because every webhook supplies dynamic strategy size", () => {
+  const html = readFileSync(resolve("public/index.html"), "utf8");
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  assert.match(html, /quantity comes from each webhook/i);
+  assert.doesNotMatch(app, /Save quantity/);
+  assert.doesNotMatch(app, /Execution quantity<input/);
 });
 
 test("Add another login opens reliably and guides the complete saved-login flow", () => {

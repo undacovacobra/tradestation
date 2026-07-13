@@ -29,6 +29,7 @@ class FakeAdapter implements ConnectionAdapter {
   async inspectFields() { return []; }
   async inspectAtmControls() { return []; }
   async prepare(account: AccountDefinition) { this.prepares.push(account.id); }
+  async testPreparedQuantity() {}
   async verifyPrepared(account: AccountDefinition) { this.verifications.push(account.id); }
   async enterPrepared(account: AccountDefinition, alert: V4Alert) { await this.enter(account, alert); }
   async enter(_account: AccountDefinition, _alert: V4Alert) {
@@ -104,6 +105,14 @@ test("test webhook is plan-only and never opens pool state", async () => {
   assert.equal(coordinator.status().find((p) => p.id === "p1")?.state?.openTrade, null);
   assert.deepEqual(adapters.get("c1")?.prepares, ["a1"]);
   assert.deepEqual(adapters.get("c1")?.verifications, []);
+});
+
+test("every entry webhook must supply its dynamic strategy quantity", async () => {
+  const { coordinator } = setup("practice");
+  await assert.rejects(
+    () => coordinator.handle("p1", { action: "buy", symbol: "MNQ", test: false }),
+    /webhook quantity is required/i,
+  );
 });
 
 test("evaluation pool automatically closes and passes account at 53000", async () => {

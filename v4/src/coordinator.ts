@@ -41,9 +41,9 @@ export class TradeCoordinator {
       const nextWorker = nextAccount ? this.workers.get(nextAccount.connectionId) : undefined;
       const workerStatus = nextWorker?.status();
       const armedAccountId = workerStatus?.armed?.accountId;
-      const armed = Boolean(nextAccount && nextWorker?.isArmed(nextAccount, pool.quantity));
+      const armed = Boolean(nextAccount && nextWorker?.isArmed(nextAccount));
       const sessionConflict = nextAccount && workerStatus?.armed && !armed
-        ? `${nextWorker?.definition.name} is prepared for another account or quantity. One execution session can instantly serve one lane; add a separate saved login session for simultaneous lanes.`
+        ? `${nextWorker?.definition.name} is prepared for another account. One execution session can instantly serve one lane; add a separate saved login session for simultaneous lanes.`
         : undefined;
       return {
         ...pool,
@@ -52,7 +52,7 @@ export class TradeCoordinator {
         armed,
         armedAccountId: armedAccountId ?? null,
         prearmError: armed ? undefined : this.prearmErrors.get(pool.id) ?? sessionConflict,
-        readinessReason: armed ? "Exact account, ATM, and quantity are prepared." : this.prearmErrors.get(pool.id) ?? sessionConflict ?? "Click Make next to prepare this execution session.",
+        readinessReason: armed ? "Exact account and ATM are prepared; quantity will come from the webhook." : this.prearmErrors.get(pool.id) ?? sessionConflict ?? "Click Make next to prepare this execution session.",
         accounts: pool.accountIds.map((id) => this.registry.account(id)).filter((account): account is AccountDefinition => Boolean(account)).map((account) => {
           const record = balanceSnapshot[account.id];
           return {
@@ -122,6 +122,7 @@ export class TradeCoordinator {
 
       if (isCloseAlert(alert)) return this.close(poolId, alert, rotation);
       if (alert.action !== "buy" && alert.action !== "sell") throw new Error(`Unsupported entry action: ${alert.action}`);
+      if (alert.quantity == null) throw new Error("Webhook quantity is required for every entry");
 
       const lane = this.executionLane(poolId);
       const laneOwner = this.laneOwner(lane, poolId);
@@ -132,12 +133,13 @@ export class TradeCoordinator {
       const worker = this.workers.get(account.connectionId);
       if (!worker) throw new Error(`No worker for connection ${account.connectionId}`);
       const simulated = alert.test || this.registry.mode === "practice";
-      const executionAlert: V4Alert = alert.quantity == null ? { ...alert, quantity: pool.quantity } : alert;
+      const executionAlert = alert;
 
       if (alert.test) {
         const status = worker.status();
         if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-        const readiness = await worker.dryRun(account, pool.quantity);
+        if (alert.quantity == null) throw new Error("Test quantity is required");
+        const readiness = await worker.dryRun(account, alert.quantity);
         this.prearmErrors.delete(poolId);
         return {
           ok: true,
@@ -146,7 +148,7 @@ export class TradeCoordinator {
           connectionId: account.connectionId,
           simulated: true,
           timingMs: { queueWait: 0, execution: readiness.elapsedMs, total: readiness.elapsedMs },
-          message: `TEST ONLY — ${readiness.alreadyArmed ? "already ready" : "prepared and verified"} ${account.name} at quantity ${pool.quantity} via ${worker.definition.name} in ${readiness.elapsedMs} ms; no trade was placed`,
+          message: `TEST ONLY — ${readiness.alreadyArmed ? "used READY account/ATM" : "prepared account/ATM"}, then set quantity ${alert.quantity} for ${account.name} via ${worker.definition.name} in ${readiness.elapsedMs} ms; no trade was placed`,
         };
       }
 
@@ -278,7 +280,7 @@ export class TradeCoordinator {
       if (!worker) throw new Error(`No worker for connection ${account.connectionId}`);
       const status = worker.status();
       if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-      await worker.prearm(account, this.registry.pool(poolId)?.quantity ?? 1);
+      await worker.prearm(account);
       this.prearmErrors.delete(poolId);
     } catch (error) {
       this.prearmErrors.set(poolId, (error as Error).message);

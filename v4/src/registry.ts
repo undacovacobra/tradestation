@@ -161,15 +161,6 @@ export class Registry {
     return structuredClone(pool);
   }
 
-  setPoolQuantity(poolId: string, quantity: number): PoolDefinition {
-    const pool = this.pool(poolId);
-    if (!pool) throw new Error(`Unknown pool: ${poolId}`);
-    if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Execution quantity must be a positive whole number");
-    pool.quantity = quantity;
-    this.save();
-    return structuredClone(pool);
-  }
-
   addConnection(input: ConnectionDefinition): ConnectionDefinition {
     const connection = ConnectionSchema.parse(input);
     if (this.connection(connection.id)) throw new Error(`Connection id already exists: ${connection.id}`);

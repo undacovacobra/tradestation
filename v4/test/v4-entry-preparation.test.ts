@@ -55,13 +55,12 @@ test("preparing the next account switches and verifies its bracket without touch
   const browser = {
     async switchAccount(label: string) { calls.push(`switch:${label}`); },
     async setBracket(target: number, stop: number) { calls.push(`bracket:${target}/${stop}`); },
-    async setQuantity(quantity: number) { calls.push(`qty:${quantity}`); },
   };
   await prepareAccount(browser, account);
-  assert.deepEqual(calls, ["switch:ACCOUNT-1", "bracket:30/20", "qty:1"]);
+  assert.deepEqual(calls, ["switch:ACCOUNT-1", "bracket:30/20"]);
 });
 
-test("worker pre-arms balance, bracket, and quantity so entry performs only the order click", async () => {
+test("worker pre-arms account and bracket, then applies the webhook quantity immediately before entry", async () => {
   const events: string[] = [];
   const definition: ConnectionDefinition = {
     id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com",
@@ -71,21 +70,21 @@ test("worker pre-arms balance, bracket, and quantity so entry performs only the 
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare(prepared, quantity) { events.push(`prepare:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}:q${quantity}`); },
+    async prepare(prepared) { events.push(`prepare:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}`); },
+    async testPreparedQuantity() {},
     async verifyPrepared(prepared) { events.push(`verify:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}`); },
-    async enterPrepared(prepared) { events.push(`fast:${prepared.id}`); },
+    async enterPrepared(prepared, incoming) { events.push(`qty:${incoming.quantity}`); events.push(`fast:${prepared.id}`); },
     async enter(prepared) { events.push(`full:${prepared.id}`); }, async close() {},
     async readBalance() { events.push("balance"); return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
   };
   const worker = new ConnectionWorker(definition, adapter);
-  await worker.prearm(account, 2);
-  assert.equal(worker.isArmed(account, 2), true);
+  await worker.prearm(account);
+  assert.equal(worker.isArmed(account), true);
   await worker.enter(account, alert);
-  assert.deepEqual(events, ["balance", "prepare:a1:30/20:q2", "fast:a1"]);
+  assert.deepEqual(events, ["balance", "prepare:a1:30/20", "qty:2", "fast:a1"]);
 
   const changed = { ...account, targetPerContract: 31 };
   await assert.rejects(() => worker.enter(changed, alert), /not ready|not armed/i);
-  await assert.rejects(() => worker.enter(account, { ...alert, quantity: 3 }), /quantity|not ready|not armed/i);
 });
 
 test("worker dry run is instant when already armed and never places an order", async () => {
@@ -98,7 +97,8 @@ test("worker dry run is instant when already armed and never places an order", a
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare(prepared: AccountDefinition, quantity: number) { events.push(`prepare:${prepared.id}:q${quantity}`); },
+    async prepare(prepared: AccountDefinition) { events.push(`prepare:${prepared.id}`); },
+    async testPreparedQuantity(_prepared: AccountDefinition, quantity: number) { events.push(`qty:${quantity}`); },
     async verifyPrepared(prepared: AccountDefinition) { events.push(`verify:${prepared.id}`); },
     async enterPrepared() { events.push("ORDER"); }, async enter() { events.push("ORDER"); }, async close() {},
     async readBalance() { events.push("balance"); return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
@@ -106,11 +106,11 @@ test("worker dry run is instant when already armed and never places an order", a
   const worker = new ConnectionWorker(definition, adapter);
   const first = await worker.dryRun(account, 2);
   assert.equal(first.alreadyArmed, false);
-  assert.deepEqual(events, ["balance", "prepare:a1:q2"]);
+  assert.deepEqual(events, ["balance", "prepare:a1", "qty:2"]);
   const second = await worker.dryRun(account, 2);
   assert.equal(second.alreadyArmed, true);
-  assert.deepEqual(events, ["balance", "prepare:a1:q2"]);
-  assert.equal(worker.isArmed(account, 2), true);
+  assert.deepEqual(events, ["balance", "prepare:a1", "qty:2", "qty:2"]);
+  assert.equal(worker.isArmed(account), true);
 });
 
 test("one worker blocks a second differently bracketed account until it is separately prepared", async () => {
@@ -127,6 +127,7 @@ test("one worker blocks a second differently bracketed account until it is separ
       events.push(`start:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}`);
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 15));
     },
+    async testPreparedQuantity() {},
     async verifyPrepared(prepared: AccountDefinition) { events.push(`verify:${prepared.id}`); },
     async enterPrepared(prepared: AccountDefinition) {
       events.push(`order:${prepared.id}`);
@@ -137,7 +138,7 @@ test("one worker blocks a second differently bracketed account until it is separ
   };
   const worker = new ConnectionWorker(definition, adapter);
   const funded = { ...account, id: "a2", name: "Funded", platformLabel: "ACCOUNT-2", stage: "funded" as const, targetPerContract: 4000, stopPerContract: 1000 };
-  await worker.prearm(account, 2);
+  await worker.prearm(account);
   await worker.enter(account, alert);
   await assert.rejects(() => worker.enter(funded, alert), /not ready/i);
   assert.deepEqual(events, [
@@ -155,7 +156,7 @@ test("unarmed order is blocked before any browser order call", async () => {
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare() {}, async verifyPrepared() {},
+    async prepare() {}, async testPreparedQuantity() {}, async verifyPrepared() {},
     async enterPrepared() { ordered = true; }, async enter() { ordered = true; }, async close() {},
     async readBalance() { return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
   };
@@ -175,11 +176,11 @@ test("live entry is blocked instead of waiting behind preparation work", async (
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare() { await gate; }, async verifyPrepared() {}, async enterPrepared() {}, async enter() {}, async close() {},
+    async prepare() { await gate; }, async testPreparedQuantity() {}, async verifyPrepared() {}, async enterPrepared() {}, async enter() {}, async close() {},
     async readBalance() { return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
   };
   const worker = new ConnectionWorker(definition, adapter);
-  const preparing = worker.prearm(account, 2);
+  const preparing = worker.prearm(account);
   await assert.rejects(() => worker.enter(account, alert), /busy.*blocked/i);
   release();
   await preparing;

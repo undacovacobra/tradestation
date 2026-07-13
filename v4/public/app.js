@@ -29,6 +29,7 @@ function render() {
   }).join("") || "<p>No saved login sessions.</p>";
   document.querySelector("#connections").innerHTML = data.connections.map((connection) => `<article class="connection-card"><div class="row"><h3>${esc(connection.name)}</h3><span class="pill ${connection.status.loggedIn ? "good" : "bad"}">${connection.status.loggedIn ? "Ready" : "Login required"}</span></div><p>${esc(connection.firm)} · ${connection.accountCount} account${connection.accountCount===1?"":"s"}</p><dl><dt>Worker</dt><dd>${connection.status.busy ? "Busy" : "Idle"}</dd><dt>Selected</dt><dd>${esc(connection.status.selectedAccount || "—")}</dd></dl>${connection.status.lastError ? `<p class="error">${esc(connection.status.lastError)}</p>` : ""}</article>`).join("") || "<p>No logins configured.</p>";
   document.querySelector("#pool-list").innerHTML = data.pools.map(renderPool).join("") || "<p>No pools configured.</p>";
+  populateSimultaneousPools();
   document.querySelector("#events").innerHTML = (data.events || []).map((event) => `<div class="event ${esc(event.kind)}"><time>${new Date(event.time).toLocaleTimeString()}</time><span>${esc(event.message)}</span></div>`).join("") || "<p>No activity yet.</p>";
 }
 
@@ -43,10 +44,10 @@ function renderPool(pool) {
     ? `<p><span class="pill good">READY</span> ${esc(pool.readinessReason)}</p>`
     : pool.prearmError
       ? `<p class="error"><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || pool.prearmError)}</p>`
-      : `<p><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || "Click Make next to prepare the account, ATM, and quantity in this execution session.")}</p>`;
+      : `<p><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || "Click Make next to prepare the account and ATM in this execution session.")}</p>`;
   return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>Lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p><p><strong>${webhookKind} webhook:</strong> <code>${esc(poolWebhookUrl(pool.id))}</code> <button onclick="copyWebhook('${esc(pool.id)}')">Copy webhook</button> <button id="test-button-${esc(pool.id)}" ${testState?.kind === "testing" ? "disabled" : ""} onclick="testWebhook('${esc(pool.id)}')">Test webhook</button>${webhookNote}</p><p id="test-result-${esc(pool.id)}" class="webhook-test-result ${esc(testState?.kind || "")}">${esc(testState?.message || "")}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
   ${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
-  <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button><label>Execution quantity<input id="quantity-${esc(pool.id)}" type="number" min="1" step="1" value="${esc(pool.quantity || 1)}"></label><button onclick="saveQuantity('${esc(pool.id)}')">Save quantity &amp; prepare</button></div></article>`;
+  <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button><span class="muted">Strategy quantity is read from every webhook.</span></div></article>`;
 }
 
 function renderAccountRow(pool, account, index) {
@@ -101,7 +102,41 @@ function setPoolTestResult(poolId, kind, message) {
 }
 async function accountAction(poolId, accountId, action, confirmFirst=false) { if (confirmFirst && !confirm("Permanently delete this account from V4 and every rotation?")) return; await post(`/api/pools/${encodeURIComponent(poolId)}/accounts/${encodeURIComponent(accountId)}`, { action }); }
 async function saveLane(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/lane`, { executionLane:document.getElementById(`lane-${poolId}`).value.trim() }); }
-async function saveQuantity(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/quantity`, { quantity:Number(document.getElementById(`quantity-${poolId}`).value) }); }
+function populateSimultaneousPools() {
+  for (const stage of ["eval", "funded"]) {
+    const select = document.querySelector(`#sim-${stage}-pool`);
+    const current = select.value;
+    const pools = data.pools.filter((pool) => pool.accounts.some((account) => account.stage === stage));
+    select.innerHTML = pools.map((pool) => `<option value="${esc(pool.id)}">${esc(pool.name)}</option>`).join("");
+    if (pools.some((pool) => pool.id === current)) select.value = current;
+  }
+}
+async function runSimultaneousTest() {
+  const button = document.querySelector("#sim-test-button");
+  const output = document.querySelector("#sim-test-result");
+  button.disabled = true;
+  output.className = "webhook-test-result testing";
+  output.textContent = "Starting eval and funded tests together…";
+  try {
+    const response = await fetch("/api/tests/simultaneous", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({
+      evalPoolId:document.querySelector("#sim-eval-pool").value,
+      evalQuantity:Number(document.querySelector("#sim-eval-quantity").value),
+      fundedPoolId:document.querySelector("#sim-funded-pool").value,
+      fundedQuantity:Number(document.querySelector("#sim-funded-quantity").value),
+    }) });
+    const body = await response.json();
+    if (!body.results) throw new Error(body.error || "Test failed");
+    const evalResult = body.results.find((item) => item.stage === "eval");
+    const fundedResult = body.results.find((item) => item.stage === "funded");
+    const time = (item) => item?.result?.timingMs?.total;
+    const detail = (item) => item?.ok ? `${time(item)} ms` : `FAILED: ${item?.error || "unknown error"}`;
+    output.className = `webhook-test-result ${body.ok ? "success" : "failure"}`;
+    output.textContent = `${body.ok ? "SUCCESS" : "FAILED"} — Eval ${detail(evalResult)} · Funded ${detail(fundedResult)} · Total ${body.totalMs} ms. No trades placed.`;
+  } catch (error) {
+    output.className = "webhook-test-result failure";
+    output.textContent = `FAILED — ${error.message}. No trades placed.`;
+  } finally { button.disabled = false; await refresh(); }
+}
 async function setMode(mode) {
   const confirmLive = mode === "live";
   if (confirmLive && !confirm("Enable LIVE mode? READY webhook signals can place real orders. Confirm that Tradovate order confirmations are disabled and the correct accounts are prepared.")) return;
@@ -150,5 +185,6 @@ document.querySelector("#refresh-balances").addEventListener("click", async () =
 });
 document.querySelector("#mode-practice").addEventListener("click", () => setMode("practice"));
 document.querySelector("#mode-live").addEventListener("click", () => setMode("live"));
-window.accountAction=accountAction; window.saveLane=saveLane; window.saveQuantity=saveQuantity; window.saveBracket=saveBracket; window.copyWebhook=copyWebhook; window.testWebhook=testWebhook;
+document.querySelector("#sim-test-button").addEventListener("click", runSimultaneousTest);
+window.accountAction=accountAction; window.saveLane=saveLane; window.saveBracket=saveBracket; window.copyWebhook=copyWebhook; window.testWebhook=testWebhook;
 refresh().catch((error)=>{ document.querySelector("#overall").textContent="Offline"; document.querySelector("#action-result").textContent=error.message; }); setInterval(refresh,5000);
