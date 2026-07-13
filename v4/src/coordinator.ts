@@ -48,6 +48,7 @@ export class TradeCoordinator {
             balanceUpdatedAt: record?.updatedAt ?? null,
             balanceHistory: record?.history ?? [],
             isNext: nextAccountId === account.id,
+            skippedToday: rotation?.isSkippedToday(account.id) ?? false,
             toTarget: pool.balanceTarget && record ? Math.max(0, pool.balanceTarget - record.balance) : null,
           };
         }),
@@ -217,10 +218,28 @@ export class TradeCoordinator {
     return [...this.rotations.values()].some((rotation) => rotation.snapshot().openTrade?.connectionId === connectionId);
   }
 
+  hasOpenTradeForAccount(accountId: string): boolean {
+    return [...this.rotations.values()].some((rotation) => rotation.snapshot().openTrade?.accountId === accountId);
+  }
+
   setNext(poolId: string, accountId: string): void {
     const rotation = this.rotations.get(poolId);
     if (!rotation) throw new Error(`Unknown pool: ${poolId}`);
     rotation.setNext(accountId, this.registry.accountsInPool(poolId));
+  }
+
+  skipToday(poolId: string, accountId: string): void {
+    const rotation = this.rotations.get(poolId);
+    if (!rotation) throw new Error(`Unknown pool: ${poolId}`);
+    rotation.skipToday(accountId, this.registry.accountsInPool(poolId));
+  }
+
+  resumeToday(poolId: string, accountId: string): void {
+    const rotation = this.rotations.get(poolId);
+    const pool = this.registry.pool(poolId);
+    if (!rotation || !pool) throw new Error(`Unknown pool: ${poolId}`);
+    if (!pool.accountIds.includes(accountId)) throw new Error(`Account ${accountId} is not in pool ${poolId}`);
+    rotation.resumeToday(accountId);
   }
 
   async refreshBalances(): Promise<Array<{ connectionId: string; refreshed: number; deferred: boolean; error?: string }>> {

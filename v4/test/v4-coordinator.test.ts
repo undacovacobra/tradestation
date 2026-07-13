@@ -98,3 +98,26 @@ test("funded pool never uses the evaluation balance target", async () => {
   assert.equal(results.length, 0);
   assert.equal(adapters.get("c2")!.closes, 0);
 });
+
+test("coordinator exposes skip-today status and allows resuming the account", () => {
+  const { coordinator } = setup("live");
+  coordinator.skipToday("p1", "a1");
+  const skipped = coordinator.status().find((pool) => pool.id === "p1")?.accounts.find((account) => account.id === "a1");
+  assert.equal(skipped?.skippedToday, true);
+  assert.equal(skipped?.isNext, false);
+  assert.throws(() => coordinator.setNext("p1", "a1"), /skipped for today/i);
+
+  coordinator.resumeToday("p1", "a1");
+  coordinator.setNext("p1", "a1");
+  const resumed = coordinator.status().find((pool) => pool.id === "p1")?.accounts.find((account) => account.id === "a1");
+  assert.equal(resumed?.skippedToday, false);
+  assert.equal(resumed?.isNext, true);
+});
+
+test("daily rotation controls reject the account holding an open trade", async () => {
+  const { coordinator } = setup("live");
+  await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  assert.equal(coordinator.hasOpenTradeForAccount("a1"), true);
+  assert.throws(() => coordinator.skipToday("p1", "a1"), /open trade/i);
+  assert.throws(() => coordinator.resumeToday("p1", "a1"), /open trade/i);
+});

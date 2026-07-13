@@ -85,6 +85,7 @@ export interface PoolState {
   nextAccountId: string | null;
   openTrade: OpenPoolTrade | null;
   lastWonDay: Record<string, string>;
+  skippedDay: Record<string, string>;
   history: Array<OpenPoolTrade & { closedAt: string; won?: boolean }>;
 }
 

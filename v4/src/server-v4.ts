@@ -60,6 +60,7 @@ app.get("/api/status", (_req, res) => {
     running: registry.running,
     mode: registry.mode,
     connections: workers.values().map((worker) => ({ ...worker.definition, accountCount: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).length, status: worker.status() })),
+    accounts: registry.snapshot().accounts,
     pools: coordinator.status(),
     events: listEvents(80),
   });
@@ -99,9 +100,11 @@ app.post("/api/pools/:poolId/accounts/:accountId", (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const { poolId, accountId } = req.params;
-    if (coordinator.accountForOpenTrade(poolId)?.id === accountId) throw new Error("This account has an open trade");
+    if (coordinator.hasOpenTradeForAccount(accountId)) throw new Error("This account has an open trade");
     const action = String(req.body?.action ?? "");
     if (action === "up" || action === "down") registry.movePoolAccount(poolId, accountId, action);
+    else if (action === "skip-today") coordinator.skipToday(poolId, accountId);
+    else if (action === "resume-today") coordinator.resumeToday(poolId, accountId);
     else if (action === "hold") registry.setAccountStatus(accountId, "held");
     else if (action === "activate") registry.setAccountStatus(accountId, "active");
     else if (action === "pass") registry.setAccountStatus(accountId, "passed");
@@ -145,6 +148,23 @@ app.post("/api/accounts/onboard", (req, res) => {
       poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
     });
     return res.status(201).json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
+app.patch("/api/accounts/:accountId", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const accountId = req.params.accountId;
+    if (coordinator.hasOpenTradeForAccount(accountId)) throw new Error("This account has an open trade");
+    const account = registry.updateAccount(accountId, {
+      name: String(req.body?.name ?? "").trim(),
+      firm: String(req.body?.firm ?? "").trim(),
+      stage: req.body?.stage,
+      poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
+    });
+    return res.json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
   } catch (error) {
     return res.status(400).json({ ok: false, error: (error as Error).message });
   }

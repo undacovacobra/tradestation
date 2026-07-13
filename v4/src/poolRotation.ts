@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import type { AccountDefinition, OpenPoolTrade, PoolState, V4Alert } from "./models.js";
 
-const emptyState = (): PoolState => ({ nextAccountId: null, openTrade: null, lastWonDay: {}, history: [] });
+const emptyState = (): PoolState => ({ nextAccountId: null, openTrade: null, lastWonDay: {}, skippedDay: {}, history: [] });
 
 export class PoolRotation {
   private state: PoolState;
@@ -35,8 +35,27 @@ export class PoolRotation {
   setNext(accountId: string, accounts: AccountDefinition[]): void {
     if (this.state.openTrade) throw new Error(`Pool ${this.poolId} has an open trade`);
     if (!accounts.some((account) => account.id === accountId)) throw new Error(`Account ${accountId} is not active in pool ${this.poolId}`);
+    if (this.isSkippedToday(accountId)) throw new Error(`Account ${accountId} is skipped for today in pool ${this.poolId}`);
     this.state.nextAccountId = accountId;
     this.save();
+  }
+
+  skipToday(accountId: string, accounts: AccountDefinition[]): void {
+    if (this.state.openTrade) throw new Error(`Pool ${this.poolId} has an open trade`);
+    if (!accounts.some((account) => account.id === accountId)) throw new Error(`Account ${accountId} is not active in pool ${this.poolId}`);
+    this.state.skippedDay[accountId] = this.today();
+    if (this.state.nextAccountId === accountId) this.state.nextAccountId = null;
+    this.save();
+  }
+
+  resumeToday(accountId: string): void {
+    if (this.state.openTrade) throw new Error(`Pool ${this.poolId} has an open trade`);
+    delete this.state.skippedDay[accountId];
+    this.save();
+  }
+
+  isSkippedToday(accountId: string): boolean {
+    return this.state.skippedDay[accountId] === this.today();
   }
 
   select(accounts: AccountDefinition[], lockedAccountIds: Set<string>): AccountDefinition {
@@ -46,6 +65,7 @@ export class PoolRotation {
     for (let step = 0; step < accounts.length; step++) {
       const account = accounts[(start + step) % accounts.length]!;
       if (lockedAccountIds.has(account.id)) continue;
+      if (this.isSkippedToday(account.id)) continue;
       if (this.benchWinnersForDay && this.state.lastWonDay[account.id] === this.today()) continue;
       return account;
     }
