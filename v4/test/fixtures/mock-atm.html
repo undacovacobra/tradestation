@@ -11,7 +11,11 @@
   </div>
   <div id="dialog" role="dialog">
     <h2>ATM Settings</h2>
-    <div><span>Show in</span> <span>$ Value</span></div>
+    <div>
+      <span>Show in</span>
+      <div class="select-input"><div id="show-in" tabindex="0" onclick="document.getElementById('dollar-option').hidden=false"><span class="form-control">Ticks</span></div></div>
+      <button id="dollar-option" hidden onclick="document.querySelector('#show-in .form-control').textContent='$ Value';this.hidden=true">$ Value</button>
+    </div>
     <div><label>Take Profit</label> <input id="tp" type="number" value="150"></div>
     <div><label>Stop Loss</label> <input id="sl" type="number" value="100"></div>
     <button onclick="document.getElementById('dialog').style.display='none'">Save</button>

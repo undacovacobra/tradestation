@@ -577,10 +577,27 @@ export class TradovateBrowser {
   }
 
   private async ensureShowInDollars(): Promise<boolean> {
-    const dollarShown = () => this.p.getByText(/\$\s*value/i).first().isVisible({ timeout: 1_000 }).catch(() => false);
+    const dollarShown = () => this.p.getByText(/\$\s*value/i).filter({ visible: true }).first().isVisible({ timeout: 1_000 }).catch(() => false);
     if (await dollarShown()) return true;
-    await this.p.getByText(/show\s*in/i).first().click({ timeout: 2_000 }).catch(() => {});
-    const option = this.p.getByText(/\$\s*value/i).first();
+    const marked = await this.p.evaluate(() => {
+      const label = [...document.querySelectorAll("*")]
+        .filter((el) => /^show\s*in$/i.test((el.textContent || "").trim()))
+        .sort((a, b) => (a.textContent || "").length - (b.textContent || "").length)[0];
+      let row: Element | null = label || null;
+      for (let up = 0; up < 5 && row; up++, row = row.parentElement) {
+        const select = row.querySelector('.select-input [tabindex], .select-input, [role="combobox"]') as HTMLElement | null;
+        if (select) { select.setAttribute("data-bot-show-in", "1"); return true; }
+      }
+      return false;
+    }).catch(() => false);
+    if (marked) {
+      const select = this.p.locator("[data-bot-show-in]").first();
+      await select.click({ timeout: 2_000 }).catch(() => {});
+      await select.evaluate((el) => el.removeAttribute("data-bot-show-in")).catch(() => {});
+    } else {
+      await this.p.getByText(/^\s*Ticks\s*$/i).filter({ visible: true }).first().click({ timeout: 2_000 }).catch(() => {});
+    }
+    const option = this.p.getByText(/\$\s*value/i).filter({ visible: true }).last();
     if (await option.isVisible({ timeout: 1_500 }).catch(() => false)) await option.click({ timeout: 2_000 }).catch(() => {});
     return await dollarShown();
   }
