@@ -251,6 +251,26 @@ app.post("/api/pools/:id/lane", (req, res) => {
   }
 });
 
+app.post("/api/pools/:poolId/test-webhook", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const action = req.body?.action ?? "buy";
+    const alert = V4AlertSchema.parse({
+      signalId: `dashboard-test-${Date.now()}`,
+      action,
+      symbol: String(req.body?.symbol ?? "MNQ").trim().toUpperCase(),
+      quantity: Number(req.body?.quantity ?? 1),
+      marketPosition: action === "close" ? "flat" : action === "sell" ? "short" : "long",
+      test: true,
+    });
+    const result = await coordinator.handle(req.params.poolId, alert);
+    pushEvent("info", `Dashboard test webhook for ${req.params.poolId}: ${result.message}`);
+    return res.status(result.ok ? 200 : 409).json({ ok: result.ok, result, placedTrade: false });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message, placedTrade: false });
+  }
+});
+
 app.post("/webhook/:poolId", async (req, res) => {
   try {
     const alert = parseAuthorizedAlert(req);

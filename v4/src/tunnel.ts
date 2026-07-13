@@ -18,6 +18,7 @@ export type TunnelState = "off" | "connecting" | "on" | "error";
 export interface TunnelStatus {
   state: TunnelState;
   url: string | null;
+  configuredUrl: string | null;
   error: string | null;
   /** Whether an authtoken is configured (so the UI can prompt if not). */
   configured: boolean;
@@ -44,7 +45,10 @@ async function loadNgrok(): Promise<any> {
 }
 
 export function tunnelStatus(): TunnelStatus {
-  return { state, url: publicUrl, error: lastError, configured: Boolean(config.ngrokAuthtoken) };
+  const configuredUrl = config.ngrokDomain
+    ? `https://${config.ngrokDomain.replace(/^https?:\/\//, "").replace(/\/$/, "")}`
+    : null;
+  return { state, url: publicUrl, configuredUrl, error: lastError, configured: Boolean(config.ngrokAuthtoken) };
 }
 
 export async function connectTunnel(): Promise<TunnelStatus> {
