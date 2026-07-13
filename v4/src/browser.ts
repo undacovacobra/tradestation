@@ -679,6 +679,70 @@ export class TradovateBrowser {
       .catch(() => []);
   }
 
+  /** Read-only metadata for the small strip of controls beside the visible ATM label. */
+  async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> {
+    if (!this.page) return [];
+    return await this.page.evaluate(() => {
+      const roots: (Document | ShadowRoot)[] = [document];
+      const elements: HTMLElement[] = [];
+      while (roots.length) {
+        const root = roots.pop()!;
+        for (const node of root.querySelectorAll("*")) {
+          const el = node as HTMLElement;
+          elements.push(el);
+          if (el.shadowRoot) roots.push(el.shadowRoot);
+        }
+      }
+      const visible = (el: HTMLElement) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const label = elements
+        .filter((el) => (el.textContent || "").trim() === "ATM" && visible(el))
+        .sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0];
+      if (!label) return [];
+      const lr = label.getBoundingClientRect();
+      const cy = lr.top + lr.height / 2;
+      const nearby = elements.filter((el) => {
+        if (!visible(el)) return false;
+        const r = el.getBoundingClientRect();
+        const ey = r.top + r.height / 2;
+        return r.left >= lr.left - 12 && r.left <= lr.right + 210 && Math.abs(ey - cy) <= 36 && r.width <= 240 && r.height <= 80;
+      });
+      const chain = new Set<HTMLElement>();
+      for (const el of nearby) {
+        chain.add(el);
+        let parent = el.parentElement;
+        for (let up = 0; up < 3 && parent; up++, parent = parent.parentElement) chain.add(parent);
+      }
+      return [...chain]
+        .filter(visible)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return {
+            tag: el.tagName.toLowerCase(),
+            text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
+            cls: (el.getAttribute("class") || "").slice(0, 160),
+            role: el.getAttribute("role") || "",
+            ariaLabel: el.getAttribute("aria-label") || "",
+            title: el.getAttribute("title") || "",
+            tabIndex: el.tabIndex,
+            cursor: style.cursor,
+            hasClickHandler: typeof (el as HTMLElement & { onclick?: unknown }).onclick === "function",
+            x: Math.round(r.left),
+            y: Math.round(r.top),
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+            html: el.outerHTML.replace(/\s+/g, " ").slice(0, 300),
+          };
+        })
+        .sort((a, b) => a.x - b.x || a.width - b.width)
+        .slice(0, 80);
+    }).catch(() => []);
+  }
+
   /** Click Buy Mkt / Sell Mkt. Symbol comes from the Tradovate UI; size is set
    *  by setQuantity when the alert carries one. If a popup blocks the click,
    *  it's cleared and the click retried once. */

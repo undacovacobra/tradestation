@@ -143,6 +143,16 @@ app.post("/api/connections/:id/test-bracket", async (req, res) => {
   }
 });
 
+app.get("/api/connections/:id/atm-controls", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  const worker = workers.get(req.params.id);
+  if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
+  try {
+    const controls = await worker.run((adapter) => adapter.inspectAtmControls());
+    return res.json({ ok: true, controls, changedSettings: false, placedTrade: false });
+  } catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
+});
+
 app.get("/api/connections/:id/accounts", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);

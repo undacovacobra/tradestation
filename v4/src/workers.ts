@@ -11,6 +11,7 @@ export interface ConnectionAdapter {
   discoverAccounts(): Promise<string[]>;
   setBracket(targetPerContract: number, stopPerContract: number, force?: boolean): Promise<void>;
   inspectFields(): Promise<Array<Record<string, string>>>;
+  inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>>;
   enter(account: AccountDefinition, alert: V4Alert): Promise<void>;
   close(account: AccountDefinition): Promise<void>;
   readBalance(account: AccountDefinition): Promise<number | null>;
@@ -81,6 +82,7 @@ class TradovateAdapter implements ConnectionAdapter {
     return this.browser.setBracket(targetPerContract, stopPerContract, force);
   }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.browser.inspectFields(); }
+  inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return this.browser.inspectAtmControls(); }
   async enter(account: AccountDefinition, alert: V4Alert): Promise<void> {
     await prepareEntry(this.browser, account, alert);
   }
@@ -110,6 +112,7 @@ class SimulatedAdapter implements ConnectionAdapter {
   async discoverAccounts(): Promise<string[]> { return []; }
   async setBracket(): Promise<void> {}
   async inspectFields(): Promise<Array<Record<string, string>>> { return []; }
+  async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return []; }
   async enter(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async close(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async readBalance(): Promise<number | null> { return null; }

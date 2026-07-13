@@ -21,6 +21,7 @@ class FakeAdapter implements ConnectionAdapter {
   async discoverAccounts() { return []; }
   async setBracket() {}
   async inspectFields() { return []; }
+  async inspectAtmControls() { return []; }
   async enter(_account: AccountDefinition, _alert: V4Alert) {
     active++;
     maxActive = Math.max(maxActive, active);
