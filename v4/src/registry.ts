@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { bracketDefaults, isUnconfiguredBracket } from "./bracketDefaults.js";
 import { AccountSchema, ConnectionSchema, RegistrySchema, type AccountDefinition, type ConnectionDefinition, type PoolDefinition, type RegistryData } from "./models.js";
 
 const EMPTY: RegistryData = { version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] };
@@ -14,7 +15,15 @@ export class Registry {
 
   private load(): RegistryData {
     if (!existsSync(this.path)) return RegistrySchema.parse(EMPTY);
-    return RegistrySchema.parse(JSON.parse(readFileSync(this.path, "utf8")));
+    const parsed = RegistrySchema.parse(JSON.parse(readFileSync(this.path, "utf8")));
+    let changed = false;
+    for (const account of parsed.accounts) {
+      if (!isUnconfiguredBracket(account)) continue;
+      Object.assign(account, bracketDefaults(account.stage));
+      changed = true;
+    }
+    if (changed) this.write(parsed);
+    return parsed;
   }
 
   private validateReferences(): void {
@@ -73,6 +82,13 @@ export class Registry {
       if (!pool) throw new Error(`Unknown pool: ${id}`);
       return pool;
     });
+    const requestedBracket = {
+      targetPerContract: input.targetPerContract ?? 0,
+      stopPerContract: input.stopPerContract ?? 0,
+    };
+    const bracket = requestedBracket.targetPerContract === 0 && requestedBracket.stopPerContract === 0
+      ? bracketDefaults(input.stage)
+      : requestedBracket;
     const account = AccountSchema.parse({
       id: input.id,
       name: input.name,
@@ -83,8 +99,7 @@ export class Registry {
       enabled: true,
       status: "active",
       tags: [],
-      targetPerContract: input.targetPerContract ?? 0,
-      stopPerContract: input.stopPerContract ?? 0,
+      ...bracket,
     });
     this.data.accounts.push(account);
     for (const pool of pools) if (!pool.accountIds.includes(account.id)) pool.accountIds.push(account.id);
@@ -194,9 +209,13 @@ export class Registry {
   }
 
   private save(): void {
+    this.write(this.data);
+  }
+
+  private write(data: RegistryData): void {
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.data, null, 2));
+    writeFileSync(tmp, JSON.stringify(data, null, 2));
     renameSync(tmp, this.path);
   }
 }

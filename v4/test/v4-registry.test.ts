@@ -97,23 +97,54 @@ test("configured account fields and pool memberships can be updated without chan
   assert.equal(new Registry(path).account("a1")?.name, "Renamed");
 });
 
-test("old accounts default to no dollar bracket and valid bracket pairs persist", () => {
+test("unconfigured accounts migrate to stage defaults and valid custom pairs persist", () => {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-account-bracket-"));
   const path = resolve(dir, "registry.json");
   writeFileSync(path, JSON.stringify({
     version: 4, running: true, mode: "practice",
     connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
-    accounts: [{ id: "a1", name: "Account", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] }],
-    pools: [{ id: "p1", name: "Pool", accountIds: ["a1"], enabled: true, benchWinnersForDay: false }],
+    accounts: [
+      { id: "a1", name: "Evaluation", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] },
+      { id: "a2", name: "Funded", firm: "Firm", stage: "funded", connectionId: "c1", platformLabel: "A2", enabled: true, status: "active", tags: [], targetPerContract: 0, stopPerContract: 0 },
+      { id: "a3", name: "Custom", firm: "Firm", stage: "funded", connectionId: "c1", platformLabel: "A3", enabled: true, status: "active", tags: [], targetPerContract: 2500, stopPerContract: 750 },
+    ],
+    pools: [{ id: "p1", name: "Pool", accountIds: ["a1", "a2", "a3"], enabled: true, benchWinnersForDay: false }],
   }));
   const registry = new Registry(path);
-  assert.equal(registry.account("a1")?.targetPerContract, 0);
-  assert.equal(registry.account("a1")?.stopPerContract, 0);
+  assert.deepEqual(
+    { target: registry.account("a1")?.targetPerContract, stop: registry.account("a1")?.stopPerContract },
+    { target: 1520, stop: 1000 },
+  );
+  assert.deepEqual(
+    { target: registry.account("a2")?.targetPerContract, stop: registry.account("a2")?.stopPerContract },
+    { target: 4000, stop: 1000 },
+  );
+  assert.deepEqual(
+    { target: registry.account("a3")?.targetPerContract, stop: registry.account("a3")?.stopPerContract },
+    { target: 2500, stop: 750 },
+  );
+  assert.equal(new Registry(path).account("a2")?.targetPerContract, 4000, "migration is persisted");
 
   registry.updateAccount("a1", { name: "Account", firm: "Firm", stage: "eval", poolIds: ["p1"], targetPerContract: 30, stopPerContract: 20 });
   const reloaded = new Registry(path).account("a1");
   assert.equal(reloaded?.targetPerContract, 30);
   assert.equal(reloaded?.stopPerContract, 20);
+});
+
+test("new accounts use editable stage defaults when no bracket is supplied", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-new-account-bracket-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [],
+    pools: [{ id: "p1", name: "Pool", accountIds: [], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  const evaluation = registry.onboardAccount({ id: "e1", name: "Evaluation", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "E1", poolIds: ["p1"] });
+  const funded = registry.onboardAccount({ id: "f1", name: "Funded", firm: "Firm", stage: "funded", connectionId: "c1", platformLabel: "F1", poolIds: ["p1"] });
+  assert.deepEqual({ target: evaluation.targetPerContract, stop: evaluation.stopPerContract }, { target: 1520, stop: 1000 });
+  assert.deepEqual({ target: funded.targetPerContract, stop: funded.stopPerContract }, { target: 4000, stop: 1000 });
 });
 
 test("one-sided dollar brackets are rejected", () => {
