@@ -5,7 +5,7 @@
   <button>Buy Mkt</button><button>Sell Mkt</button>
   <div style="display:flex;align-items:center;gap:8px">
     <span>ATM</span><button>...</button>
-    <button id="atm-gear" onclick="document.getElementById('dialog').style.display='block'"><svg width="12" height="12"><circle cx="6" cy="6" r="5"></circle></svg></button>
+    <div id="atm-gear" data-testid="atm-settings-button" type="button" class="btn btn-info" onclick="document.getElementById('dialog').style.display='block'"><svg width="12" height="12"><circle cx="6" cy="6" r="5"></circle></svg></div>
     <button>DAY</button><button>GTC</button>
     <button id="day-gear" onclick="window.dayGearClicks=(window.dayGearClicks||0)+1"><svg width="12" height="12"><circle cx="6" cy="6" r="5"></circle></svg></button>
   </div>

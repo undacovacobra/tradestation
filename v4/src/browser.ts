@@ -520,6 +520,7 @@ export class TradovateBrowser {
 
   private async openAtmSettings(): Promise<void> {
     const candidates = [
+      this.p.locator('[data-testid="atm-settings-button"]'),
       this.p.locator('[aria-label*="atm" i][aria-label*="setting" i]'),
       this.p.locator('[title*="atm" i][title*="setting" i]'),
       this.p.locator('[aria-label*="setting" i]'),
