@@ -100,7 +100,7 @@ app.post("/api/pools/:poolId/accounts/:accountId", (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
     const { poolId, accountId } = req.params;
-    if (coordinator.accountForOpenTrade(poolId)?.id === accountId) throw new Error("This account has an open trade");
+    if (coordinator.hasOpenTradeForAccount(accountId)) throw new Error("This account has an open trade");
     const action = String(req.body?.action ?? "");
     if (action === "up" || action === "down") registry.movePoolAccount(poolId, accountId, action);
     else if (action === "skip-today") coordinator.skipToday(poolId, accountId);
