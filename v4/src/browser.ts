@@ -682,7 +682,7 @@ export class TradovateBrowser {
   /** Read-only metadata for the small strip of controls beside the visible ATM label. */
   async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> {
     if (!this.page) return [];
-    return await this.page.evaluate(() => {
+    const direct = await this.page.evaluate(() => {
       const roots: (Document | ShadowRoot)[] = [document];
       const elements: HTMLElement[] = [];
       while (roots.length) {
@@ -741,6 +741,44 @@ export class TradovateBrowser {
         .sort((a, b) => a.x - b.x || a.width - b.width)
         .slice(0, 80);
     }).catch(() => []);
+    if (direct.length) return direct;
+
+    const frameResults: Array<Record<string, string | number | boolean>> = [];
+    for (const frame of this.page.frames()) {
+      const records = await frame.evaluate(() => {
+        const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
+        const matches = [...document.querySelectorAll("*")]
+          .filter((node) => /\bATM\b/i.test((node.textContent || "").trim()) || /atm|setting|gear/i.test(`${node.getAttribute("class") || ""} ${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""}`))
+          .slice(0, 30)
+          .map((node) => {
+            const el = node as HTMLElement;
+            const r = el.getBoundingClientRect();
+            return {
+              kind: "element",
+              tag: el.tagName.toLowerCase(),
+              text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 100),
+              cls: (el.getAttribute("class") || "").slice(0, 180),
+              role: el.getAttribute("role") || "",
+              ariaLabel: el.getAttribute("aria-label") || "",
+              title: el.getAttribute("title") || "",
+              x: Math.round(r.left),
+              y: Math.round(r.top),
+              width: Math.round(r.width),
+              height: Math.round(r.height),
+              html: el.outerHTML.replace(/\s+/g, " ").slice(0, 360),
+            };
+          });
+        return [{
+          kind: "frame",
+          title: document.title,
+          bodyText: bodyText.slice(0, 240),
+          elementCount: document.querySelectorAll("*").length,
+          matchCount: matches.length,
+        }, ...matches];
+      }).catch(() => [] as Array<Record<string, string | number | boolean>>);
+      for (const record of records) frameResults.push({ frameUrl: frame.url().slice(0, 240), ...record });
+    }
+    return frameResults.slice(0, 100);
   }
 
   /** Click Buy Mkt / Sell Mkt. Symbol comes from the Tradovate UI; size is set
