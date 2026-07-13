@@ -58,10 +58,20 @@ test("control center renders every rotation with explicit account controls", () 
 
 test("control center shows a real copyable URL for every pool webhook", () => {
   const app = readFileSync(resolve("public/app.js"), "utf8");
-  assert.match(app, /new URL\(`\/webhook\/\$\{encodeURIComponent\(poolId\)\}`,\s*window\.location\.origin\)\.href/);
+  assert.match(app, /data\.tunnel\?\.url\s*\|\|\s*window\.location\.origin/);
+  assert.match(app, /new URL\(`\/webhook\/\$\{encodeURIComponent\(poolId\)\}`/);
   assert.match(app, /navigator\.clipboard\.writeText/);
   assert.match(app, /Copy webhook/);
   assert.match(app, /Permanently delete this account from V4 and every rotation\?/);
+});
+
+test("V4 server exposes and manages the public ngrok tunnel", () => {
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(server, /autoStartTunnel/);
+  assert.match(server, /disconnectTunnel/);
+  assert.match(server, /tunnelStatus/);
+  assert.match(server, /tunnel:\s*tunnelStatus\(\)/);
+  assert.match(server, /\/api\/tunnel\/connect/);
 });
 
 test("control center shows whether each next account is actually pre-armed", () => {

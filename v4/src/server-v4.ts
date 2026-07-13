@@ -10,6 +10,7 @@ import { notifyActionNeeded, notifyGoodNews } from "./notify.js";
 import { BalanceLog } from "./balances.js";
 import { ConnectionManager } from "./connectionManager.js";
 import { listEvents, pushEvent } from "./events.js";
+import { autoStartTunnel, connectTunnel, disconnectTunnel, tunnelStatus } from "./tunnel.js";
 
 const registry = new Registry(config.registryPath);
 const workers = new ConnectionManager(registry.connections());
@@ -62,8 +63,20 @@ app.get("/api/status", (_req, res) => {
     connections: workers.values().map((worker) => ({ ...worker.definition, accountCount: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).length, status: worker.status() })),
     accounts: registry.snapshot().accounts,
     pools: coordinator.status(),
+    tunnel: tunnelStatus(),
     events: listEvents(80),
   });
+});
+
+app.post("/api/tunnel/connect", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  const tunnel = await connectTunnel();
+  return res.status(tunnel.state === "error" ? 503 : 200).json({ ok: tunnel.state === "on", tunnel, error: tunnel.error });
+});
+
+app.post("/api/tunnel/disconnect", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  return res.json({ ok: true, tunnel: await disconnectTunnel() });
 });
 
 app.post("/api/connections", (req, res) => {
@@ -305,11 +318,13 @@ const server = app.listen(config.port, config.host, () => {
   log.info(`V4 listening at http://${config.host}:${config.port}`);
   log.info(`Pools: ${registry.pools().map((pool) => pool.id).join(", ") || "none configured"}`);
   void autoConnect();
+  void autoStartTunnel();
 });
 
 async function shutdown() {
   clearInterval(healthTimer);
   clearInterval(targetTimer);
+  await disconnectTunnel();
   await Promise.allSettled(workers.values().map((worker) => worker.disconnect()));
   server.close(() => process.exit(0));
 }
