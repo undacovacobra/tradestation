@@ -3,9 +3,11 @@ const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").
 let statusData;
 
 async function loadStatus() {
+  const selected = document.querySelector("#connection").value;
   const response = await fetch("/api/status", { cache: "no-store" });
   statusData = await response.json();
   document.querySelector("#connection").innerHTML = statusData.connections.map((c) => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.firm)}</option>`).join("");
+  if (statusData.connections.some((connection) => connection.id === selected)) document.querySelector("#connection").value = selected;
 }
 
 function selectedConnection() { return statusData.connections.find((c) => c.id === document.querySelector("#connection").value); }
@@ -25,36 +27,50 @@ document.querySelector("#scan").addEventListener("click", async () => {
   const body = await response.json();
   if (!body.ok) { message.textContent = body.error; return; }
   message.textContent = `Found ${body.accounts.length} account label${body.accounts.length === 1 ? "" : "s"}.`;
-  const known = new Set(body.accounts.filter((label) => !body.unknown.includes(label)));
-  document.querySelector("#discovered").innerHTML = body.accounts.map((label) => known.has(label)
-    ? `<article><div class="row"><h3>${esc(label)}</h3><span class="pill good">Already configured</span></div></article>`
-    : accountForm(connection, label)).join("") || "<p>No matching account labels were found. Check the connection's accountPattern.</p>";
+  document.querySelector("#discovered").innerHTML = body.accounts.map((label) => {
+    const account = statusData.accounts.find((item) => item.connectionId === connection.id && item.platformLabel === label);
+    return accountForm(connection, label, account);
+  }).join("") || "<p>No matching account labels were found. Check the connection's accountPattern.</p>";
   document.querySelector("#missing").innerHTML = body.missing.map((label) => `<article><div class="row"><h3>${esc(label)}</h3><span class="pill bad">Not visible in browser</span></div></article>`).join("") || "<p>No configured accounts are missing.</p>";
 });
 
-function accountForm(connection, label) {
-  const poolChecks = statusData.pools.map((pool) => `<label class="check"><input type="checkbox" name="pool" value="${esc(pool.id)}"> ${esc(pool.name)}</label>`).join("");
-  return `<article class="onboard-card" data-label="${esc(label)}"><div class="row"><h3>${esc(label)}</h3><span class="pill">New</span></div><div class="onboard-grid">
-    <label>Internal id<input name="id" value="${esc(slug(`${connection.firm}-${label}`))}"></label>
-    <label>Friendly name<input name="name" value="${esc(label)}"></label>
-    <label>Firm<input name="firm" value="${esc(connection.firm)}"></label>
-    <label>Stage<select name="stage"><option value="eval">Evaluation</option><option value="funded">Funded</option></select></label>
-  </div><div class="pool-list"><strong>Rotation pools</strong>${poolChecks || "<p>Create a pool in registry.json first.</p>"}</div><button type="button" onclick="saveAccount(this)">Save account</button><p class="save-result"></p></article>`;
+function accountForm(connection, label, account) {
+  const poolChecks = statusData.pools.map((pool) => `<label class="check"><input type="checkbox" name="pool" value="${esc(pool.id)}"${account && pool.accountIds.includes(account.id) ? " checked" : ""}> ${esc(pool.name)}</label>`).join("");
+  const id = account?.id || slug(`${connection.firm}-${label}`);
+  const stage = account?.stage || "eval";
+  return `<article class="onboard-card" data-label="${esc(label)}" data-account-id="${esc(account?.id || "")}"><div class="row"><h3>${esc(label)}</h3><span class="pill ${account ? "good" : ""}">${account ? "Configured" : "New"}</span></div><div class="onboard-grid">
+    <label>Internal id<input name="id" value="${esc(id)}"${account ? " readonly" : ""}></label>
+    <label>Friendly name<input name="name" value="${esc(account?.name || label)}"></label>
+    <label>Firm<input name="firm" value="${esc(account?.firm || connection.firm)}"></label>
+    <label>Stage<select name="stage"><option value="eval"${stage === "eval" ? " selected" : ""}>Evaluation</option><option value="funded"${stage === "funded" ? " selected" : ""}>Funded</option></select></label>
+  </div><div class="pool-list"><strong>Rotation pools</strong>${poolChecks || "<p>No rotation pools are configured.</p>"}</div><button type="button" onclick="saveAccount(this)">${account ? "Save changes" : "Save account"}</button><p class="save-result"></p></article>`;
 }
 
 async function saveAccount(button) {
   const card = button.closest("article");
-  const connection = selectedConnection();
   const payload = {
-    connectionId: connection.id, platformLabel: card.dataset.label,
-    id: card.querySelector('[name="id"]').value.trim(), name: card.querySelector('[name="name"]').value.trim(),
+    name: card.querySelector('[name="name"]').value.trim(),
     firm: card.querySelector('[name="firm"]').value.trim(), stage: card.querySelector('[name="stage"]').value,
     poolIds: [...card.querySelectorAll('[name="pool"]:checked')].map((input) => input.value),
   };
-  const response = await fetch("/api/accounts/onboard", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(payload) });
+  const accountId = card.dataset.accountId;
+  if (!accountId) {
+    const connection = selectedConnection();
+    payload.connectionId = connection.id;
+    payload.platformLabel = card.dataset.label;
+    payload.id = card.querySelector('[name="id"]').value.trim();
+  }
+  button.disabled = true;
+  const response = await fetch(accountId ? `/api/accounts/${encodeURIComponent(accountId)}` : "/api/accounts/onboard", { method:accountId ? "PATCH" : "POST", headers:{"content-type":"application/json"}, body:JSON.stringify(payload) });
   const body = await response.json();
-  card.querySelector(".save-result").textContent = body.ok ? `Saved to registry.json${body.pools.length ? ` and added to: ${body.pools.join(", ")}` : ""}.` : body.error;
-  if (body.ok) { button.disabled = true; button.textContent = "Saved"; await loadStatus(); }
+  button.disabled = false;
+  card.querySelector(".save-result").textContent = body.ok ? `Saved${body.pools.length ? ` · rotations: ${body.pools.join(", ")}` : " · not currently in a rotation"}.` : body.error;
+  if (body.ok) {
+    card.dataset.accountId = body.account.id;
+    card.querySelector('[name="id"]').readOnly = true;
+    button.textContent = "Save changes";
+    await loadStatus();
+  }
 }
 window.saveAccount = saveAccount;
 loadStatus().catch((error) => { document.querySelector("#scan-status").textContent = error.message; });

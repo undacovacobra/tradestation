@@ -60,6 +60,7 @@ app.get("/api/status", (_req, res) => {
     running: registry.running,
     mode: registry.mode,
     connections: workers.values().map((worker) => ({ ...worker.definition, accountCount: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).length, status: worker.status() })),
+    accounts: registry.snapshot().accounts,
     pools: coordinator.status(),
     events: listEvents(80),
   });
