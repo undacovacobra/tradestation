@@ -47,3 +47,19 @@ test("BalanceLog stores, reads instantly, and persists", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("BalanceLog permanently removes an account and its history", () => {
+  const dir = mkdtempSync(join(tmpdir(), "balances-remove-"));
+  try {
+    const path = join(dir, "balances.json");
+    const log = new BalanceLog(path);
+    log.set("deleted", 50_000);
+    log.set("kept", 51_000);
+    log.remove("deleted");
+    assert.equal(log.get("deleted"), null);
+    assert.equal(log.get("kept"), 51_000);
+    assert.equal(new BalanceLog(path).snapshot().deleted, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

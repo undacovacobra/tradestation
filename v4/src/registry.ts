@@ -202,6 +202,16 @@ export class Registry {
     return structuredClone(pool);
   }
 
+  removeAccount(accountId: string): AccountDefinition {
+    const index = this.data.accounts.findIndex((account) => account.id === accountId);
+    if (index < 0) throw new Error(`Unknown account: ${accountId}`);
+    const [removed] = this.data.accounts.splice(index, 1);
+    for (const pool of this.data.pools) pool.accountIds = pool.accountIds.filter((id) => id !== accountId);
+    this.validateReferences();
+    this.save();
+    return structuredClone(removed!);
+  }
+
   replace(next: RegistryData): void {
     this.data = RegistrySchema.parse(next);
     this.validateReferences();

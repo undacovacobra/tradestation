@@ -62,6 +62,12 @@ export class BalanceLog {
     this.save();
   }
 
+  remove(label: string): void {
+    if (!(label in this.recs)) return;
+    delete this.recs[label];
+    this.save();
+  }
+
   /** Snapshot for the dashboard, keyed by account label. */
   snapshot(): Record<string, { balance: number; updatedAt: string; history: BalancePoint[] }> {
     const out: Record<string, { balance: number; updatedAt: string; history: BalancePoint[] }> = {};

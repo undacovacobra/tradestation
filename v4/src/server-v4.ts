@@ -108,7 +108,10 @@ app.post("/api/pools/:poolId/accounts/:accountId", async (req, res) => {
     else if (action === "hold") registry.setAccountStatus(accountId, "held");
     else if (action === "activate") registry.setAccountStatus(accountId, "active");
     else if (action === "pass") registry.setAccountStatus(accountId, "passed");
-    else if (action === "remove") registry.removeAccountFromPool(poolId, accountId);
+    else if (action === "remove") {
+      registry.removeAccount(accountId);
+      balances.remove(accountId);
+    }
     else if (action === "next") await coordinator.setNext(poolId, accountId);
     else throw new Error(`Unsupported action: ${action}`);
     if (!["skip-today", "resume-today", "next"].includes(action)) await coordinator.prearmPool(poolId);

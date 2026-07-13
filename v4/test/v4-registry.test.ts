@@ -73,6 +73,30 @@ test("pool order and account status can be managed", () => {
   assert.equal(registry.account("a1")?.status, "held");
 });
 
+test("removing an account deletes it from the registry and every pool", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-delete-account-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [
+      { id: "a1", name: "Delete Me", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] },
+      { id: "a2", name: "Keep Me", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A2", enabled: true, status: "active", tags: [] },
+    ],
+    pools: [
+      { id: "p1", name: "One", accountIds: ["a1", "a2"], enabled: true, benchWinnersForDay: false },
+      { id: "p2", name: "Two", accountIds: ["a1"], enabled: true, benchWinnersForDay: false },
+    ],
+  }));
+  const registry = new Registry(path);
+  const removed = registry.removeAccount("a1");
+  assert.equal(removed.platformLabel, "A1");
+  assert.equal(registry.account("a1"), undefined);
+  assert.deepEqual(registry.pool("p1")?.accountIds, ["a2"]);
+  assert.deepEqual(registry.pool("p2")?.accountIds, []);
+  assert.equal(new Registry(path).account("a1"), undefined);
+});
+
 test("configured account fields and pool memberships can be updated without changing broker identity", () => {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-edit-account-"));
   const path = resolve(dir, "registry.json");
