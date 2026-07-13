@@ -89,6 +89,28 @@ export class Registry {
     return account;
   }
 
+  updateAccount(id: string, input: { name: string; firm: string; stage: "eval" | "funded"; poolIds: string[] }): AccountDefinition {
+    const index = this.data.accounts.findIndex((account) => account.id === id);
+    if (index < 0) throw new Error(`Unknown account: ${id}`);
+    const current = this.data.accounts[index]!;
+    const requestedPoolIds = [...new Set(input.poolIds)];
+    for (const poolId of requestedPoolIds) if (!this.pool(poolId)) throw new Error(`Unknown pool: ${poolId}`);
+    const updated = AccountSchema.parse({ ...current, name: input.name.trim(), firm: input.firm.trim(), stage: input.stage });
+
+    this.data.accounts[index] = updated;
+    const requested = new Set(requestedPoolIds);
+    for (const pool of this.data.pools) {
+      if (requested.has(pool.id)) {
+        if (!pool.accountIds.includes(id)) pool.accountIds.push(id);
+      } else {
+        pool.accountIds = pool.accountIds.filter((accountId) => accountId !== id);
+      }
+    }
+    this.validateReferences();
+    this.save();
+    return structuredClone(updated);
+  }
+
   setPoolExecutionLane(poolId: string, executionLane: string): PoolDefinition {
     const pool = this.pool(poolId);
     if (!pool) throw new Error(`Unknown pool: ${poolId}`);
