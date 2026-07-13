@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { bracketDefaults, isUnconfiguredBracket } from "./bracketDefaults.js";
 import { AccountSchema, ConnectionSchema, RegistrySchema, type AccountDefinition, type ConnectionDefinition, type PoolDefinition, type RegistryData } from "./models.js";
 
-const EMPTY: RegistryData = { version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] };
+const EMPTY: RegistryData = { version: 4, running: true, mode: "practice", remoteAccessEnabled: false, connections: [], accounts: [], pools: [] };
 
 export class Registry {
   private data: RegistryData;
@@ -50,8 +50,14 @@ export class Registry {
   snapshot(): RegistryData { return structuredClone(this.data); }
   get running(): boolean { return this.data.running; }
   get mode(): "practice" | "live" { return this.data.mode; }
+  get remoteAccessEnabled(): boolean { return this.data.remoteAccessEnabled; }
   setMode(mode: "practice" | "live"): RegistryData {
     this.data.mode = mode;
+    this.save();
+    return this.snapshot();
+  }
+  setRemoteAccessEnabled(enabled: boolean): RegistryData {
+    this.data.remoteAccessEnabled = enabled;
     this.save();
     return this.snapshot();
   }

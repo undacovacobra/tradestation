@@ -16,6 +16,10 @@ function render() {
   document.querySelector("#mode-practice").classList.toggle("active", data.mode === "practice");
   document.querySelector("#mode-live").classList.toggle("active", data.mode === "live");
   document.querySelector("#mode-live").classList.toggle("danger-active", data.mode === "live");
+  const remoteOn = data.remoteAccessEnabled && data.tunnel?.state === "on";
+  document.querySelector("#remote-access-toggle").textContent = remoteOn ? "Turn Remote Access OFF" : "Turn Remote Access ON";
+  document.querySelector("#remote-access-status").className = `pill ${remoteOn ? "good" : ""}`;
+  document.querySelector("#remote-access-status").textContent = remoteOn ? "Remote: Public" : "Remote: Local only";
   const ready = data.connections.filter((connection) => connection.status.loggedIn).length;
   document.querySelector("#summary").innerHTML = `<article><span>Connections</span><strong>${ready}/${data.connections.length} ready</strong></article>${data.pools.map((pool) => `<article><span>${esc(pool.name)}</span><strong>${pool.accounts.filter((account) => account.enabled && account.status === "active").length} active · ${pool.state?.openTrade ? "Trading" : "Flat"}</strong></article>`).join("")}`;
   document.querySelector("#login-sessions").innerHTML = data.connections.map((connection) => {
@@ -36,10 +40,9 @@ function render() {
 function renderPool(pool) {
   const open = pool.state?.openTrade;
   const testState = testResults.get(pool.id);
-  const webhookKind = data.tunnel?.state === "on" ? "Public" : data.tunnel?.configuredUrl ? "Configured public" : "Local";
-  const webhookNote = data.tunnel?.state === "on" ? "" : data.tunnel?.configuredUrl
-    ? " <small>The address is configured; ngrok must be connected before TradingView can reach it.</small>"
-    : " <small>No public ngrok domain is configured.</small>";
+  const remoteOn = data.remoteAccessEnabled && data.tunnel?.state === "on";
+  const webhookKind = remoteOn ? "Public" : "Local only";
+  const webhookNote = remoteOn ? "" : " <small>Remote Access is OFF. TradingView cannot reach this webhook until it is enabled.</small>";
   const armStatus = open ? "" : pool.armed
     ? `<p><span class="pill good">READY</span> ${esc(pool.readinessReason)}</p>`
     : pool.prearmError
@@ -69,7 +72,7 @@ function renderAccountRow(pool, account, index) {
   return `<tr class="${rowClass}"><td>${index+1}</td><td><strong>${account.isNext?"→ NEXT · ":""}${esc(account.name)}</strong><small>${esc(account.platformLabel)} · ${esc(account.stage)}</small><small>${bracket}</small></td><td>${esc(data.connections.find((connection)=>connection.id===account.connectionId)?.name || account.connectionId)}<small>${esc(account.firm)}</small></td><td><strong>${money(account.balance)}</strong><small>${age(account.balanceUpdatedAt)}${account.toTarget!=null ? ` · ${money(account.toTarget)} to target` : ""}</small></td><td><span class="pill ${statusClass}">${esc(status)}</span></td><td><div class="account-actions"><button ${nextDisabled ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','next')">Make next</button>${dailyControl}${persistentControl}<button class="danger" ${hasOpenTrade ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','remove',true)">Delete account</button></div></td></tr>`;
 }
 
-function poolWebhookUrl(poolId) { return new URL(`/webhook/${encodeURIComponent(poolId)}`, data.tunnel?.url || data.tunnel?.configuredUrl || window.location.origin).href; }
+function poolWebhookUrl(poolId) { return new URL(`/webhook/${encodeURIComponent(poolId)}`, data.remoteAccessEnabled && data.tunnel?.state === "on" ? (data.tunnel?.url || data.tunnel?.configuredUrl) : window.location.origin).href; }
 async function copyWebhook(poolId) {
   const url = poolWebhookUrl(poolId);
   await navigator.clipboard.writeText(url);
@@ -185,6 +188,13 @@ document.querySelector("#refresh-balances").addEventListener("click", async () =
 });
 document.querySelector("#mode-practice").addEventListener("click", () => setMode("practice"));
 document.querySelector("#mode-live").addEventListener("click", () => setMode("live"));
+document.querySelector("#remote-access-toggle").addEventListener("click", async () => {
+  const enabled = !(data.remoteAccessEnabled && data.tunnel?.state === "on");
+  const response = await fetch("/api/remote-access", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ enabled }) });
+  const result = await response.json();
+  document.querySelector("#action-result").textContent = result.ok ? (enabled ? "Remote Access is ON." : "Remote Access is OFF. Local ATLAS is still running.") : result.error;
+  await refresh();
+});
 document.querySelector("#sim-test-button").addEventListener("click", runSimultaneousTest);
 window.accountAction=accountAction; window.saveLane=saveLane; window.saveBracket=saveBracket; window.copyWebhook=copyWebhook; window.testWebhook=testWebhook;
 refresh().catch((error)=>{ document.querySelector("#overall").textContent="Offline"; document.querySelector("#action-result").textContent=error.message; }); setInterval(refresh,5000);

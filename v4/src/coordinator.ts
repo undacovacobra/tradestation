@@ -201,19 +201,22 @@ export class TradeCoordinator {
         message: `TEST ONLY — would close ${open.symbol} on ${account.name}; no state or broker was changed`,
       };
     }
-    let exitBalance: number | null = null;
     if (!simulated) {
       const status = worker.status();
       if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected; the open trade was not touched`);
       worker.invalidateArmed();
-      await worker.run(async (adapter) => {
-        await adapter.close(account);
-        exitBalance = await adapter.readSettledBalance(account);
-      });
-      if (exitBalance != null) this.balances?.set(account.id, exitBalance);
+      await worker.run((adapter) => adapter.close(account));
+      rotation.markExitRequested();
+      return {
+        ok: true,
+        poolId,
+        accountId: account.id,
+        connectionId: account.connectionId,
+        simulated: false,
+        message: `Exit requested for ${open.symbol} on ${account.name}; waiting for Tradovate to report flat before advancing the rotation.`,
+      };
     }
-    const won = exitBalance != null && open.entryBalance != null ? exitBalance > open.entryBalance : undefined;
-    rotation.recordClose(this.registry.accountsInPool(poolId), won);
+    rotation.recordClose(this.registry.accountsInPool(poolId));
     await this.prearmPool(poolId);
     return {
       ok: true,
@@ -222,8 +225,32 @@ export class TradeCoordinator {
       connectionId: account.connectionId,
       simulated,
       message: `${simulated ? "Planned close of" : "Closed"} ${alert.symbol} on ${account.name}`,
-      won,
     };
+  }
+
+  /** Broker position is authoritative: a pool advances only after its real position was seen open, then flat. */
+  async monitorBrokerPositions(): Promise<TradeResult[]> {
+    const results: TradeResult[] = [];
+    for (const pool of this.registry.pools()) {
+      const rotation = this.rotations.get(pool.id);
+      const open = rotation?.snapshot().openTrade;
+      if (!rotation || !open || open.simulated) continue;
+      const account = this.registry.account(open.accountId);
+      const worker = this.workers.get(open.connectionId);
+      if (!account || !worker) continue;
+      const position = await worker.run((adapter) => adapter.readSelectedPosition ? adapter.readSelectedPosition() : Promise.resolve(null));
+      if (position == null) continue;
+      if (position !== 0) { rotation.markPositionConfirmed(); continue; }
+      if (!open.positionConfirmedAt) continue;
+      const exitBalance = await worker.run((adapter) => adapter.readSettledBalance(account));
+      if (exitBalance != null) this.balances?.set(account.id, exitBalance);
+      const won = exitBalance != null && open.entryBalance != null ? exitBalance > open.entryBalance : undefined;
+      rotation.recordClose(this.registry.accountsInPool(pool.id), won);
+      if (pool.balanceTarget && exitBalance != null && exitBalance >= pool.balanceTarget) this.registry.setAccountStatus(account.id, "passed");
+      await this.prearmPool(pool.id);
+      results.push({ ok: true, poolId: pool.id, accountId: account.id, connectionId: account.connectionId, simulated: false, won, message: `Tradovate confirmed ${account.name} is flat; rotation advanced.` });
+    }
+    return results;
   }
 
   async handleMany(poolIds: string[], alert: V4Alert): Promise<TradeResult[]> {
@@ -369,7 +396,6 @@ export class TradeCoordinator {
         if (balance != null) this.balances?.set(open.accountId, balance);
         if (balance == null || balance < pool.balanceTarget) continue;
         const result = await this.handle(pool.id, { action: "close", symbol: open.symbol, test: false, signalId: `balance-target-${open.accountId}-${balance}` });
-        if (result.ok) this.registry.setAccountStatus(open.accountId, "passed");
         results.push(result);
       } catch (error) {
         throw new Error(`Target check failed for ${pool.id} on ${open.accountName}: ${(error as Error).message}`);

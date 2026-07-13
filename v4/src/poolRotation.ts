@@ -92,6 +92,18 @@ export class PoolRotation {
     return open;
   }
 
+  markPositionConfirmed(): void {
+    if (!this.state.openTrade || this.state.openTrade.positionConfirmedAt) return;
+    this.state.openTrade.positionConfirmedAt = new Date().toISOString();
+    this.save();
+  }
+
+  markExitRequested(): void {
+    if (!this.state.openTrade || this.state.openTrade.exitRequestedAt) return;
+    this.state.openTrade.exitRequestedAt = new Date().toISOString();
+    this.save();
+  }
+
   recordClose(accounts: AccountDefinition[], won?: boolean): OpenPoolTrade {
     const open = this.state.openTrade;
     if (!open) throw new Error(`Pool ${this.poolId} has no open trade`);

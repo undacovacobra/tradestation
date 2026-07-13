@@ -50,6 +50,7 @@ export const RegistrySchema = z.object({
   version: z.literal(4),
   running: z.boolean().default(true),
   mode: z.enum(["practice", "live"]).default("practice"),
+  remoteAccessEnabled: z.boolean().default(false),
   connections: z.array(ConnectionSchema).default([]),
   accounts: z.array(AccountSchema).default([]),
   pools: z.array(PoolSchema).default([]),
@@ -85,6 +86,8 @@ export interface OpenPoolTrade {
   openedAt: string;
   simulated: boolean;
   entryBalance?: number;
+  positionConfirmedAt?: string;
+  exitRequestedAt?: string;
 }
 
 export interface PoolState {

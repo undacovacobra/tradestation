@@ -58,7 +58,8 @@ test("control center renders every rotation with explicit account controls", () 
 
 test("control center shows a real copyable URL for every pool webhook", () => {
   const app = readFileSync(resolve("public/app.js"), "utf8");
-  assert.match(app, /data\.tunnel\?\.url\s*\|\|\s*data\.tunnel\?\.configuredUrl\s*\|\|\s*window\.location\.origin/);
+  assert.match(app, /data\.remoteAccessEnabled/);
+  assert.match(app, /data\.tunnel\?\.url\s*\|\|\s*data\.tunnel\?\.configuredUrl/);
   assert.match(app, /new URL\(`\/webhook\/\$\{encodeURIComponent\(poolId\)\}`/);
   assert.match(app, /navigator\.clipboard\.writeText/);
   assert.match(app, /Copy webhook/);
@@ -75,7 +76,18 @@ test("V4 server exposes and manages the public ngrok tunnel", () => {
   assert.match(server, /tunnel:\s*tunnelStatus\(\)/);
   assert.match(server, /\/api\/tunnel\/connect/);
   assert.match(server, /\/api\/pools\/:poolId\/test-webhook/);
-  assert.match(server, /config\.ngrokAutostart[\s\S]*connectTunnel\(\)/);
+  assert.match(server, /registry\.remoteAccessEnabled[\s\S]*connectTunnel\(\)/);
+});
+
+test("dashboard exposes a persistent Remote Access switch", () => {
+  const dashboard = readFileSync(resolve("public/index.html"), "utf8");
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(dashboard, /id="remote-access-toggle"/);
+  assert.match(app, /\/api\/remote-access/);
+  assert.match(app, /Local only/i);
+  assert.match(server, /\/api\/remote-access/);
+  assert.match(server, /remoteAccessEnabled/);
 });
 
 test("control center shows whether each next account is actually pre-armed", () => {

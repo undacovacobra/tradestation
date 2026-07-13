@@ -21,6 +21,7 @@ export interface ConnectionAdapter {
   readBalance(account: AccountDefinition): Promise<number | null>;
   readSelectedBalance(): Promise<number | null>;
   readSettledBalance(account: AccountDefinition): Promise<number | null>;
+  readSelectedPosition?(): Promise<number | null>;
 }
 
 type PreparationBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket">;
@@ -201,6 +202,7 @@ class TradovateAdapter implements ConnectionAdapter {
     await this.browser.switchAccount(account.platformLabel);
     return this.browser.readSettledEquity();
   }
+  readSelectedPosition(): Promise<number | null> { return this.browser.readSelectedPosition(); }
 }
 
 class SimulatedAdapter implements ConnectionAdapter {
@@ -227,6 +229,7 @@ class SimulatedAdapter implements ConnectionAdapter {
   async readBalance(): Promise<number | null> { return null; }
   async readSelectedBalance(): Promise<number | null> { return null; }
   async readSettledBalance(): Promise<number | null> { return null; }
+  async readSelectedPosition(): Promise<number | null> { return 0; }
 }
 
 export function createWorkers(definitions: ConnectionDefinition[]): Map<string, ConnectionWorker> {

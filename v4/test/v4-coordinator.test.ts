@@ -19,6 +19,7 @@ class FakeAdapter implements ConnectionAdapter {
   connected = true;
   balanceFailures = new Set<string>();
   balanceReads: string[] = [];
+  position: number | null = 0;
   constructor(private readonly id: string) {}
   async connect() {}
   async recover() {}
@@ -46,6 +47,7 @@ class FakeAdapter implements ConnectionAdapter {
   }
   async readSelectedBalance() { return this.balance; }
   async readSettledBalance() { return this.balance; }
+  async readSelectedPosition() { return this.position; }
 }
 
 function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number, sameConnection = false, extraRefreshAccounts = false) {
@@ -120,9 +122,14 @@ test("evaluation pool automatically closes and passes account at 53000", async (
   await coordinator.prearmPool("p1");
   await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   adapters.get("c1")!.balance = 53_000;
+  adapters.get("c1")!.position = 1;
+  await coordinator.monitorBrokerPositions();
   const results = await coordinator.monitorBalanceTargets();
   assert.equal(results[0]?.ok, true);
   assert.equal(adapters.get("c1")!.closes, 1);
+  assert.notEqual(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
+  adapters.get("c1")!.position = 0;
+  await coordinator.monitorBrokerPositions();
   assert.equal(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
   assert.equal(registry.account("a1")?.status, "passed");
 });
@@ -187,9 +194,38 @@ test("closing a trade advances and immediately re-arms the resulting next accoun
   const { coordinator, adapters } = setup("live");
   await coordinator.prearmPool("p1");
   await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  adapters.get("c1")!.position = 1;
+  await coordinator.monitorBrokerPositions();
   await coordinator.handle("p1", { action: "close", symbol: "MNQ", test: false });
+  adapters.get("c1")!.position = 0;
+  await coordinator.monitorBrokerPositions();
   assert.equal(coordinator.status().find((pool) => pool.id === "p1")?.armed, true);
   assert.deepEqual(adapters.get("c1")?.prepares, ["a1", "a1"]);
+});
+
+test("a live close signal requests an exit but keeps the rotation locked until the broker is flat", async () => {
+  const { coordinator, adapters } = setup("live");
+  await coordinator.prearmPool("p1");
+  await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  adapters.get("c1")!.position = 1;
+  await coordinator.monitorBrokerPositions();
+  const close = await coordinator.handle("p1", { action: "close", symbol: "MNQ", test: false });
+  assert.match(close.message, /waiting for Tradovate to report flat/i);
+  assert.equal(adapters.get("c1")!.closes, 1);
+  assert.notEqual(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
+});
+
+test("broker position monitoring closes the rotation only after open then flat", async () => {
+  const { coordinator, adapters } = setup("live");
+  await coordinator.prearmPool("p1");
+  await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
+  adapters.get("c1")!.position = 1;
+  await coordinator.monitorBrokerPositions();
+  assert.notEqual(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
+  adapters.get("c1")!.position = 0;
+  const settled = await coordinator.monitorBrokerPositions();
+  assert.equal(settled[0]?.ok, true);
+  assert.equal(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
 });
 
 test("one login prepares only one pool and explains the simultaneous-lane conflict", async () => {

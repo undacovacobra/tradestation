@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { Config } from "./config.js";
 import { extractEquity } from "./balanceParse.js";
+import { extractPosition } from "./positionParse.js";
 import { notifyActionNeeded } from "./notify.js";
 import { log } from "./logger.js";
 
@@ -396,6 +397,21 @@ export class TradovateBrowser {
       })
       .catch(() => "");
     return extractEquity(raw);
+  }
+
+  /** Reads the signed POSITION shown in Tradovate's selected-account header. */
+  async readSelectedPosition(): Promise<number | null> {
+    if (!this.page || !this.loggedIn) return null;
+    const raw = await this.page.getByText(/^POSITION$/i).first().evaluate((node: Element) => {
+      let el: Element | null = node;
+      for (let i = 0; i < 6 && el; i++) {
+        const text = (el.textContent ?? "").replace(/\s+/g, " ");
+        if (/\bPOSITION\s+-?\d+\b/i.test(text)) return text;
+        el = el.parentElement;
+      }
+      return node.parentElement?.textContent ?? node.textContent ?? "";
+    }).catch(() => "");
+    return extractPosition(raw.replace(/\s+/g, " "));
   }
 
   /** Read the balance after a short settle delay (for a just-closed trade). */
@@ -871,23 +887,39 @@ export class TradovateBrowser {
    *  it's cleared and the click retried once. */
   async clickOrder(action: "buy" | "sell", label: string): Promise<void> {
     const btn = action === "buy" ? TXT.buy : TXT.sell;
-    await this.clickThroughPopups(
-      () => this.p.getByText(btn, { exact: true }).first().click({ timeout: 2_000 }),
-      action.toUpperCase(),
-    );
+    await this.clickMarketControl(btn, action.toUpperCase());
     await this.confirmIfPrompted();
-    await this.snapshot(`order-${action}-${label}`);
   }
 
   /** Flatten the open position (the "Exit at Mkt & Cxl" button). If a popup
    *  blocks the click, it's cleared and the click retried once. */
   async clickExit(label: string): Promise<void> {
-    await this.clickThroughPopups(
-      () => this.p.getByText(TXT.exit, { exact: false }).first().click({ timeout: 10_000 }),
-      "EXIT",
-    );
+    await this.clickMarketControl(TXT.exit, "EXIT", false);
     await this.confirmIfPrompted();
-    await this.snapshot(`close-${label}`);
+  }
+
+  /** Page-side dispatch avoids Playwright's compositor wait when the browser is minimized. */
+  private async clickMarketControl(text: string, what: string, exact = true): Promise<void> {
+    const dispatch = async () => this.p.evaluate(({ text: wanted, exact: exactText }) => {
+      const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim();
+      const matches = [...document.querySelectorAll<HTMLElement>('button,[role="button"]')].filter((el) => {
+        const label = normalize(el.innerText || el.textContent);
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true" && (exactText ? label === wanted : label.includes(wanted));
+      });
+      if (matches.length !== 1) return `Expected exactly one enabled visible control named ${wanted}; found ${matches.length}.`;
+      matches[0]!.click();
+      return "";
+    }, { text, exact });
+    try {
+      const error = await dispatch();
+      if (error) throw new Error(error);
+    } catch (error) {
+      const cleared = await this.dismissPopups();
+      if (!cleared) throw error;
+      const retry = await dispatch();
+      if (retry) throw new Error(retry);
+    }
   }
 
   /** Click a confirmation modal button if Tradovate shows one (short wait). */

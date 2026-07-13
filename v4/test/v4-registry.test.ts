@@ -45,6 +45,18 @@ test("execution mode changes persist", () => {
   assert.equal(new Registry(path).mode, "practice");
 });
 
+test("remote access preference persists", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-registry-remote-access-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({ version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] }));
+  const registry = new Registry(path);
+  assert.equal(registry.remoteAccessEnabled, false);
+  registry.setRemoteAccessEnabled(true);
+  assert.equal(new Registry(path).remoteAccessEnabled, true);
+  registry.setRemoteAccessEnabled(false);
+  assert.equal(new Registry(path).remoteAccessEnabled, false);
+});
+
 test("connection can be added dynamically and persists", () => {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-connection-"));
   const path = resolve(dir, "registry.json");

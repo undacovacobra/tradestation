@@ -51,6 +51,7 @@ app.get("/health", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
+    remoteAccessEnabled: registry.remoteAccessEnabled,
     connections: workers.values().map((worker) => worker.status()),
   });
 });
@@ -60,6 +61,7 @@ app.get("/api/status", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
+    remoteAccessEnabled: registry.remoteAccessEnabled,
     connections: workers.values().map((worker) => ({
       ...worker.definition,
       accounts: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).map((account) => ({
@@ -286,6 +288,14 @@ app.post("/api/pools/:id/lane", (req, res) => {
   }
 });
 
+app.post("/api/remote-access", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  const enabled = Boolean(req.body?.enabled);
+  registry.setRemoteAccessEnabled(enabled);
+  const tunnel = enabled ? await connectTunnel() : await disconnectTunnel();
+  return res.status(enabled && tunnel.state !== "on" ? 503 : 200).json({ ok: !enabled || tunnel.state === "on", tunnel, remoteAccessEnabled: enabled, error: tunnel.error });
+});
+
 app.post("/api/pools/:poolId/test-webhook", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
@@ -402,7 +412,7 @@ async function autoConnect(): Promise<void> {
 
 const healthTimer = setInterval(() => {
   const tunnel = tunnelStatus();
-  if (config.ngrokAutostart && tunnel.state !== "on" && tunnel.state !== "connecting") {
+  if (registry.remoteAccessEnabled && tunnel.state !== "on" && tunnel.state !== "connecting") {
     void connectTunnel().catch((error) => log.warn(`Ngrok reconnect failed: ${(error as Error).message}`));
   }
   for (const worker of workers.values()) {
@@ -422,7 +432,13 @@ const healthTimer = setInterval(() => {
 healthTimer.unref();
 
 const targetTimer = setInterval(() => {
-  void coordinator.monitorBalanceTargets().then((results) => {
+  void coordinator.monitorBrokerPositions().then((settled) => {
+    for (const result of settled) {
+      pushEvent("trade", result.message);
+      if (result.won) notifyGoodNews(`Confirmed winning trade closed. ${result.message}`);
+    }
+    return coordinator.monitorBalanceTargets();
+  }).then((results) => {
     for (const result of results) {
       const message = `Evaluation target reached. ${result.message}`;
       pushEvent("trade", message);
@@ -440,7 +456,7 @@ const server = app.listen(config.port, config.host, () => {
   log.info(`V4 listening at http://${config.host}:${config.port}`);
   log.info(`Pools: ${registry.pools().map((pool) => pool.id).join(", ") || "none configured"}`);
   void autoConnect();
-  void autoStartTunnel();
+  if (registry.remoteAccessEnabled) void connectTunnel().catch((error) => log.warn(`Ngrok startup failed: ${(error as Error).message}`));
   for (const pool of coordinator.status()) {
     if (!pool.state?.openTrade) continue;
     const message = `ATLAS restarted while ${pool.name} still records an open trade on ${pool.state.openTrade.accountName}. Check Tradovate before taking another action.`;
