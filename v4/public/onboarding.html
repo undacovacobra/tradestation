@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V4 Account Onboarding</title><link rel="stylesheet" href="/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ATLAS Account Onboarding</title><link rel="stylesheet" href="/style.css"></head>
 <body><main>
-  <header><div><p class="eyebrow">SCAN · CLASSIFY · SAVE</p><h1>Account onboarding</h1></div><a class="tag" href="/">Control Center</a></header>
-  <p class="notice">Connect each login, then scan the browser. V4 reads the account labels shown by that login. New accounts can be classified and assigned to pools here—no manual JSON editing required.</p>
+  <header><div><p class="eyebrow">ACCOUNT TRADING LANE AUTOMATION SYSTEM</p><h1>ATLAS</h1><p>Account onboarding</p></div><a class="tag" href="/">Command Center</a></header>
+  <p class="notice">Connect each login, then scan the browser. ATLAS reads the account labels shown by that login. New accounts can be classified and assigned to pools here—no manual JSON editing required.</p>
   <section class="toolbar form-card">
     <label>Login connection<select id="connection"></select></label>
     <button id="connect" type="button">Connect login</button>
     <button id="scan" type="button">Scan browser</button>
-    <button id="show-add-login" type="button">+ Add another login</button>
+    <button id="show-add-login" type="button" aria-expanded="false" aria-controls="add-login-panel">+ Add another login</button>
   </section>
   <section id="add-login-panel" class="form-card add-login" hidden>
     <label>Login name<input id="login-name" placeholder="Tradovate Second"></label>

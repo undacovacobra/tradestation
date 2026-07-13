@@ -1,6 +1,7 @@
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
 const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
 let statusData;
+let creatingLogin = false;
 const BRACKET_DEFAULTS = {
   eval: { targetPerContract: 1520, stopPerContract: 1000 },
   funded: { targetPerContract: 4000, stopPerContract: 1000 },
@@ -121,10 +122,39 @@ document.querySelector("#test-bracket").addEventListener("click", async () => {
   result.textContent = body.ok ? `Verified: +$${body.targetPerContract} take profit / -$${body.stopPerContract} stop per contract. No trade placed.` : body.error;
 });
 
-document.querySelector("#show-add-login").addEventListener("click", () => { document.querySelector("#add-login-panel").hidden = !document.querySelector("#add-login-panel").hidden; });
+document.querySelector("#show-add-login").addEventListener("click", () => {
+  const panel = document.querySelector("#add-login-panel");
+  const button = document.querySelector("#show-add-login");
+  const opening = panel.hidden;
+  panel.hidden = !opening;
+  panel.classList.toggle("is-open", opening);
+  button.setAttribute("aria-expanded", String(opening));
+  if (opening) requestAnimationFrame(() => {
+    document.querySelector("#login-name").focus();
+    panel.scrollIntoView({ behavior:"smooth", block:"nearest" });
+  });
+});
 document.querySelector("#save-login").addEventListener("click", async () => {
-  const result = document.querySelector("#login-result"); result.textContent = "Creating saved browser session…";
-  const response = await fetch("/api/connections", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ name:document.querySelector("#login-name").value.trim(), firm:document.querySelector("#login-firm").value.trim(), url:document.querySelector("#login-url").value, accountPattern:document.querySelector("#login-pattern").value.trim(), autoConnect:document.querySelector("#login-auto").checked }) });
-  const body = await response.json(); result.textContent = body.ok ? "Login created. Select it above, open its browser, sign in, then scan." : body.error;
-  if (body.ok) { await loadStatus(); document.querySelector("#connection").value = body.connection.id; }
+  if (creatingLogin) return;
+  const result = document.querySelector("#login-result");
+  const saveButton = document.querySelector("#save-login");
+  const name = document.querySelector("#login-name").value.trim();
+  const firm = document.querySelector("#login-firm").value.trim();
+  if (!name || !firm) { result.textContent = "Login name and firm name are required."; return; }
+  creatingLogin = true;
+  saveButton.disabled = true;
+  result.textContent = "Creating saved browser session…";
+  try {
+    const response = await fetch("/api/connections", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ name, firm, url:document.querySelector("#login-url").value, accountPattern:document.querySelector("#login-pattern").value.trim(), autoConnect:document.querySelector("#login-auto").checked }) });
+    const body = await response.json();
+    if (!body.ok) { result.textContent = body.error; return; }
+    await loadStatus();
+    document.querySelector("#connection").value = body.connection.id;
+    result.textContent = "Login created. Next: click Connect login, complete login/MFA, then scan browser.";
+  } catch (error) {
+    result.textContent = error.message;
+  } finally {
+    creatingLogin = false;
+    saveButton.disabled = false;
+  }
 });

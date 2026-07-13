@@ -2,6 +2,7 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&a
 const money = (value) => value == null ? "Not read" : new Intl.NumberFormat("en-US", { style:"currency", currency:"USD", maximumFractionDigits:0 }).format(value);
 const age = (value) => { if (!value) return "Never"; const seconds=Math.max(0,Math.round((Date.now()-new Date(value).getTime())/1000)); return seconds<60 ? `${seconds}s ago` : seconds<3600 ? `${Math.floor(seconds/60)}m ago` : `${Math.floor(seconds/3600)}h ago`; };
 let data;
+const testResults = new Map();
 
 async function refresh() {
   const response = await fetch("/api/status", { cache:"no-store" });
@@ -14,6 +15,15 @@ function render() {
   document.querySelector("#overall").textContent = `${data.running ? "Running" : "Paused"} · ${data.mode}`;
   const ready = data.connections.filter((connection) => connection.status.loggedIn).length;
   document.querySelector("#summary").innerHTML = `<article><span>Connections</span><strong>${ready}/${data.connections.length} ready</strong></article>${data.pools.map((pool) => `<article><span>${esc(pool.name)}</span><strong>${pool.accounts.filter((account) => account.enabled && account.status === "active").length} active · ${pool.state?.openTrade ? "Trading" : "Flat"}</strong></article>`).join("")}`;
+  document.querySelector("#login-sessions").innerHTML = data.connections.map((connection) => {
+    const accounts = connection.accounts || [];
+    const state = connection.status.busy ? "Working" : connection.status.loggedIn ? "Logged in" : connection.status.connected ? "Login required" : "Disconnected";
+    const stateClass = connection.status.loggedIn ? "good" : "bad";
+    const configured = accounts.length
+      ? `<ul>${accounts.map((account) => `<li><strong>${esc(account.name)}</strong><code>${esc(account.platformLabel)}</code><span>${esc(account.stage)}</span></li>`).join("")}</ul>`
+      : "<p>No configured accounts yet.</p>";
+    return `<article class="login-session-card"><div class="row"><div><h3>${esc(connection.name)}</h3><p>${esc(connection.firm)}</p></div><span class="pill ${stateClass}">${state}</span></div><p><strong>Currently selected:</strong> ${esc(connection.status.selectedAccount || "None")}</p><div class="configured-accounts"><strong>Configured accounts</strong>${configured}</div>${connection.status.lastError ? `<p class="error">${esc(connection.status.lastError)}</p>` : ""}</article>`;
+  }).join("") || "<p>No saved login sessions.</p>";
   document.querySelector("#connections").innerHTML = data.connections.map((connection) => `<article class="connection-card"><div class="row"><h3>${esc(connection.name)}</h3><span class="pill ${connection.status.loggedIn ? "good" : "bad"}">${connection.status.loggedIn ? "Ready" : "Login required"}</span></div><p>${esc(connection.firm)} · ${connection.accountCount} account${connection.accountCount===1?"":"s"}</p><dl><dt>Worker</dt><dd>${connection.status.busy ? "Busy" : "Idle"}</dd><dt>Selected</dt><dd>${esc(connection.status.selectedAccount || "—")}</dd></dl>${connection.status.lastError ? `<p class="error">${esc(connection.status.lastError)}</p>` : ""}</article>`).join("") || "<p>No logins configured.</p>";
   document.querySelector("#pool-list").innerHTML = data.pools.map(renderPool).join("") || "<p>No pools configured.</p>";
   document.querySelector("#events").innerHTML = (data.events || []).map((event) => `<div class="event ${esc(event.kind)}"><time>${new Date(event.time).toLocaleTimeString()}</time><span>${esc(event.message)}</span></div>`).join("") || "<p>No activity yet.</p>";
@@ -21,6 +31,7 @@ function render() {
 
 function renderPool(pool) {
   const open = pool.state?.openTrade;
+  const testState = testResults.get(pool.id);
   const webhookKind = data.tunnel?.state === "on" ? "Public" : data.tunnel?.configuredUrl ? "Configured public" : "Local";
   const webhookNote = data.tunnel?.state === "on" ? "" : data.tunnel?.configuredUrl
     ? " <small>The address is configured; ngrok must be connected before TradingView can reach it.</small>"
@@ -30,7 +41,7 @@ function renderPool(pool) {
     : pool.prearmError
       ? `<p class="error"><span class="pill bad">Pre-arm failed</span> ${esc(pool.prearmError)}</p>`
       : `<p><span class="pill">Not armed</span> Click Make next to prepare the account.</p>`;
-  return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>Lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p><p><strong>${webhookKind} webhook:</strong> <code>${esc(poolWebhookUrl(pool.id))}</code> <button onclick="copyWebhook('${esc(pool.id)}')">Copy webhook</button> <button onclick="testWebhook('${esc(pool.id)}')">Test webhook</button>${webhookNote}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
+  return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>Lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p><p><strong>${webhookKind} webhook:</strong> <code>${esc(poolWebhookUrl(pool.id))}</code> <button onclick="copyWebhook('${esc(pool.id)}')">Copy webhook</button> <button id="test-button-${esc(pool.id)}" ${testState?.kind === "testing" ? "disabled" : ""} onclick="testWebhook('${esc(pool.id)}')">Test webhook</button>${webhookNote}</p><p id="test-result-${esc(pool.id)}" class="webhook-test-result ${esc(testState?.kind || "")}">${esc(testState?.message || "")}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
   ${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
   <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button></div></article>`;
 }
@@ -61,16 +72,29 @@ async function copyWebhook(poolId) {
   document.querySelector("#action-result").textContent = `Copied ${url}`;
 }
 async function testWebhook(poolId) {
-  const resultArea = document.querySelector("#action-result");
-  resultArea.textContent = `Testing ${poolId} — no trade will be placed…`;
-  const response = await fetch(`/api/pools/${encodeURIComponent(poolId)}/test-webhook`, {
-    method:"POST",
-    headers:{"content-type":"application/json"},
-    body:JSON.stringify({ action:"buy", symbol:"MNQ", quantity:1 }),
-  });
-  const result = await response.json();
-  resultArea.textContent = result.ok ? result.result.message : result.error;
-  await refresh();
+  const button = document.querySelector(`#test-button-${CSS.escape(poolId)}`);
+  button.disabled = true;
+  setPoolTestResult(poolId, "testing", "Testing account and ATM settings — no trade will be placed…");
+  try {
+    const response = await fetch(`/api/pools/${encodeURIComponent(poolId)}/test-webhook`, {
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({ action:"buy", symbol:"MNQ", quantity:1 }),
+    });
+    const result = await response.json();
+    if (result.ok) setPoolTestResult(poolId, "success", `SUCCESS — ${result.result.message}`);
+    else setPoolTestResult(poolId, "failure", `FAILED — ${result.error || "Unknown error"}. No trade was placed.`);
+  } catch (error) {
+    setPoolTestResult(poolId, "failure", `FAILED — ${error.message}. No trade was placed.`);
+  } finally {
+    button.disabled = false;
+    await refresh();
+  }
+}
+function setPoolTestResult(poolId, kind, message) {
+  testResults.set(poolId, { kind, message });
+  const resultArea = document.querySelector(`#test-result-${CSS.escape(poolId)}`);
+  if (resultArea) { resultArea.className = `webhook-test-result ${kind}`; resultArea.textContent = message; }
 }
 async function accountAction(poolId, accountId, action, confirmFirst=false) { if (confirmFirst && !confirm("Permanently delete this account from V4 and every rotation?")) return; await post(`/api/pools/${encodeURIComponent(poolId)}/accounts/${encodeURIComponent(accountId)}`, { action }); }
 async function saveLane(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/lane`, { executionLane:document.getElementById(`lane-${poolId}`).value.trim() }); }

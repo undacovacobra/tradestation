@@ -128,13 +128,16 @@ export class TradeCoordinator {
       const simulated = alert.test || this.registry.mode === "practice";
 
       if (alert.test) {
+        const status = worker.status();
+        if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
+        await worker.dryRun(account);
         return {
           ok: true,
           poolId,
           accountId: account.id,
           connectionId: account.connectionId,
           simulated: true,
-          message: `TEST ONLY — would ${alert.action} ${alert.symbol} on ${account.name} via ${worker.definition.name}; no state or broker was changed`,
+          message: `TEST ONLY — prepared and verified ${account.name} via ${worker.definition.name}; no trade was placed`,
         };
       }
 
@@ -204,6 +207,7 @@ export class TradeCoordinator {
       connectionId: account.connectionId,
       simulated,
       message: `${simulated ? "Planned close of" : "Closed"} ${alert.symbol} on ${account.name}`,
+      won,
     };
   }
 

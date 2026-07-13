@@ -13,6 +13,7 @@ export interface ConnectionAdapter {
   inspectFields(): Promise<Array<Record<string, string>>>;
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>>;
   prepare(account: AccountDefinition): Promise<void>;
+  verifyPrepared(account: AccountDefinition): Promise<void>;
   enterPrepared(account: AccountDefinition, alert: V4Alert): Promise<void>;
   enter(account: AccountDefinition, alert: V4Alert): Promise<void>;
   close(account: AccountDefinition): Promise<void>;
@@ -92,18 +93,38 @@ export class ConnectionWorker {
 
   async prearm(account: AccountDefinition): Promise<void> {
     this.invalidateArmed();
-    await this.run((adapter) => adapter.prepare(account));
-    this.markArmed(account);
+    await this.run(async (adapter) => {
+      await adapter.prepare(account);
+      this.markArmed(account);
+    });
+  }
+
+  async dryRun(account: AccountDefinition): Promise<void> {
+    this.invalidateArmed();
+    await this.run(async (adapter) => {
+      await adapter.prepare(account);
+      await adapter.verifyPrepared(account);
+      this.markArmed(account);
+    });
   }
 
   async enter(account: AccountDefinition, alert: V4Alert): Promise<number | null> {
     return this.run(async (adapter) => {
       const balance = await adapter.readBalance(account);
-      if (this.isArmed(account)) await adapter.enterPrepared(account, alert);
-      else {
+      const wasArmed = this.isArmed(account);
+      if (!wasArmed) {
         this.invalidateArmed();
-        await adapter.enter(account, alert);
+        await adapter.prepare(account);
         this.markArmed(account);
+      }
+      try {
+        // prepare() already persists and reopens ATM to verify it. Only an
+        // older pre-arm needs another read immediately before the order.
+        if (wasArmed) await adapter.verifyPrepared(account);
+        await adapter.enterPrepared(account, alert);
+      } catch (error) {
+        this.invalidateArmed();
+        throw error;
       }
       return balance;
     });
@@ -140,6 +161,10 @@ class TradovateAdapter implements ConnectionAdapter {
   inspectFields(): Promise<Array<Record<string, string>>> { return this.browser.inspectFields(); }
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return this.browser.inspectAtmControls(); }
   async prepare(account: AccountDefinition): Promise<void> { await prepareAccount(this.browser, account); }
+  async verifyPrepared(account: AccountDefinition): Promise<void> {
+    await this.browser.verifySelectedAccount(account.platformLabel);
+    await this.browser.verifyBracket(account.targetPerContract, account.stopPerContract);
+  }
   async enterPrepared(account: AccountDefinition, alert: V4Alert): Promise<void> { await enterPrepared(this.browser, account, alert); }
   async enter(account: AccountDefinition, alert: V4Alert): Promise<void> {
     await prepareEntry(this.browser, account, alert);
@@ -172,6 +197,10 @@ class SimulatedAdapter implements ConnectionAdapter {
   async inspectFields(): Promise<Array<Record<string, string>>> { return []; }
   async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return []; }
   async prepare(account: AccountDefinition): Promise<void> { requireBracket(account); this.selected = account.platformLabel; }
+  async verifyPrepared(account: AccountDefinition): Promise<void> {
+    requireBracket(account);
+    if (this.selected !== account.platformLabel) throw new Error(`Selected account is ${this.selected ?? "unknown"}, not ${account.platformLabel}.`);
+  }
   async enterPrepared(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async enter(account: AccountDefinition): Promise<void> { await this.prepare(account); }
   async close(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }

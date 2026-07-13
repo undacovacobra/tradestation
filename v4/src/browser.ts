@@ -247,6 +247,17 @@ export class TradovateBrowser {
     }
   }
 
+  /** Force-read the visible account label immediately before an order click. */
+  async verifySelectedAccount(label: string): Promise<void> {
+    await this.requireLoggedIn();
+    const visible = await this.p.getByText(this.accountIdPattern).first().textContent({ timeout: 2_000 }).catch(() => null);
+    if (!visible?.includes(label)) {
+      this.currentAccount = null;
+      throw new Error(`Tradovate shows account "${visible?.trim() || "unknown"}", not the required account "${label}". The order was blocked.`);
+    }
+    this.currentAccount = label;
+  }
+
   /** Pre-select the next account so the entry webhook only has to click. */
   async armFor(label: string): Promise<void> {
     // Arm time is an idle moment — clear any popup sitting on the screen now,
@@ -529,6 +540,30 @@ export class TradovateBrowser {
       await this.clickDialogButton(/cancel|close/i).catch(() => {});
       this.lastBracket = null;
       throw new Error(`${(err as Error).message} — bracket left unchanged so a wrong stop/target can't fire.`);
+    }
+  }
+
+  /** Reopen ATM Settings and prove the persisted dollar bracket still matches. */
+  async verifyBracket(targetPerContract: number, stopPerContract: number): Promise<void> {
+    const tp = Math.round(targetPerContract * 100) / 100;
+    const sl = Math.round(stopPerContract * 100) / 100;
+    await this.requireLoggedIn();
+    if (!(await this.atmDialogVisible())) await this.openAtmSettings();
+    if (!(await this.atmDialogVisible())) throw new Error("Couldn't open ATM Settings to verify the bracket before the order.");
+    try {
+      if (!(await this.ensureShowInDollars())) throw new Error('Couldn\'t verify ATM values in "$ Value" mode.');
+      const savedTp = await this.readDialogNumber(/take\s*profit/i);
+      const savedSl = await this.readDialogNumber(/stop\s*loss/i);
+      await this.clickDialogButton(/cancel|close/i);
+      if (savedTp !== tp || savedSl !== sl) {
+        this.lastBracket = null;
+        throw new Error(`ATM verification mismatch: Tradovate shows $${savedTp ?? "?"}/$${savedSl ?? "?"}, but this account requires $${tp}/$${sl}. The order was blocked.`);
+      }
+      this.lastBracket = `${tp}/${sl}`;
+    } catch (error) {
+      await this.snapshot("verify-bracket-failed", true);
+      await this.clickDialogButton(/cancel|close/i).catch(() => {});
+      throw error;
     }
   }
 

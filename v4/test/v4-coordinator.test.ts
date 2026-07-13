@@ -15,6 +15,7 @@ class FakeAdapter implements ConnectionAdapter {
   balance = 50_000;
   closes = 0;
   prepares: string[] = [];
+  verifications: string[] = [];
   connected = true;
   balanceFailures = new Set<string>();
   balanceReads: string[] = [];
@@ -28,6 +29,7 @@ class FakeAdapter implements ConnectionAdapter {
   async inspectFields() { return []; }
   async inspectAtmControls() { return []; }
   async prepare(account: AccountDefinition) { this.prepares.push(account.id); }
+  async verifyPrepared(account: AccountDefinition) { this.verifications.push(account.id); }
   async enterPrepared(account: AccountDefinition, alert: V4Alert) { await this.enter(account, alert); }
   async enter(_account: AccountDefinition, _alert: V4Alert) {
     active++;
@@ -92,10 +94,12 @@ test("pools in the same execution lane cannot open at the same time", async () =
 });
 
 test("test webhook is plan-only and never opens pool state", async () => {
-  const { coordinator } = setup("live");
+  const { coordinator, adapters } = setup("live");
   const result = await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: true });
   assert.match(result.message, /TEST ONLY/);
   assert.equal(coordinator.status().find((p) => p.id === "p1")?.state?.openTrade, null);
+  assert.deepEqual(adapters.get("c1")?.prepares, ["a1"]);
+  assert.deepEqual(adapters.get("c1")?.verifications, ["a1"]);
 });
 
 test("evaluation pool automatically closes and passes account at 53000", async () => {

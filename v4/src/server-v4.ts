@@ -60,7 +60,14 @@ app.get("/api/status", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
-    connections: workers.values().map((worker) => ({ ...worker.definition, accountCount: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).length, status: worker.status() })),
+    connections: workers.values().map((worker) => ({
+      ...worker.definition,
+      accounts: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).map((account) => ({
+        id: account.id, name: account.name, platformLabel: account.platformLabel, stage: account.stage, status: account.status,
+      })),
+      accountCount: registry.snapshot().accounts.filter((account) => account.connectionId === worker.definition.id).length,
+      status: worker.status(),
+    })),
     accounts: registry.snapshot().accounts,
     pools: coordinator.status(),
     tunnel: tunnelStatus(),
@@ -82,10 +89,13 @@ app.post("/api/tunnel/disconnect", async (req, res) => {
 app.post("/api/connections", (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {
-    const base = String(req.body?.name ?? "login").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "login";
+    const name = String(req.body?.name ?? "").trim();
+    const firm = String(req.body?.firm ?? "").trim();
+    if (!name || !firm) throw new Error("Login name and firm name are required.");
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "login";
     let id = base; let suffix = 2;
     while (registry.connection(id)) id = `${base}-${suffix++}`;
-    const connection = registry.addConnection({ id, name: String(req.body?.name ?? "").trim(), firm: String(req.body?.firm ?? "").trim(), adapter: "tradovate", url: String(req.body?.url ?? "https://trader.tradovate.com"), sessionDir: `.sessions/${id}`, accountPattern: String(req.body?.accountPattern ?? "[A-Z0-9][A-Z0-9_-]{5,}"), enabled: true, autoConnect: req.body?.autoConnect === true });
+    const connection = registry.addConnection({ id, name, firm, adapter: "tradovate", url: String(req.body?.url ?? "https://trader.tradovate.com"), sessionDir: `.sessions/${id}`, accountPattern: String(req.body?.accountPattern ?? "[A-Z0-9][A-Z0-9_-]{5,}"), enabled: true, autoConnect: req.body?.autoConnect === true });
     workers.add(connection);
     pushEvent("info", `Added login ${connection.name} for ${connection.firm}.`);
     return res.status(201).json({ ok: true, connection });
@@ -138,7 +148,12 @@ app.post("/api/connections/:id/connect", async (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
   try { await worker.connect(); await coordinator.prearmConnection(worker.definition.id); return res.json({ ok: true, status: worker.status() }); }
-  catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
+  catch (error) {
+    const message = `${worker.definition.name} needs attention: ${(error as Error).message}`;
+    pushEvent("error", message);
+    notifyActionNeeded(message);
+    return res.status(503).json({ ok: false, error: (error as Error).message });
+  }
 });
 
 app.post("/api/connections/:id/test-bracket", async (req, res) => {
@@ -267,6 +282,9 @@ app.post("/api/pools/:poolId/test-webhook", async (req, res) => {
     pushEvent("info", `Dashboard test webhook for ${req.params.poolId}: ${result.message}`);
     return res.status(result.ok ? 200 : 409).json({ ok: result.ok, result, placedTrade: false });
   } catch (error) {
+    const message = `Dashboard test webhook failed for ${req.params.poolId}: ${(error as Error).message}`;
+    pushEvent("error", message);
+    notifyActionNeeded(message);
     return res.status(400).json({ ok: false, error: (error as Error).message, placedTrade: false });
   }
 });
@@ -275,10 +293,16 @@ app.post("/webhook/:poolId", async (req, res) => {
   try {
     const alert = parseAuthorizedAlert(req);
     const result = await coordinator.handle(req.params.poolId, alert);
+    if (result.won) notifyGoodNews(`🏅 Confirmed winning trade closed. ${result.message}`);
     return res.status(result.ok ? 200 : 409).json(result);
   } catch (error) {
     const message = (error as Error).message;
     log.warn(`Webhook rejected for ${req.params.poolId}: ${message}`);
+    if (message !== "Invalid webhook secret") {
+      const alertMessage = `Webhook failed for ${req.params.poolId}: ${message}`;
+      pushEvent("error", alertMessage);
+      notifyActionNeeded(alertMessage);
+    }
     return res.status(message === "Invalid webhook secret" ? 401 : 409).json({ ok: false, poolId: req.params.poolId, error: message });
   }
 });
@@ -290,6 +314,13 @@ app.post("/webhook", async (req, res) => {
     const pools = Array.isArray(req.body?.pools) ? req.body.pools.filter((x: unknown): x is string => typeof x === "string") : [];
     if (!pools.length) throw new Error("Provide a non-empty pools array");
     const results = await coordinator.handleMany(pools, alert);
+    for (const result of results) {
+      if (!result.ok) {
+        const message = `Webhook failed for ${result.poolId}: ${result.message}`;
+        pushEvent("error", message);
+        notifyActionNeeded(message);
+      } else if (result.won) notifyGoodNews(`🏅 Confirmed winning trade closed. ${result.message}`);
+    }
     return res.status(results.every((r) => r.ok) ? 200 : 207).json({ ok: results.every((r) => r.ok), results });
   } catch (error) {
     return res.status((error as Error).message === "Invalid webhook secret" ? 401 : 400).json({ ok: false, error: (error as Error).message });
@@ -317,7 +348,12 @@ const healthTimer = setInterval(() => {
     if (worker.definition.autoConnect && (!status.connected || !status.loggedIn) && !status.busy) {
       void worker.recover()
         .then(() => coordinator.prearmConnection(worker.definition.id))
-        .catch((error) => log.warn(`Health recovery failed for ${worker.definition.name}: ${(error as Error).message}`));
+        .catch((error) => {
+          const message = `Health recovery failed for ${worker.definition.name}: ${(error as Error).message}`;
+          log.warn(message);
+          pushEvent("error", message);
+          notifyActionNeeded(message);
+        });
     }
   }
 }, config.healthCheckSeconds * 1_000);
@@ -343,6 +379,12 @@ const server = app.listen(config.port, config.host, () => {
   log.info(`Pools: ${registry.pools().map((pool) => pool.id).join(", ") || "none configured"}`);
   void autoConnect();
   void autoStartTunnel();
+  for (const pool of coordinator.status()) {
+    if (!pool.state?.openTrade) continue;
+    const message = `ATLAS restarted while ${pool.name} still records an open trade on ${pool.state.openTrade.accountName}. Check Tradovate before taking another action.`;
+    pushEvent("error", message);
+    notifyActionNeeded(message);
+  }
 });
 
 async function shutdown() {

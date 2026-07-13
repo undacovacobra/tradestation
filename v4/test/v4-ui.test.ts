@@ -88,3 +88,61 @@ test("control center shows whether each next account is actually pre-armed", () 
   assert.match(app, /prearmError/);
   assert.match(html, /manual changes.*Tradovate.*Make next/i);
 });
+
+test("ATLAS sends actionable Telegram alerts from active V4 lifecycle failures", () => {
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(server, /Webhook failed for.*notifyActionNeeded/s);
+  assert.match(server, /Health recovery failed.*notifyActionNeeded/s);
+  assert.match(server, /Dashboard test webhook failed.*notifyActionNeeded/s);
+  assert.match(server, /notifyGoodNews/);
+});
+
+test("dashboard and onboarding use the ATLAS identity", () => {
+  const dashboard = readFileSync(resolve("public/index.html"), "utf8");
+  const onboarding = readFileSync(resolve("public/onboarding.html"), "utf8");
+  for (const html of [dashboard, onboarding]) {
+    assert.match(html, /<title>ATLAS/);
+    assert.match(html, /ACCOUNT TRADING LANE AUTOMATION SYSTEM/);
+    assert.match(html, />ATLAS</);
+  }
+  assert.doesNotMatch(dashboard, /V4 Control Center/);
+});
+
+test("dashboard groups configured accounts under each logged-in session", () => {
+  const html = readFileSync(resolve("public/index.html"), "utf8");
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(html, /id="login-sessions"/);
+  assert.match(app, /Configured accounts/);
+  assert.match(app, /connection\.accounts/);
+  assert.match(app, /platformLabel/);
+  assert.match(app, /Currently selected/);
+  assert.match(server, /accounts:\s*registry\.snapshot\(\)\.accounts\.filter/);
+});
+
+test("each pool keeps its own explicit webhook test result", () => {
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  assert.match(app, /test-result-\$\{esc\(pool\.id\)\}/);
+  assert.match(app, /test-button-\$\{esc\(pool\.id\)\}/);
+  assert.match(app, /SUCCESS —/);
+  assert.match(app, /FAILED —/);
+  assert.match(app, /testResults/);
+  assert.match(app, /button\.disabled\s*=\s*true/);
+  assert.match(app, /finally[\s\S]*button\.disabled\s*=\s*false/);
+});
+
+test("Add another login opens reliably and guides the complete saved-login flow", () => {
+  const onboarding = readFileSync(resolve("public/onboarding.js"), "utf8");
+  const styles = readFileSync(resolve("public/style.css"), "utf8");
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(onboarding, /classList\.toggle\("is-open"/);
+  assert.match(onboarding, /login-name.*focus/s);
+  assert.match(onboarding, /scrollIntoView/);
+  assert.match(onboarding, /creatingLogin/);
+  assert.match(onboarding, /Login name and firm name are required/);
+  assert.match(onboarding, /saveButton\.disabled\s*=\s*true/);
+  assert.match(onboarding, /document\.querySelector\("#connection"\)\.value\s*=\s*body\.connection\.id/);
+  assert.match(onboarding, /Connect.*login.*scan/is);
+  assert.match(styles, /\.add-login\.is-open/);
+  assert.match(server, /Login name and firm name are required/);
+});

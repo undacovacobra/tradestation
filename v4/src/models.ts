@@ -120,4 +120,5 @@ export interface TradeResult {
   accountId?: string;
   connectionId?: string;
   simulated: boolean;
+  won?: boolean;
 }
