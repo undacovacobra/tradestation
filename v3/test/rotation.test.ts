@@ -253,6 +253,25 @@ test("logs contracts + result per trade in today's history", () => {
   }
 });
 
+test("clearRest takes a benched winner off rest so it can trade again today", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = makeRot(path, true);
+    const accounts = [acct("A"), acct("B")];
+    const c1 = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in c1 && c1.account.tradovateLabel === "A");
+    rot.recordOpen(c1.account, order, 50_000);
+    rot.recordClose(accounts, { exitBalance: 50_500 }); // A wins -> benched
+    assert.equal(rot.isBenchedToday("A"), true);
+
+    assert.equal(rot.clearRest("A"), true, "un-rest reports success");
+    assert.equal(rot.isBenchedToday("A"), false, "A is no longer resting");
+    assert.equal(rot.clearRest("A"), false, "un-resting an account that isn't resting is a no-op");
+  } finally {
+    cleanup();
+  }
+});
+
 test("bench is ignored when benchWinnersForDay is off", () => {
   const { path, cleanup } = tempPath();
   try {

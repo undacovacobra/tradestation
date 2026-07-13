@@ -468,6 +468,20 @@ api.post("/accounts/reactivate", (req, res) => {
   res.json({ ok });
 });
 
+api.post("/accounts/unrest", (req, res) => {
+  const group = req.body?.group;
+  const label = typeof req.body?.label === "string" ? req.body.label : "";
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  const ok = rotations[group].clearRest(label);
+  if (ok) {
+    pushEvent("info", `${store.find(label)?.name ?? label} taken off rest — it can trade again today.`, group);
+    armNext(group);
+  }
+  res.json({ ok });
+});
+
 api.post("/next", (req, res) => {
   const group = req.body?.group;
   const label = typeof req.body?.label === "string" ? req.body.label : "";

@@ -207,6 +207,7 @@ function renderGroup(group) {
         ${balanceLine(acct)}
       </div>
       ${sparkline(acct.history)}
+      ${resting ? '<button class="icon-btn" title="Take off rest — let it trade again today" data-act="unrest">▶</button>' : ""}
       ${acct.enabled && !isNext && !resting ? '<button class="icon-btn nextbtn" title="Make this the next account to trade" data-act="next">⏭</button>' : ""}
       <button class="icon-btn" title="Move up" data-act="up">▲</button>
       <button class="icon-btn" title="Move down" data-act="down">▼</button>
@@ -329,6 +330,8 @@ async function accountAction(act, acct) {
       await api("/accounts/toggle", { label: acct.tradovateLabel });
     } else if (act === "next") {
       await api("/next", { group: acct.group, label: acct.tradovateLabel });
+    } else if (act === "unrest") {
+      await api("/accounts/unrest", { group: acct.group, label: acct.tradovateLabel });
     } else {
       await api("/accounts/move", { label: acct.tradovateLabel, direction: act });
     }

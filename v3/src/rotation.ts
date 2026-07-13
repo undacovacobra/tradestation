@@ -85,6 +85,15 @@ export class GroupRotation {
     return this.benchWinnersForDay && this.state.lastWonDay[label] === this.today();
   }
 
+  /** Take an account off the "won today / resting" bench so it can trade again
+   *  today. Returns true if it was actually resting. */
+  clearRest(label: string): boolean {
+    if (!(label in this.state.lastWonDay)) return false;
+    delete this.state.lastWonDay[label];
+    this.save();
+    return true;
+  }
+
   peekNext(accounts: StoredAccount[]): StoredAccount | null {
     const choice = this.selectAccountForEntry(accounts);
     return "error" in choice ? null : choice.account;
