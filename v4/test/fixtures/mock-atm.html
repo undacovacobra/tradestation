@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Mock ATM dialog</title><style>#dialog{display:none}</style></head>
+<body>
+  <button>Buy Mkt</button><button>Sell Mkt</button>
+  <button aria-label="ATM settings" onclick="document.getElementById('dialog').style.display='block'">Settings</button>
+  <div id="dialog" role="dialog">
+    <h2>ATM Settings</h2>
+    <div><span>Show in</span> <span>$ Value</span></div>
+    <div><label>Take Profit</label> <input id="tp" type="number" value="150"></div>
+    <div><label>Stop Loss</label> <input id="sl" type="number" value="100"></div>
+    <button onclick="document.getElementById('dialog').style.display='none'">Save</button>
+    <button onclick="document.getElementById('dialog').style.display='none'">Cancel</button>
+  </div>
+</body>
+</html>

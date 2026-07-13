@@ -19,6 +19,8 @@ class FakeAdapter implements ConnectionAdapter {
   async disconnect() {}
   status(): WorkerStatus { return { connectionId: this.id, connected: true, loggedIn: true, busy: false, selectedAccount: null }; }
   async discoverAccounts() { return []; }
+  async setBracket() {}
+  async inspectFields() { return []; }
   async enter(_account: AccountDefinition, _alert: V4Alert) {
     active++;
     maxActive = Math.max(maxActive, active);

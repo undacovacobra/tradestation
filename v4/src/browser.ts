@@ -46,6 +46,8 @@ export class TradovateBrowser {
   /** The order size we last set on the ticket. Lets us skip re-setting the same
    *  size (a pure no-op) and forces a re-set after an account switch. */
   private lastQty: number | null = null;
+  /** The ATM bracket ("$target/$stop") we last wrote, to skip re-setting it. */
+  private lastBracket: string | null = null;
   private readonly shotDir: string;
   private readonly accountIdPattern: RegExp;
 
@@ -98,6 +100,7 @@ export class TradovateBrowser {
         this.loggedIn = false;
         this.currentAccount = null;
         this.lastQty = null;
+        this.lastBracket = null;
       });
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
       await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" });
@@ -125,6 +128,7 @@ export class TradovateBrowser {
     log.warn("Recovering Tradovate session (reload + re-login)…");
     this.currentAccount = null;
     this.lastQty = null;
+    this.lastBracket = null;
     await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
     await this.refreshLoginState(6_000);
     if (!this.loggedIn) {
@@ -474,6 +478,107 @@ export class TradovateBrowser {
       throw new Error(`Couldn't set the order size to ${want} on the Tradovate ticket — the trade was skipped so a wrong size can't fire.`);
     }
     this.lastQty = want;
+  }
+
+  /** Set and verify Tradovate's exchange-held ATM exits in dollars per contract. */
+  async setBracket(targetPerContract: number, stopPerContract: number, force = false): Promise<void> {
+    if (!(targetPerContract > 0) || !(stopPerContract > 0)) {
+      throw new Error(`Bracket needs a positive $ target and stop (got target ${targetPerContract}, stop ${stopPerContract}).`);
+    }
+    const tp = Math.round(targetPerContract * 100) / 100;
+    const sl = Math.round(stopPerContract * 100) / 100;
+    const key = `${tp}/${sl}`;
+    if (!force && this.lastBracket === key) return;
+    await this.requireLoggedIn();
+
+    if (!(await this.atmDialogVisible())) await this.openAtmSettings();
+    if (!(await this.atmDialogVisible())) {
+      await this.snapshot("atm-dialog-not-open", true);
+      throw new Error("Couldn't open the ATM Settings dialog to set the bracket.");
+    }
+    try {
+      if (!(await this.ensureShowInDollars())) throw new Error('Couldn\'t switch the ATM "Show in" to "$ Value".');
+      const tpOk = await this.setDialogNumber(/take\s*profit/i, tp);
+      const slOk = await this.setDialogNumber(/stop\s*loss/i, sl);
+      if (!tpOk || !slOk) throw new Error(`Couldn't set the bracket to $${tp}/$${sl} per contract.`);
+      await this.clickDialogButton(/^\s*save\s*$/i);
+      await this.p.waitForTimeout(200).catch(() => {});
+      this.lastBracket = key;
+      log.info(`ATM bracket set: +$${tp} / -$${sl} per contract.`);
+    } catch (err) {
+      await this.snapshot("set-bracket-failed", true);
+      await this.clickDialogButton(/cancel|close/i).catch(() => {});
+      this.lastBracket = null;
+      throw new Error(`${(err as Error).message} — bracket left unchanged so a wrong stop/target can't fire.`);
+    }
+  }
+
+  private async atmDialogVisible(): Promise<boolean> {
+    if (!this.page) return false;
+    return await this.page.getByText(/ATM Settings/i).first().isVisible({ timeout: 1_000 }).catch(() => false);
+  }
+
+  private async openAtmSettings(): Promise<void> {
+    const candidates = [
+      this.p.locator('[aria-label*="atm" i][aria-label*="setting" i]'),
+      this.p.locator('[title*="atm" i][title*="setting" i]'),
+      this.p.locator('[aria-label*="setting" i]'),
+      this.p.locator('[class*="cog" i], [class*="gear" i]'),
+    ];
+    for (const candidate of candidates) {
+      const el = candidate.first();
+      if (await el.isVisible({ timeout: 1_500 }).catch(() => false)) {
+        await el.click({ timeout: 3_000 }).catch(() => {});
+        if (await this.atmDialogVisible()) return;
+        await this.p.keyboard.press("Escape").catch(() => {});
+        await this.p.waitForTimeout(150).catch(() => {});
+      }
+    }
+  }
+
+  private async ensureShowInDollars(): Promise<boolean> {
+    const dollarShown = () => this.p.getByText(/\$\s*value/i).first().isVisible({ timeout: 1_000 }).catch(() => false);
+    if (await dollarShown()) return true;
+    await this.p.getByText(/show\s*in/i).first().click({ timeout: 2_000 }).catch(() => {});
+    const option = this.p.getByText(/\$\s*value/i).first();
+    if (await option.isVisible({ timeout: 1_500 }).catch(() => false)) await option.click({ timeout: 2_000 }).catch(() => {});
+    return await dollarShown();
+  }
+
+  private async setDialogNumber(labelRe: RegExp, value: number): Promise<boolean> {
+    const marked = await this.p.evaluate((args) => {
+      const re = new RegExp(args.src, args.flags);
+      const all = document.querySelectorAll("*");
+      let labelEl: Element | null = null;
+      for (const el of all) {
+        const t = (el.textContent || "").trim();
+        if (t && t.length < 30 && re.test(t) && (!labelEl || t.length < (labelEl.textContent || "").length)) labelEl = el;
+      }
+      if (!labelEl) return false;
+      let container: Element | null = labelEl;
+      let input: HTMLInputElement | null = null;
+      for (let up = 0; up < 4 && container; up++) {
+        input = container.querySelector("input");
+        if (input) break;
+        container = container.parentElement;
+      }
+      if (!input) return false;
+      input.setAttribute("data-bot-atm", "1");
+      return true;
+    }, { src: labelRe.source, flags: labelRe.flags }).catch(() => false);
+    if (!marked) return false;
+    const box = this.p.locator("[data-bot-atm]").first();
+    await box.click({ timeout: 3_000 }).catch(() => {});
+    await box.press("ControlOrMeta+a").catch(() => {});
+    await box.pressSequentially(String(value), { delay: 15 }).catch(() => {});
+    await box.press("Tab").catch(() => {});
+    const read = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
+    await box.evaluate((el) => el.removeAttribute("data-bot-atm")).catch(() => {});
+    return read === value;
+  }
+
+  private async clickDialogButton(nameRe: RegExp): Promise<void> {
+    await this.p.getByRole("button", { name: nameRe }).first().click({ timeout: 3_000 });
   }
 
   /**

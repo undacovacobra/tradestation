@@ -11,6 +11,9 @@ test("configured scanned accounts remain editable", () => {
   assert.match(source, /Configured/);
   assert.match(source, /pool\.accountIds\.includes\(account\.id\)/);
   assert.doesNotMatch(source, /Already configured<\/span>/);
+  assert.match(source, /targetPerContract/);
+  assert.match(source, /stopPerContract/);
+  assert.match(source, /test-bracket/);
 });
 
 test("control center renders every rotation with explicit account controls", () => {
@@ -23,6 +26,8 @@ test("control center renders every rotation with explicit account controls", () 
   assert.match(app, /Skip today/);
   assert.match(app, /Resume today/);
   assert.match(app, /Remove from rotation/);
+  assert.match(app, /targetPerContract/);
+  assert.match(app, /stopPerContract/);
   assert.doesNotMatch(app, /selectedPool/);
   assert.doesNotMatch(app, /choosePool/);
 });

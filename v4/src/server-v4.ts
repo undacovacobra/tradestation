@@ -124,6 +124,25 @@ app.post("/api/connections/:id/connect", async (req, res) => {
   catch (error) { return res.status(503).json({ ok: false, error: (error as Error).message }); }
 });
 
+app.post("/api/connections/:id/test-bracket", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  const worker = workers.get(req.params.id);
+  if (!worker) return res.status(404).json({ ok: false, error: "Unknown connection" });
+  const targetPerContract = Number(req.body?.targetPerContract);
+  const stopPerContract = Number(req.body?.stopPerContract);
+  if (!(targetPerContract > 0) || !(stopPerContract > 0)) {
+    return res.status(400).json({ ok: false, error: "Enter a positive take profit and stop loss." });
+  }
+  try {
+    await worker.run((adapter) => adapter.setBracket(targetPerContract, stopPerContract, true));
+    pushEvent("info", `Verified +$${targetPerContract} / -$${stopPerContract} ATM bracket on ${worker.definition.name}; no trade placed.`);
+    return res.json({ ok: true, targetPerContract, stopPerContract, placedTrade: false });
+  } catch (error) {
+    const fields = await worker.run((adapter) => adapter.inspectFields()).catch(() => []);
+    return res.status(409).json({ ok: false, error: (error as Error).message, fields, placedTrade: false });
+  }
+});
+
 app.get("/api/connections/:id/accounts", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const worker = workers.get(req.params.id);
@@ -146,6 +165,8 @@ app.post("/api/accounts/onboard", (req, res) => {
       connectionId: String(req.body?.connectionId ?? "").trim(),
       platformLabel: String(req.body?.platformLabel ?? "").trim(),
       poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
+      targetPerContract: Number(req.body?.targetPerContract ?? 0),
+      stopPerContract: Number(req.body?.stopPerContract ?? 0),
     });
     return res.status(201).json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
   } catch (error) {
@@ -163,6 +184,8 @@ app.patch("/api/accounts/:accountId", (req, res) => {
       firm: String(req.body?.firm ?? "").trim(),
       stage: req.body?.stage,
       poolIds: Array.isArray(req.body?.poolIds) ? req.body.poolIds.filter((x: unknown): x is string => typeof x === "string") : [],
+      targetPerContract: req.body?.targetPerContract == null ? undefined : Number(req.body.targetPerContract),
+      stopPerContract: req.body?.stopPerContract == null ? undefined : Number(req.body.stopPerContract),
     });
     return res.json({ ok: true, account, pools: registry.pools().filter((pool) => pool.accountIds.includes(account.id)).map((pool) => pool.id) });
   } catch (error) {

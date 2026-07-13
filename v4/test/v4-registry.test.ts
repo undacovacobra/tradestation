@@ -96,3 +96,35 @@ test("configured account fields and pool memberships can be updated without chan
   assert.deepEqual(registry.pool("p2")?.accountIds, ["a1"]);
   assert.equal(new Registry(path).account("a1")?.name, "Renamed");
 });
+
+test("old accounts default to no dollar bracket and valid bracket pairs persist", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-account-bracket-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [{ id: "a1", name: "Account", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] }],
+    pools: [{ id: "p1", name: "Pool", accountIds: ["a1"], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  assert.equal(registry.account("a1")?.targetPerContract, 0);
+  assert.equal(registry.account("a1")?.stopPerContract, 0);
+
+  registry.updateAccount("a1", { name: "Account", firm: "Firm", stage: "eval", poolIds: ["p1"], targetPerContract: 30, stopPerContract: 20 });
+  const reloaded = new Registry(path).account("a1");
+  assert.equal(reloaded?.targetPerContract, 30);
+  assert.equal(reloaded?.stopPerContract, 20);
+});
+
+test("one-sided dollar brackets are rejected", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-bad-bracket-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [{ id: "a1", name: "Account", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "A1", enabled: true, status: "active", tags: [] }],
+    pools: [{ id: "p1", name: "Pool", accountIds: ["a1"], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  assert.throws(() => registry.updateAccount("a1", { name: "Account", firm: "Firm", stage: "eval", poolIds: ["p1"], targetPerContract: 30, stopPerContract: 0 }), /both.*positive|both.*zero/i);
+});

@@ -9,11 +9,25 @@ export interface ConnectionAdapter {
   disconnect(): Promise<void>;
   status(): WorkerStatus;
   discoverAccounts(): Promise<string[]>;
+  setBracket(targetPerContract: number, stopPerContract: number, force?: boolean): Promise<void>;
+  inspectFields(): Promise<Array<Record<string, string>>>;
   enter(account: AccountDefinition, alert: V4Alert): Promise<void>;
   close(account: AccountDefinition): Promise<void>;
   readBalance(account: AccountDefinition): Promise<number | null>;
   readSelectedBalance(): Promise<number | null>;
   readSettledBalance(account: AccountDefinition): Promise<number | null>;
+}
+
+type EntryBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket" | "setQuantity" | "clickOrder">;
+
+/** Prepare every account-specific ticket setting before the only order-producing click. */
+export async function prepareEntry(browser: EntryBrowser, account: AccountDefinition, alert: V4Alert): Promise<void> {
+  await browser.switchAccount(account.platformLabel);
+  if (account.targetPerContract > 0 && account.stopPerContract > 0) {
+    await browser.setBracket(account.targetPerContract, account.stopPerContract);
+  }
+  if (alert.quantity != null) await browser.setQuantity(alert.quantity);
+  await browser.clickOrder(alert.action as "buy" | "sell", account.platformLabel);
 }
 
 /** One queue per login: safe serialization inside a browser, parallelism across logins. */
@@ -62,10 +76,12 @@ class TradovateAdapter implements ConnectionAdapter {
     return { connectionId: this.definition.id, ...status, busy: false, selectedAccount: this.browser.selectedAccount };
   }
   discoverAccounts(): Promise<string[]> { return this.browser.listAccounts(); }
+  setBracket(targetPerContract: number, stopPerContract: number, force = false): Promise<void> {
+    return this.browser.setBracket(targetPerContract, stopPerContract, force);
+  }
+  inspectFields(): Promise<Array<Record<string, string>>> { return this.browser.inspectFields(); }
   async enter(account: AccountDefinition, alert: V4Alert): Promise<void> {
-    await this.browser.switchAccount(account.platformLabel);
-    if (alert.quantity != null) await this.browser.setQuantity(alert.quantity);
-    await this.browser.clickOrder(alert.action as "buy" | "sell", account.platformLabel);
+    await prepareEntry(this.browser, account, alert);
   }
   async close(account: AccountDefinition): Promise<void> {
     await this.browser.switchAccount(account.platformLabel);
@@ -91,6 +107,8 @@ class SimulatedAdapter implements ConnectionAdapter {
   async disconnect(): Promise<void> { this.connected = false; this.selected = null; }
   status(): WorkerStatus { return { connectionId: this.definition.id, connected: this.connected, loggedIn: this.connected, busy: false, selectedAccount: this.selected }; }
   async discoverAccounts(): Promise<string[]> { return []; }
+  async setBracket(): Promise<void> {}
+  async inspectFields(): Promise<Array<Record<string, string>>> { return []; }
   async enter(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async close(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async readBalance(): Promise<number | null> { return null; }

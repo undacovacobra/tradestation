@@ -61,6 +61,8 @@ export class Registry {
     connectionId: string;
     platformLabel: string;
     poolIds: string[];
+    targetPerContract?: number;
+    stopPerContract?: number;
   }): AccountDefinition {
     if (!this.connection(input.connectionId)) throw new Error(`Unknown connection: ${input.connectionId}`);
     if (this.account(input.id)) throw new Error(`Account id already exists: ${input.id}`);
@@ -81,6 +83,8 @@ export class Registry {
       enabled: true,
       status: "active",
       tags: [],
+      targetPerContract: input.targetPerContract ?? 0,
+      stopPerContract: input.stopPerContract ?? 0,
     });
     this.data.accounts.push(account);
     for (const pool of pools) if (!pool.accountIds.includes(account.id)) pool.accountIds.push(account.id);
@@ -89,13 +93,20 @@ export class Registry {
     return account;
   }
 
-  updateAccount(id: string, input: { name: string; firm: string; stage: "eval" | "funded"; poolIds: string[] }): AccountDefinition {
+  updateAccount(id: string, input: { name: string; firm: string; stage: "eval" | "funded"; poolIds: string[]; targetPerContract?: number; stopPerContract?: number }): AccountDefinition {
     const index = this.data.accounts.findIndex((account) => account.id === id);
     if (index < 0) throw new Error(`Unknown account: ${id}`);
     const current = this.data.accounts[index]!;
     const requestedPoolIds = [...new Set(input.poolIds)];
     for (const poolId of requestedPoolIds) if (!this.pool(poolId)) throw new Error(`Unknown pool: ${poolId}`);
-    const updated = AccountSchema.parse({ ...current, name: input.name.trim(), firm: input.firm.trim(), stage: input.stage });
+    const updated = AccountSchema.parse({
+      ...current,
+      name: input.name.trim(),
+      firm: input.firm.trim(),
+      stage: input.stage,
+      targetPerContract: input.targetPerContract ?? current.targetPerContract,
+      stopPerContract: input.stopPerContract ?? current.stopPerContract,
+    });
 
     this.data.accounts[index] = updated;
     const requested = new Set(requestedPoolIds);
