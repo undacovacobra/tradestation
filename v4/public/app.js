@@ -21,16 +21,24 @@ function render() {
 
 function renderPool(pool) {
   const open = pool.state?.openTrade;
+  const armStatus = open ? "" : pool.armed
+    ? `<p><span class="pill good">Armed</span> The next account and bracket are prepared.</p>`
+    : pool.prearmError
+      ? `<p class="error"><span class="pill bad">Pre-arm failed</span> ${esc(pool.prearmError)}</p>`
+      : `<p><span class="pill">Not armed</span> Click Make next to prepare the account.</p>`;
   return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>/webhook/${esc(pool.id)} · lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
-  <div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
+  ${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
   <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button></div></article>`;
 }
 
 function renderAccountRow(pool, account, index) {
   const poolOpen = Boolean(pool.state?.openTrade);
   const hasOpenTrade = pool.state?.openTrade?.accountId === account.id;
-  const status = hasOpenTrade ? "Trading now" : account.skippedToday ? "Skipped today" : account.status;
-  const statusClass = hasOpenTrade ? "bad" : account.status === "active" && !account.skippedToday ? "good" : "";
+  const status = hasOpenTrade ? "Trading now"
+    : account.isNext && pool.armed && pool.armedAccountId === account.id ? "Armed"
+    : account.isNext && pool.prearmError ? "Pre-arm failed"
+    : account.skippedToday ? "Skipped today" : account.status;
+  const statusClass = hasOpenTrade || (account.isNext && pool.prearmError) ? "bad" : account.status === "active" && !account.skippedToday ? "good" : "";
   const rowClass = [account.isNext ? "next-row" : "", account.skippedToday ? "skipped-row" : ""].filter(Boolean).join(" ");
   const nextDisabled = poolOpen || account.status !== "active" || account.skippedToday;
   const dailyControl = account.status === "active" ? `<button ${poolOpen ? "disabled" : ""} onclick="accountAction('${esc(pool.id)}','${esc(account.id)}','${account.skippedToday ? "resume-today" : "skip-today"}')">${account.skippedToday ? "Resume today" : "Skip today"}</button>` : "";

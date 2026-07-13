@@ -53,3 +53,14 @@ test("control center renders every rotation with explicit account controls", () 
   assert.match(app, /balances updated/);
   assert.match(app, /not updated/);
 });
+
+test("control center shows whether each next account is actually pre-armed", () => {
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  const html = readFileSync(resolve("public/index.html"), "utf8");
+  assert.match(app, /pool\.armed/);
+  assert.match(app, /armedAccountId/);
+  assert.match(app, /Armed/);
+  assert.match(app, /Pre-arm failed/);
+  assert.match(app, /prearmError/);
+  assert.match(html, /manual changes.*Tradovate.*Make next/i);
+});
