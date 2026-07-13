@@ -20,6 +20,7 @@ class FakeAdapter implements ConnectionAdapter {
   balanceFailures = new Set<string>();
   balanceReads: string[] = [];
   position: number | null = 0;
+  protections = 0;
   constructor(private readonly id: string) {}
   async connect() {}
   async recover() {}
@@ -30,6 +31,7 @@ class FakeAdapter implements ConnectionAdapter {
   async inspectFields() { return []; }
   async inspectAtmControls() { return []; }
   async prepare(account: AccountDefinition) { this.prepares.push(account.id); }
+  async prepareFast(account: AccountDefinition) { this.prepares.push(`fast:${account.id}`); }
   async testPreparedQuantity() {}
   async verifyPrepared(account: AccountDefinition) { this.verifications.push(account.id); }
   async enterPrepared(account: AccountDefinition, alert: V4Alert) { await this.enter(account, alert); }
@@ -48,16 +50,20 @@ class FakeAdapter implements ConnectionAdapter {
   async readSelectedBalance() { return this.balance; }
   async readSettledBalance() { return this.balance; }
   async readSelectedPosition() { return this.position; }
+  async protectOpenPosition(account: AccountDefinition, alert: V4Alert) {
+    this.protections++;
+    return { quantity: alert.quantity!, entryPrice: 20_000, takeProfitPrice: 20_760, stopLossPrice: 19_500, protectedAt: new Date().toISOString() };
+  }
 }
 
-function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number, sameConnection = false, extraRefreshAccounts = false) {
+function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number, sameConnection = false, extraRefreshAccounts = false, executionStyle: "standard" | "fast-entry" = "standard") {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-coordinator-"));
   const connections: ConnectionDefinition[] = [
     { id: "c1", name: "Login 1", firm: "Firm A", adapter: "simulated", url: "https://example.com", sessionDir: ".s1", accountPattern: ".+", enabled: true, autoConnect: false },
     { id: "c2", name: "Login 2", firm: "Firm B", adapter: "simulated", url: "https://example.com", sessionDir: ".s2", accountPattern: ".+", enabled: true, autoConnect: false },
   ];
   writeFileSync(resolve(dir, "registry.json"), JSON.stringify({
-    version: 4, running: true, mode, connections,
+    version: 4, running: true, mode, executionStyle, connections,
     accounts: [
       { id: "a1", name: "A", firm: "Firm A", stage: "eval", connectionId: "c1", platformLabel: "X1", enabled: true, status: "active", tags: [] },
       { id: "a2", name: "B", firm: "Firm B", stage: "funded", connectionId: sameConnection ? "c1" : "c2", platformLabel: "Y2", enabled: true, status: "active", tags: [] },
@@ -75,7 +81,7 @@ function setup(mode: "practice" | "live" = "live", executionLanes?: [string, str
   const workers = new Map<string, ConnectionWorker>(connections.map((connection) => [connection.id, new ConnectionWorker(connection, adapters.get(connection.id)!)]));
   const registry = new Registry(resolve(dir, "registry.json"));
   const balances = new BalanceLog(resolve(dir, "balances.json"));
-  return { coordinator: new TradeCoordinator(registry, workers, resolve(dir, "state"), () => "2026-07-10", balances), registry, adapters };
+  return { coordinator: new TradeCoordinator(registry, workers, resolve(dir, "state"), () => "2026-07-10", balances, false), registry, adapters };
 }
 
 test("broadcast runs independent logins concurrently", async () => {
@@ -259,4 +265,38 @@ test("balance refresh continues after one missing account and updates later acco
   assert.equal(pool?.accounts.find((account) => account.id === "a1")?.balance, 50_000);
   assert.equal(pool?.accounts.find((account) => account.id === "a3")?.balance, null);
   assert.equal(pool?.accounts.find((account) => account.id === "a4")?.balance, 50_000);
+});
+
+test("fast entry records pending protection immediately, then protects the live position", async () => {
+  const { coordinator, adapters } = setup("live", undefined, undefined, false, false, "fast-entry");
+  await coordinator.prearmPool("p1");
+  const result = await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 2, test: false });
+  assert.equal(result.ok, true);
+  const pending = coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade;
+  assert.equal(pending?.protectionState, "pending");
+  assert.deepEqual(adapters.get("c1")?.prepares, ["fast:a1"]);
+  await coordinator.protectPool("p1");
+  const protectedTrade = coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade;
+  assert.equal(protectedTrade?.protectionState, "protected");
+  assert.equal(adapters.get("c1")?.protections, 1);
+});
+
+test("fast protection failure is persisted and keeps the rotation locked", async () => {
+  const { coordinator, adapters } = setup("live", undefined, undefined, false, false, "fast-entry");
+  const adapter = adapters.get("c1")!;
+  adapter.protectOpenPosition = async () => { throw new Error("only one exit order appeared"); };
+  await coordinator.prearmPool("p1");
+  await coordinator.handle("p1", { action: "sell", symbol: "MNQ", quantity: 1, test: false });
+  await assert.rejects(() => coordinator.protectPool("p1"), /only one exit order appeared/i);
+  const trade = coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade;
+  assert.equal(trade?.protectionState, "failed");
+  assert.match(trade?.protectionError ?? "", /only one exit order appeared/i);
+  assert.equal(coordinator.hasOpenTradeForAccount("a1"), true);
+});
+
+test("fast entry blocks unsupported instruments before the market order", async () => {
+  const { coordinator } = setup("live", undefined, undefined, false, false, "fast-entry");
+  await coordinator.prearmPool("p1");
+  await assert.rejects(() => coordinator.handle("p1", { action: "buy", symbol: "YM1!", quantity: 1, test: false }), /unsupported.*YM/i);
+  assert.equal(coordinator.status().find((pool) => pool.id === "p1")?.state?.openTrade, null);
 });

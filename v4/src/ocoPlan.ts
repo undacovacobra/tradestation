@@ -29,7 +29,10 @@ export function planOcoPrices(
   targetDollars: number,
   stopDollars: number,
 ): OcoPricePlan {
-  const symbol = symbolInput.trim().toUpperCase();
+  const rawSymbol = symbolInput.trim().toUpperCase();
+  const symbol = Object.keys(PROFILES)
+    .sort((a, b) => b.length - a.length)
+    .find((candidate) => rawSymbol === candidate || rawSymbol.startsWith(candidate)) ?? rawSymbol;
   const profile = PROFILES[symbol];
   if (!profile) throw new Error(`Unsupported Fast Entry symbol ${symbol || "(blank)"}.`);
   if (!(entryPrice > 0) || !(targetDollars > 0) || !(stopDollars > 0)) throw new Error("Entry price, take profit, and stop loss must be positive.");

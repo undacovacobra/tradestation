@@ -16,6 +16,8 @@ function render() {
   document.querySelector("#mode-practice").classList.toggle("active", data.mode === "practice");
   document.querySelector("#mode-live").classList.toggle("active", data.mode === "live");
   document.querySelector("#mode-live").classList.toggle("danger-active", data.mode === "live");
+  document.querySelector("#style-standard").classList.toggle("active", data.executionStyle !== "fast-entry");
+  document.querySelector("#style-fast-entry").classList.toggle("danger-active", data.executionStyle === "fast-entry");
   const remoteOn = data.remoteAccessEnabled && data.tunnel?.state === "on";
   document.querySelector("#remote-access-toggle").textContent = remoteOn ? "Turn Remote Access OFF" : "Turn Remote Access ON";
   document.querySelector("#remote-access-status").className = `pill ${remoteOn ? "good" : ""}`;
@@ -48,8 +50,13 @@ function renderPool(pool) {
     : pool.prearmError
       ? `<p class="error"><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || pool.prearmError)}</p>`
       : `<p><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || "Click Make next to prepare the account and ATM in this execution session.")}</p>`;
+  const protection = !open?.protectionState ? "" : open.protectionState === "protected"
+    ? `<p><span class="pill good">PROTECTED</span> OCO target and stop confirmed.</p>`
+    : open.protectionState === "pending"
+      ? `<p><span class="pill">PROTECTING</span> Market entry sent; ATLAS is adding the OCO exits now.</p>`
+      : `<p class="error"><span class="pill bad">PROTECTION FAILED</span> ${esc(open.protectionError || "Check Tradovate immediately.")}</p>`;
   return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>Lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p><p><strong>${webhookKind} webhook:</strong> <code>${esc(poolWebhookUrl(pool.id))}</code> <button onclick="copyWebhook('${esc(pool.id)}')">Copy webhook</button> <button id="test-button-${esc(pool.id)}" ${testState?.kind === "testing" ? "disabled" : ""} onclick="testWebhook('${esc(pool.id)}')">Test webhook</button>${webhookNote}</p><p id="test-result-${esc(pool.id)}" class="webhook-test-result ${esc(testState?.kind || "")}">${esc(testState?.message || "")}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
-  ${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
+  ${protection}${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
   <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button><span class="muted">Strategy quantity is read from every webhook.</span></div></article>`;
 }
 
@@ -148,6 +155,14 @@ async function setMode(mode) {
   document.querySelector("#action-result").textContent = result.ok ? result.message : result.error;
   await refresh();
 }
+async function setExecutionStyle(executionStyle) {
+  const confirmGap = executionStyle === "fast-entry";
+  if (confirmGap && !confirm("Enable Fast Entry? The market order is sent first, then ATLAS immediately adds the OCO target and stop. This creates a brief unprotected gap. Continue?")) return;
+  const response = await fetch("/api/execution-style", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ executionStyle, confirmGap }) });
+  const result = await response.json();
+  document.querySelector("#action-result").textContent = result.ok ? result.message : result.error;
+  await refresh();
+}
 async function saveBracket(poolId, accountId) {
   const key = `${poolId}-${accountId}`;
   const targetPerContract = Number(document.getElementById(`tp-${key}`).value);
@@ -188,6 +203,8 @@ document.querySelector("#refresh-balances").addEventListener("click", async () =
 });
 document.querySelector("#mode-practice").addEventListener("click", () => setMode("practice"));
 document.querySelector("#mode-live").addEventListener("click", () => setMode("live"));
+document.querySelector("#style-standard").addEventListener("click", () => setExecutionStyle("standard"));
+document.querySelector("#style-fast-entry").addEventListener("click", () => setExecutionStyle("fast-entry"));
 document.querySelector("#remote-access-toggle").addEventListener("click", async () => {
   const enabled = !(data.remoteAccessEnabled && data.tunnel?.state === "on");
   const response = await fetch("/api/remote-access", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ enabled }) });

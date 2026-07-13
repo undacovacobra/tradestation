@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { config, ROOT, type Config } from "./config.js";
-import type { AccountDefinition, ArmedSignature, ConnectionDefinition, V4Alert, WorkerStatus } from "./models.js";
+import type { AccountDefinition, ArmedSignature, ConnectionDefinition, ProtectionReceipt, V4Alert, WorkerStatus } from "./models.js";
 import { TradovateBrowser } from "./browser.js";
 
 export interface ConnectionAdapter {
@@ -13,6 +13,7 @@ export interface ConnectionAdapter {
   inspectFields(): Promise<Array<Record<string, string>>>;
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>>;
   prepare(account: AccountDefinition): Promise<void>;
+  prepareFast?(account: AccountDefinition): Promise<void>;
   testPreparedQuantity(account: AccountDefinition, quantity: number): Promise<void>;
   verifyPrepared(account: AccountDefinition): Promise<void>;
   enterPrepared(account: AccountDefinition, alert: V4Alert): Promise<void>;
@@ -22,6 +23,7 @@ export interface ConnectionAdapter {
   readSelectedBalance(): Promise<number | null>;
   readSettledBalance(account: AccountDefinition): Promise<number | null>;
   readSelectedPosition?(): Promise<number | null>;
+  protectOpenPosition?(account: AccountDefinition, alert: V4Alert): Promise<ProtectionReceipt>;
 }
 
 type PreparationBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket">;
@@ -77,16 +79,17 @@ export class ConnectionWorker {
 
   status(): WorkerStatus { return { ...this.adapter.status(), busy: this.busy, lastError: this.lastError, armed: this.armed ? { ...this.armed } : undefined }; }
 
-  isArmed(account: AccountDefinition): boolean {
+  isArmed(account: AccountDefinition, executionStyle: "standard" | "fast-entry" = "standard"): boolean {
     return this.armed?.accountId === account.id
       && this.armed.platformLabel === account.platformLabel
       && this.armed.targetPerContract === account.targetPerContract
-      && this.armed.stopPerContract === account.stopPerContract;
+      && this.armed.stopPerContract === account.stopPerContract
+      && (this.armed.executionStyle ?? "standard") === executionStyle;
   }
 
   invalidateArmed(): void { this.armed = undefined; }
 
-  private markArmed(account: AccountDefinition, entryBalance: number | null): void {
+  private markArmed(account: AccountDefinition, entryBalance: number | null, executionStyle: "standard" | "fast-entry" = "standard"): void {
     this.armed = {
       accountId: account.id,
       platformLabel: account.platformLabel,
@@ -94,6 +97,7 @@ export class ConnectionWorker {
       stopPerContract: account.stopPerContract,
       ...(entryBalance == null ? {} : { entryBalance }),
       armedAt: new Date().toISOString(),
+      executionStyle,
     };
   }
 
@@ -106,16 +110,32 @@ export class ConnectionWorker {
     });
   }
 
-  async dryRun(account: AccountDefinition, quantity: number): Promise<{ alreadyArmed: boolean; elapsedMs: number }> {
+  async prearmFast(account: AccountDefinition): Promise<void> {
+    requireBracket(account);
+    this.invalidateArmed();
+    await this.run(async (adapter) => {
+      if (!adapter.prepareFast) throw new Error(`${this.definition.name} does not support Fast Entry preparation.`);
+      const entryBalance = await adapter.readBalance(account);
+      await adapter.prepareFast(account);
+      this.markArmed(account, entryBalance, "fast-entry");
+    });
+  }
+
+  async dryRun(account: AccountDefinition, quantity: number, executionStyle: "standard" | "fast-entry" = "standard"): Promise<{ alreadyArmed: boolean; elapsedMs: number }> {
     const startedAt = Date.now();
-    const alreadyArmed = this.isArmed(account);
+    const alreadyArmed = this.isArmed(account, executionStyle);
     if (!alreadyArmed) this.invalidateArmed();
     await this.run(async (adapter) => {
       let entryBalance = this.armed?.entryBalance ?? null;
       if (!alreadyArmed) {
         entryBalance = await adapter.readBalance(account);
-        await adapter.prepare(account);
-        this.markArmed(account, entryBalance);
+        if (executionStyle === "fast-entry") {
+          if (!adapter.prepareFast) throw new Error(`${this.definition.name} does not support Fast Entry preparation.`);
+          await adapter.prepareFast(account);
+        } else {
+          await adapter.prepare(account);
+        }
+        this.markArmed(account, entryBalance, executionStyle);
       }
       await adapter.testPreparedQuantity(account, quantity);
     });
@@ -123,13 +143,21 @@ export class ConnectionWorker {
   }
 
   async enter(account: AccountDefinition, alert: V4Alert): Promise<{ balance: number | null; timingMs: { queueWait: number; execution: number; total: number } }> {
+    return this.enterReady(account, alert, "standard");
+  }
+
+  async enterFast(account: AccountDefinition, alert: V4Alert): Promise<{ balance: number | null; timingMs: { queueWait: number; execution: number; total: number } }> {
+    return this.enterReady(account, alert, "fast-entry");
+  }
+
+  private async enterReady(account: AccountDefinition, alert: V4Alert, executionStyle: "standard" | "fast-entry"): Promise<{ balance: number | null; timingMs: { queueWait: number; execution: number; total: number } }> {
     const requestedAt = Date.now();
     if (alert.quantity == null) throw new Error("Webhook quantity is required for every entry.");
     if (this.busy || this.pendingTasks > 0) throw new Error(`${this.definition.name} is busy with preparation or maintenance. The live signal was blocked instead of delayed.`);
-    if (!this.isArmed(account)) throw new Error(`${account.name} is not ready. Prepare it with Make next before sending a live signal.`);
+    if (!this.isArmed(account, executionStyle)) throw new Error(`${account.name} is not ready. Prepare it with Make next before sending a live signal.`);
     return this.run(async (adapter) => {
       const queueWait = Date.now() - requestedAt;
-      if (!this.isArmed(account)) {
+      if (!this.isArmed(account, executionStyle)) {
         throw new Error(`${account.name} is not ready. Prepare it with Make next before sending a live signal.`);
       }
       const armed = this.armed!;
@@ -143,6 +171,13 @@ export class ConnectionWorker {
       const execution = Date.now() - executionStartedAt;
       this.invalidateArmed();
       return { balance: armed.entryBalance ?? null, timingMs: { queueWait, execution, total: Date.now() - requestedAt } };
+    });
+  }
+
+  async protectOpenPosition(account: AccountDefinition, alert: V4Alert): Promise<ProtectionReceipt> {
+    return this.run(async (adapter) => {
+      if (!adapter.protectOpenPosition) throw new Error(`${this.definition.name} does not support post-fill OCO protection.`);
+      return adapter.protectOpenPosition(account, alert);
     });
   }
 
@@ -177,6 +212,7 @@ class TradovateAdapter implements ConnectionAdapter {
   inspectFields(): Promise<Array<Record<string, string>>> { return this.browser.inspectFields(); }
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return this.browser.inspectAtmControls(); }
   async prepare(account: AccountDefinition): Promise<void> { await prepareAccount(this.browser, account); }
+  async prepareFast(account: AccountDefinition): Promise<void> { await this.browser.prepareFastAccount(account.platformLabel); }
   async testPreparedQuantity(account: AccountDefinition, quantity: number): Promise<void> {
     await this.browser.verifySelectedAccount(account.platformLabel);
     await this.browser.setQuantity(quantity);
@@ -203,6 +239,9 @@ class TradovateAdapter implements ConnectionAdapter {
     return this.browser.readSettledEquity();
   }
   readSelectedPosition(): Promise<number | null> { return this.browser.readSelectedPosition(); }
+  protectOpenPosition(account: AccountDefinition, alert: V4Alert): Promise<ProtectionReceipt> {
+    return this.browser.protectOpenPosition(account, alert);
+  }
 }
 
 class SimulatedAdapter implements ConnectionAdapter {
@@ -218,6 +257,7 @@ class SimulatedAdapter implements ConnectionAdapter {
   async inspectFields(): Promise<Array<Record<string, string>>> { return []; }
   async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return []; }
   async prepare(account: AccountDefinition): Promise<void> { requireBracket(account); this.selected = account.platformLabel; }
+  async prepareFast(account: AccountDefinition): Promise<void> { requireBracket(account); this.selected = account.platformLabel; }
   async testPreparedQuantity(account: AccountDefinition, _quantity: number): Promise<void> { this.selected = account.platformLabel; }
   async verifyPrepared(account: AccountDefinition): Promise<void> {
     requireBracket(account);
@@ -230,6 +270,9 @@ class SimulatedAdapter implements ConnectionAdapter {
   async readSelectedBalance(): Promise<number | null> { return null; }
   async readSettledBalance(): Promise<number | null> { return null; }
   async readSelectedPosition(): Promise<number | null> { return 0; }
+  async protectOpenPosition(_account: AccountDefinition, alert: V4Alert): Promise<ProtectionReceipt> {
+    return { quantity: alert.quantity!, entryPrice: 0, takeProfitPrice: 0, stopLossPrice: 0, protectedAt: new Date().toISOString() };
+  }
 }
 
 export function createWorkers(definitions: ConnectionDefinition[]): Map<string, ConnectionWorker> {

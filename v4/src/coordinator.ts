@@ -5,6 +5,7 @@ import { PoolRotation } from "./poolRotation.js";
 import type { Registry } from "./registry.js";
 import type { ConnectionWorker } from "./workers.js";
 import type { BalanceLog } from "./balances.js";
+import { planOcoPrices } from "./ocoPlan.js";
 
 export class TradeCoordinator {
   private readonly rotations = new Map<string, PoolRotation>();
@@ -21,6 +22,8 @@ export class TradeCoordinator {
     stateDir: string,
     today: () => string,
     private readonly balances?: BalanceLog,
+    private readonly autoProtect = true,
+    private readonly onProtectionFailure?: (message: string) => void,
   ) {
     for (const pool of registry.pools()) {
       this.rotations.set(pool.id, new PoolRotation(pool.id, resolve(stateDir, `${pool.id}.json`), pool.benchWinnersForDay, today));
@@ -41,7 +44,7 @@ export class TradeCoordinator {
       const nextWorker = nextAccount ? this.workers.get(nextAccount.connectionId) : undefined;
       const workerStatus = nextWorker?.status();
       const armedAccountId = workerStatus?.armed?.accountId;
-      const armed = Boolean(nextAccount && nextWorker?.isArmed(nextAccount));
+      const armed = Boolean(nextAccount && nextWorker?.isArmed(nextAccount, this.registry.executionStyle));
       const sessionConflict = nextAccount && workerStatus?.armed && !armed
         ? `${nextWorker?.definition.name} is prepared for another account. One execution session can instantly serve one lane; add a separate saved login session for simultaneous lanes.`
         : undefined;
@@ -52,7 +55,11 @@ export class TradeCoordinator {
         armed,
         armedAccountId: armedAccountId ?? null,
         prearmError: armed ? undefined : this.prearmErrors.get(pool.id) ?? sessionConflict,
-        readinessReason: armed ? "Exact account and ATM are prepared; quantity will come from the webhook." : this.prearmErrors.get(pool.id) ?? sessionConflict ?? "Click Make next to prepare this execution session.",
+        readinessReason: armed
+          ? this.registry.executionStyle === "fast-entry"
+            ? "Exact account is selected, chart ATM is off, and DOM OCO-one time is ready; quantity will come from the webhook."
+            : "Exact account and ATM are prepared; quantity will come from the webhook."
+          : this.prearmErrors.get(pool.id) ?? sessionConflict ?? "Click Make next to prepare this execution session.",
         accounts: pool.accountIds.map((id) => this.registry.account(id)).filter((account): account is AccountDefinition => Boolean(account)).map((account) => {
           const record = balanceSnapshot[account.id];
           return {
@@ -135,11 +142,16 @@ export class TradeCoordinator {
       const simulated = alert.test || this.registry.mode === "practice";
       const executionAlert = alert;
 
+      if (!simulated && this.registry.executionStyle === "fast-entry") {
+        // Validate instrument support and bracket amounts before the market-order click.
+        planOcoPrices(alert.symbol, alert.action, 1, account.targetPerContract, account.stopPerContract);
+      }
+
       if (alert.test) {
         const status = worker.status();
         if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
         if (alert.quantity == null) throw new Error("Test quantity is required");
-        const readiness = await worker.dryRun(account, alert.quantity);
+        const readiness = await worker.dryRun(account, alert.quantity, this.registry.executionStyle);
         this.prearmErrors.delete(poolId);
         return {
           ok: true,
@@ -160,17 +172,25 @@ export class TradeCoordinator {
         if (!simulated) {
           const status = worker.status();
           if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-          const entry = await worker.enter(account, executionAlert);
+          const entry = this.registry.executionStyle === "fast-entry"
+            ? await worker.enterFast(account, executionAlert)
+            : await worker.enter(account, executionAlert);
           entryBalance = entry.balance;
           timingMs = entry.timingMs;
           if (entryBalance != null) this.balances?.set(account.id, entryBalance);
         }
-        rotation.recordOpen(account, executionAlert, simulated, entryBalance ?? undefined);
+        const protectionState = !simulated && this.registry.executionStyle === "fast-entry" ? "pending" : undefined;
+        rotation.recordOpen(account, executionAlert, simulated, entryBalance ?? undefined, protectionState);
       } finally {
         this.reservedAccounts.delete(account.id);
         this.reservedLanes.delete(lane);
       }
       if (duplicateKey) this.recentSignals.set(duplicateKey, now);
+      if (!simulated && this.registry.executionStyle === "fast-entry" && this.autoProtect) {
+        setTimeout(() => {
+          void this.protectPool(poolId).catch((error) => this.onProtectionFailure?.(`Protection failed for ${pool.name}: ${(error as Error).message}`));
+        }, 0);
+      }
       return {
         ok: true,
         poolId,
@@ -226,6 +246,35 @@ export class TradeCoordinator {
       simulated,
       message: `${simulated ? "Planned close of" : "Closed"} ${alert.symbol} on ${account.name}`,
     };
+  }
+
+  async protectPool(poolId: string): Promise<void> {
+    const rotation = this.rotations.get(poolId);
+    const open = rotation?.snapshot().openTrade;
+    if (!rotation || !open) throw new Error(`Pool ${poolId} has no open trade to protect`);
+    if (open.simulated || open.protectionState === "protected") return;
+    if (open.protectionState !== "pending" && open.protectionState !== "failed") return;
+    const account = this.registry.account(open.accountId);
+    const worker = this.workers.get(open.connectionId);
+    if (!account || !worker) throw new Error(`Cannot protect ${open.accountName}: its account or login is missing`);
+    const alert: V4Alert = { action: open.action, symbol: open.symbol, quantity: open.quantity, signalId: open.signalId, test: false };
+    try {
+      await worker.protectOpenPosition(account, alert);
+      rotation.markPositionConfirmed();
+      rotation.markProtection("protected");
+    } catch (error) {
+      const message = (error as Error).message;
+      rotation.markProtection("failed", message);
+      throw error;
+    }
+  }
+
+  async recoverPendingProtection(): Promise<void> {
+    for (const pool of this.registry.pools()) {
+      const open = this.rotations.get(pool.id)?.snapshot().openTrade;
+      if (open?.protectionState !== "pending") continue;
+      await this.protectPool(pool.id);
+    }
   }
 
   /** Broker position is authoritative: a pool advances only after its real position was seen open, then flat. */
@@ -307,7 +356,8 @@ export class TradeCoordinator {
       if (!worker) throw new Error(`No worker for connection ${account.connectionId}`);
       const status = worker.status();
       if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-      await worker.prearm(account);
+      if (this.registry.executionStyle === "fast-entry") await worker.prearmFast(account);
+      else await worker.prearm(account);
       this.prearmErrors.delete(poolId);
     } catch (error) {
       this.prearmErrors.set(poolId, (error as Error).message);

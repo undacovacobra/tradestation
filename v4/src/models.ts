@@ -119,6 +119,16 @@ export interface ArmedSignature {
   stopPerContract: number;
   entryBalance?: number;
   armedAt: string;
+  executionStyle?: "standard" | "fast-entry";
+}
+
+export interface ProtectionReceipt {
+  quantity: number;
+  entryPrice: number;
+  takeProfitPrice: number;
+  stopLossPrice: number;
+  protectedAt: string;
+  ocoId?: string;
 }
 
 export interface TradeResult {

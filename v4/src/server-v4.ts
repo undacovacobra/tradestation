@@ -16,7 +16,10 @@ const registry = new Registry(config.registryPath);
 const workers = new ConnectionManager(registry.connections());
 const balances = new BalanceLog(config.balancesPath);
 const today = () => tradingDayKey(new Date(), config.tradingDayTz, config.tradingDayResetHour);
-const coordinator = new TradeCoordinator(registry, workers, config.poolStateDir, today, balances);
+const coordinator = new TradeCoordinator(registry, workers, config.poolStateDir, today, balances, true, (message) => {
+  pushEvent("error", message);
+  notifyActionNeeded(message);
+});
 const app = express();
 app.use(express.json({ limit: "128kb" }));
 app.use(express.static(config.publicDir));
@@ -51,6 +54,7 @@ app.get("/health", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
+    executionStyle: registry.executionStyle,
     remoteAccessEnabled: registry.remoteAccessEnabled,
     connections: workers.values().map((worker) => worker.status()),
   });
@@ -61,6 +65,7 @@ app.get("/api/status", (_req, res) => {
     version: 4,
     running: registry.running,
     mode: registry.mode,
+    executionStyle: registry.executionStyle,
     remoteAccessEnabled: registry.remoteAccessEnabled,
     connections: workers.values().map((worker) => ({
       ...worker.definition,
@@ -92,6 +97,25 @@ app.post("/api/mode", (req, res) => {
       : "Practice mode enabled — webhook signals will not place orders.";
     pushEvent(mode === "live" ? "warn" : "info", message);
     return res.json({ ok: true, mode, message });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
+app.post("/api/execution-style", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const executionStyle = String(req.body?.executionStyle ?? "");
+    if (executionStyle !== "standard" && executionStyle !== "fast-entry") throw new Error("Execution style must be standard or fast-entry");
+    if (executionStyle === "fast-entry" && req.body?.confirmGap !== true) throw new Error("Fast Entry requires explicit confirmation of the brief unprotected gap");
+    registry.setExecutionStyle(executionStyle);
+    for (const worker of workers.values()) worker.invalidateArmed();
+    await Promise.allSettled(workers.values().filter((worker) => worker.status().loggedIn).map((worker) => coordinator.prearmConnection(worker.definition.id)));
+    const message = executionStyle === "fast-entry"
+      ? "Fast Entry enabled — market entry happens first, then ATLAS immediately adds a DOM OCO-one-time target and stop."
+      : "Standard execution enabled — the account ATM is prepared before entry.";
+    pushEvent(executionStyle === "fast-entry" ? "warn" : "info", message);
+    return res.json({ ok: true, executionStyle, message });
   } catch (error) {
     return res.status(400).json({ ok: false, error: (error as Error).message });
   }
@@ -428,6 +452,11 @@ const healthTimer = setInterval(() => {
         });
     }
   }
+  void coordinator.recoverPendingProtection().catch((error) => {
+    const message = `Pending Fast Entry protection needs attention: ${(error as Error).message}`;
+    pushEvent("error", message);
+    notifyActionNeeded(message);
+  });
 }, config.healthCheckSeconds * 1_000);
 healthTimer.unref();
 
@@ -455,7 +484,11 @@ targetTimer.unref();
 const server = app.listen(config.port, config.host, () => {
   log.info(`V4 listening at http://${config.host}:${config.port}`);
   log.info(`Pools: ${registry.pools().map((pool) => pool.id).join(", ") || "none configured"}`);
-  void autoConnect();
+  void autoConnect().then(() => coordinator.recoverPendingProtection()).catch((error) => {
+    const message = `Startup protection recovery needs attention: ${(error as Error).message}`;
+    pushEvent("error", message);
+    notifyActionNeeded(message);
+  });
   if (registry.remoteAccessEnabled) void connectTunnel().catch((error) => log.warn(`Ngrok startup failed: ${(error as Error).message}`));
   for (const pool of coordinator.status()) {
     if (!pool.state?.openTrade) continue;

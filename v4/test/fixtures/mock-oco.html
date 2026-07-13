@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<button>Buy Mkt</button><button>Sell Mkt</button>
+<div class="acctid">ACCOUNT-1</div>
+<div><span>POSITION</span> <strong id="position">2</strong> <span>AVG PRICE</span> <strong id="entry">20000</strong></div>
+<div><span>ATM</span><button id="atm-on">On</button><button id="atm-off" data-atm-off>Off</button></div>
+<select id="order-type"><option>Market</option><option>OCO-one time</option></select>
+<div id="ladder">
+  <button data-dom-side="ask" data-dom-price="20760">20760.00 ask</button>
+  <button data-dom-side="ask" data-dom-price="19500">19500.00 ask</button>
+  <button data-dom-side="bid" data-dom-price="20760">20760.00 bid</button>
+  <button data-dom-side="bid" data-dom-price="19500">19500.00 bid</button>
+</div>
+<div id="orders"></div>
+<script>
+  window.atmOff = false;
+  document.querySelector('#atm-off').onclick = () => { window.atmOff = true; };
+  document.querySelectorAll('[data-dom-price]').forEach((button) => {
+    const add = (kind) => {
+      const order = document.createElement('div');
+      order.dataset.workingOrder = 'true';
+      order.dataset.orderKind = kind;
+      order.dataset.orderPrice = button.dataset.domPrice;
+      order.dataset.orderQuantity = '2';
+      order.dataset.ocoId = 'OCO-1';
+      document.querySelector('#orders').append(order);
+    };
+    button.addEventListener('click', () => add('limit'));
+    button.addEventListener('contextmenu', (event) => { event.preventDefault(); add('stop'); });
+  });
+</script>

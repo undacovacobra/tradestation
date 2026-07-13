@@ -134,6 +134,18 @@ test("dashboard exposes deliberate Practice and Live controls with readiness gui
   assert.match(app, /execution session/i);
 });
 
+test("dashboard exposes persistent Standard and Fast Entry controls plus protection state", () => {
+  const dashboard = readFileSync(resolve("public/index.html"), "utf8");
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  const server = readFileSync(resolve("src/server-v4.ts"), "utf8");
+  assert.match(dashboard, /id="style-standard"/);
+  assert.match(dashboard, /id="style-fast-entry"/);
+  assert.match(app, /\/api\/execution-style/);
+  assert.match(app, /confirmGap/);
+  assert.match(app, /protectionState/);
+  assert.match(server, /\/api\/execution-style/);
+});
+
 test("dashboard groups configured accounts under each logged-in session", () => {
   const html = readFileSync(resolve("public/index.html"), "utf8");
   const app = readFileSync(resolve("public/app.js"), "utf8");

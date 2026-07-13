@@ -72,7 +72,7 @@ export class PoolRotation {
     throw new Error(`Pool ${this.poolId} has no available accounts; every account is busy, held, or benched`);
   }
 
-  recordOpen(account: AccountDefinition, alert: V4Alert, simulated: boolean, entryBalance?: number): OpenPoolTrade {
+  recordOpen(account: AccountDefinition, alert: V4Alert, simulated: boolean, entryBalance?: number, protectionState?: OpenPoolTrade["protectionState"]): OpenPoolTrade {
     const open: OpenPoolTrade = {
       accountId: account.id,
       accountName: account.name,
@@ -85,11 +85,22 @@ export class PoolRotation {
       openedAt: new Date().toISOString(),
       simulated,
       entryBalance,
+      protectionState,
+      ...(protectionState ? { protectionUpdatedAt: new Date().toISOString() } : {}),
     };
     this.state.openTrade = open;
     this.state.nextAccountId = account.id;
     this.save();
     return open;
+  }
+
+  markProtection(state: "pending" | "protected" | "failed", error?: string): void {
+    if (!this.state.openTrade) throw new Error(`Pool ${this.poolId} has no open trade to protect`);
+    this.state.openTrade.protectionState = state;
+    this.state.openTrade.protectionUpdatedAt = new Date().toISOString();
+    if (error) this.state.openTrade.protectionError = error;
+    else delete this.state.openTrade.protectionError;
+    this.save();
   }
 
   markPositionConfirmed(): void {

@@ -6,6 +6,8 @@ import { extractEquity } from "./balanceParse.js";
 import { extractPosition } from "./positionParse.js";
 import { notifyActionNeeded } from "./notify.js";
 import { log } from "./logger.js";
+import { planOcoPrices } from "./ocoPlan.js";
+import type { AccountDefinition, ProtectionReceipt, V4Alert } from "./models.js";
 
 /**
  * Visible text labels from the live Tradovate web trader, confirmed on the
@@ -397,6 +399,197 @@ export class TradovateBrowser {
       })
       .catch(() => "");
     return extractEquity(raw);
+  }
+
+  /** Fast Entry readiness: exact account selected, chart ATM disabled, DOM OCO mode available. */
+  async prepareFastAccount(label: string): Promise<void> {
+    await this.dismissPopups().catch(() => false);
+    await this.switchAccount(label);
+    await this.disableChartAtm();
+    await this.selectOcoOneTime();
+    log.info(`Fast Entry ready: ${label} selected, chart ATM off, DOM OCO-one time available.`);
+  }
+
+  private async disableChartAtm(): Promise<void> {
+    const clicked = await this.p.evaluate(() => {
+      const explicit = document.querySelector<HTMLElement>("[data-atm-off]");
+      if (explicit) {
+        const rect = explicit.getBoundingClientRect();
+        const style = getComputedStyle(explicit);
+        if (rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden") { explicit.click(); return true; }
+      }
+      const labels = [...document.querySelectorAll("*")].filter((el) => {
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return (el.textContent || "").trim() === "ATM" && rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      });
+      for (const label of labels) {
+        let root: Element | null = label.parentElement;
+        for (let depth = 0; depth < 5 && root; depth++, root = root.parentElement) {
+          const off = [...root.querySelectorAll<HTMLElement>('button,[role="button"]')]
+            .find((el) => {
+              const rect = el.getBoundingClientRect();
+              const style = getComputedStyle(el);
+              return (el.textContent || "").trim().toLowerCase() === "off" && rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+            });
+          if (off) { off.click(); return true; }
+        }
+      }
+      return false;
+    }).catch(() => false);
+    if (!clicked) throw new Error("Fast Entry could not turn the chart ATM off. No order was enabled.");
+    this.lastBracket = null;
+  }
+
+  /** Select Tradovate DOM's one-time OCO mode without placing either order. */
+  private async selectOcoOneTime(): Promise<void> {
+    const selected = await this.p.evaluate(() => {
+      const options = [...document.querySelectorAll("select")].map((select) => ({
+        select: select as HTMLSelectElement,
+        option: [...(select as HTMLSelectElement).options].find((option) => /oco\s*[- ]?one\s*time/i.test(option.textContent || "")),
+      })).find((item) => item.option);
+      if (!options?.option) return false;
+      options.select.value = options.option.value;
+      options.select.dispatchEvent(new Event("input", { bubbles: true }));
+      options.select.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }).catch(() => false);
+    if (selected) return;
+
+    const already = this.p.getByText(/OCO\s*[- ]?one\s*time/i).filter({ visible: true }).first();
+    if (await already.isVisible({ timeout: 500 }).catch(() => false)) return;
+    const trigger = this.p.locator('button,[role="button"]').filter({ hasText: /^(Market|MKT|Limit|Stop|Order Type)$/i }).filter({ visible: true }).first();
+    if (await trigger.isVisible({ timeout: 700 }).catch(() => false)) await trigger.click({ timeout: 1_500 }).catch(() => {});
+    const option = this.p.getByText(/OCO\s*[- ]?one\s*time/i).filter({ visible: true }).last();
+    if (await option.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await option.click({ timeout: 1_500 });
+      return;
+    }
+    throw new Error('Fast Entry needs a visible Tradovate DOM with order type "OCO-one time". No order was enabled.');
+  }
+
+  private async readPositionDetails(): Promise<{ quantity: number; entryPrice: number } | null> {
+    return this.p.evaluate(() => {
+      const explicit = document.querySelector<HTMLElement>("[data-position]");
+      const explicitPrice = document.querySelector<HTMLElement>("[data-entry-price]");
+      if (explicit && explicitPrice) {
+        const quantity = Number(explicit.dataset.position);
+        const entryPrice = Number(explicitPrice.dataset.entryPrice);
+        if (Number.isFinite(quantity) && Number.isFinite(entryPrice)) return { quantity, entryPrice };
+      }
+      const compact = (document.body.innerText || "").replace(/,/g, "").replace(/\s+/g, " ");
+      const position = compact.match(/\bPOSITION\s+(-?\d+)\b/i);
+      const average = compact.match(/\b(?:AVG|AVERAGE)(?:\s+FILL)?\s+PRICE\s+([0-9]+(?:\.[0-9]+)?)/i);
+      if (!position || !average) return null;
+      const quantity = Number(position[1]);
+      const entryPrice = Number(average[1]);
+      return Number.isFinite(quantity) && Number.isFinite(entryPrice) ? { quantity, entryPrice } : null;
+    }).catch(() => null);
+  }
+
+  private async dispatchDomOrder(side: "bid" | "ask", price: number, button: "left" | "right", tickSize: number): Promise<void> {
+    const error = await this.p.evaluate(({ side, price, button, tickSize }) => {
+      let target = [...document.querySelectorAll<HTMLElement>(`[data-dom-side="${side}"][data-dom-price]`)]
+        .find((el) => {
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return Math.abs(Number(el.dataset.domPrice) - price) < tickSize / 2 && rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        });
+      if (!target) {
+        const priceNode = [...document.querySelectorAll<HTMLElement>("*")]
+          .filter((el) => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Math.abs(Number((el.textContent || "").trim().replace(/,/g, "")) - price) < tickSize / 2;
+          })
+          .sort((a, b) => a.getBoundingClientRect().width * a.getBoundingClientRect().height - b.getBoundingClientRect().width * b.getBoundingClientRect().height)[0];
+        if (priceNode) {
+          const rowY = priceNode.getBoundingClientRect().top + priceNode.getBoundingClientRect().height / 2;
+          const headers = [...document.querySelectorAll<HTMLElement>("*")]
+            .filter((el) => {
+              const rect = el.getBoundingClientRect();
+              const style = getComputedStyle(el);
+              return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && (el.textContent || "").trim().toLowerCase() === side;
+            })
+            .sort((a, b) => Math.abs(a.getBoundingClientRect().bottom - rowY) - Math.abs(b.getBoundingClientRect().bottom - rowY));
+          const header = headers[0];
+          if (header) {
+            const x = header.getBoundingClientRect().left + header.getBoundingClientRect().width / 2;
+            target = document.elementFromPoint(x, rowY) as HTMLElement | null ?? undefined;
+          }
+        }
+      }
+      if (!target) return `Could not find the DOM ${side.toUpperCase()} cell at ${price}.`;
+      const opts = { bubbles: true, cancelable: true, view: window, button: button === "right" ? 2 : 0 };
+      target.dispatchEvent(new MouseEvent("mousedown", opts));
+      target.dispatchEvent(new MouseEvent("mouseup", opts));
+      target.dispatchEvent(new MouseEvent(button === "right" ? "contextmenu" : "click", opts));
+      return "";
+    }, { side, price, button, tickSize }).catch((error) => (error as Error).message);
+    if (error) throw new Error(error);
+  }
+
+  private async verifyOcoOrders(takeProfitPrice: number, stopLossPrice: number, quantity: number, tickSize: number): Promise<{ count: number; ocoId?: string }> {
+    await this.p.waitForTimeout(250).catch(() => {});
+    return this.p.evaluate(({ takeProfitPrice, stopLossPrice, quantity, tickSize }) => {
+      const explicit = [...document.querySelectorAll<HTMLElement>("[data-working-order]")].map((el) => ({
+        price: Number(el.dataset.orderPrice), quantity: Number(el.dataset.orderQuantity), ocoId: el.dataset.ocoId,
+      })).filter((order) => Number.isFinite(order.price) && order.quantity === quantity);
+      if (explicit.length) {
+        const matching = explicit.filter((order) => Math.abs(order.price - takeProfitPrice) < tickSize / 2 || Math.abs(order.price - stopLossPrice) < tickSize / 2);
+        const ids = [...new Set(matching.map((order) => order.ocoId).filter(Boolean))];
+        return { count: matching.length, ...(ids.length === 1 ? { ocoId: ids[0] } : {}) };
+      }
+      const candidates = [...document.querySelectorAll<HTMLElement>('[data-order-id],[class*="working-order" i],[class*="order-marker" i],[class*="order-line" i]')];
+      const matching = candidates.filter((el) => {
+        const text = (el.innerText || el.textContent || "").replace(/,/g, " ");
+        const hasQuantity = new RegExp(`(^|\\D)${quantity}(\\D|$)`).test(text);
+        const hasPrice = text.includes(String(takeProfitPrice)) || text.includes(String(stopLossPrice));
+        return hasQuantity && hasPrice;
+      });
+      return { count: matching.length };
+    }, { takeProfitPrice, stopLossPrice, quantity, tickSize });
+  }
+
+  /** After a market fill, add the target and stop as one uninterrupted DOM OCO-one-time pair. */
+  async protectOpenPosition(account: AccountDefinition, alert: V4Alert): Promise<ProtectionReceipt> {
+    if (!alert.quantity) throw new Error("Fast Entry protection requires the webhook quantity.");
+    if (alert.action !== "buy" && alert.action !== "sell") throw new Error("Fast Entry protection only applies to an entry signal.");
+    await this.verifySelectedAccount(account.platformLabel);
+    let details: { quantity: number; entryPrice: number } | null = null;
+    const deadline = Date.now() + 5_000;
+    do {
+      details = await this.readPositionDetails();
+      if (details && Math.abs(details.quantity) === alert.quantity && details.quantity !== 0) break;
+      await this.p.waitForTimeout(100);
+    } while (Date.now() < deadline);
+    if (!details || details.quantity === 0) throw new Error(`Tradovate did not report an open position for ${account.name}; OCO protection was not guessed.`);
+    if (Math.abs(details.quantity) !== alert.quantity) throw new Error(`Tradovate reports position ${details.quantity}, but the webhook requested ${alert.quantity}; protection was stopped for review.`);
+    if ((alert.action === "buy" && details.quantity < 0) || (alert.action === "sell" && details.quantity > 0)) throw new Error(`Tradovate position direction does not match the ${alert.action} signal.`);
+
+    const plan = planOcoPrices(alert.symbol, alert.action, details.entryPrice, account.targetPerContract, account.stopPerContract);
+    const exitSide = plan.side === "long" ? "ask" : "bid";
+    const placePair = async () => {
+      await this.selectOcoOneTime();
+      await this.dispatchDomOrder(exitSide, plan.takeProfitPrice, "left", plan.tickSize);
+      await this.dispatchDomOrder(exitSide, plan.stopLossPrice, "right", plan.tickSize);
+      return this.verifyOcoOrders(plan.takeProfitPrice, plan.stopLossPrice, alert.quantity!, plan.tickSize);
+    };
+    let verification = await placePair();
+    if (verification.count === 0) verification = await placePair();
+    if (verification.count !== 2) {
+      await this.snapshot("fast-entry-oco-incomplete", true);
+      throw new Error(`Fast Entry created ${verification.count} of 2 required exit orders. Rotation is locked for immediate review.`);
+    }
+    if (!verification.ocoId) log.warn("OCO linkage inferred from the uninterrupted OCO-one-time sequence; Tradovate did not expose an OCO id in the page.");
+    return {
+      quantity: alert.quantity,
+      entryPrice: details.entryPrice,
+      takeProfitPrice: plan.takeProfitPrice,
+      stopLossPrice: plan.stopLossPrice,
+      protectedAt: new Date().toISOString(),
+      ocoId: verification.ocoId ?? "OCO-one-time:UI",
+    };
   }
 
   /** Reads the signed POSITION shown in Tradovate's selected-account header. */
@@ -901,9 +1094,8 @@ export class TradovateBrowser {
   /** Page-side dispatch avoids Playwright's compositor wait when the browser is minimized. */
   private async clickMarketControl(text: string, what: string, exact = true): Promise<void> {
     const dispatch = async () => this.p.evaluate(({ text: wanted, exact: exactText }) => {
-      const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim();
       const matches = [...document.querySelectorAll<HTMLElement>('button,[role="button"]')].filter((el) => {
-        const label = normalize(el.innerText || el.textContent);
+        const label = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true" && (exactText ? label === wanted : label.includes(wanted));
       });
