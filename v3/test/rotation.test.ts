@@ -9,7 +9,7 @@ import type { OrderRequest, StoredAccount } from "../src/types.js";
 const order: OrderRequest = { action: "buy", symbol: "MNQ1!" };
 
 function acct(label: string): StoredAccount {
-  return { tradovateLabel: label, name: label, group: "evals", enabled: true, status: "active" };
+  return { tradovateLabel: label, name: label, group: "evals", enabled: true, status: "active", targetPerContract: 0, stopPerContract: 0 };
 }
 
 /** A rotation with a FIXED trading day so win-bench tests are deterministic. */

@@ -10,6 +10,11 @@ const AccountSchema = z.object({
   enabled: z.boolean().default(true),
   /** "active" = trades; "passed" = hit the eval target, retired from rotation. */
   status: z.enum(["active", "passed"]).default("active"),
+  /** ATM bracket, in dollars PER CONTRACT. When both are set, the bot writes
+   *  them into Tradovate's $-Value ATM at arm time so the exchange holds the
+   *  stop/target. 0 / unset = leave whatever bracket is on the ticket. */
+  targetPerContract: z.number().nonnegative().default(0),
+  stopPerContract: z.number().nonnegative().default(0),
 });
 
 const SettingsSchema = z.object({
@@ -118,10 +123,20 @@ export class SettingsStore {
       this.save();
       return existing;
     }
-    const account: StoredAccount = { tradovateLabel: label, name: name?.trim() || label, group, enabled: true, status: "active" };
+    const account: StoredAccount = { tradovateLabel: label, name: name?.trim() || label, group, enabled: true, status: "active", targetPerContract: 0, stopPerContract: 0 };
     this.settings.accounts.push(account);
     this.save();
     return account;
+  }
+
+  /** Set an account's per-contract $ target and stop (0 = leave the ticket's). */
+  setBracket(label: string, targetPerContract: number, stopPerContract: number): boolean {
+    const acct = this.find(label);
+    if (!acct) return false;
+    acct.targetPerContract = Math.max(0, targetPerContract) || 0;
+    acct.stopPerContract = Math.max(0, stopPerContract) || 0;
+    this.save();
+    return true;
   }
 
   removeAccount(label: string): boolean {

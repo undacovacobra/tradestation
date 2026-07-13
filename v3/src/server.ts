@@ -58,6 +58,17 @@ function armNext(group: Group): void {
     // This becomes the entry baseline used to judge win/loss at close.
     const eq = await browser.readSelectedEquity();
     if (eq != null) balanceLog.set(next.tradovateLabel, eq);
+    // Arm the account's $-per-contract ATM bracket now (idle — off the entry
+    // path). It's per-contract, so it doesn't depend on the trade size. If it
+    // fails, leave the existing ATM and tell the user; the trade can still fire.
+    if (next.targetPerContract > 0 && next.stopPerContract > 0) {
+      try {
+        await browser.setBracket(next.targetPerContract, next.stopPerContract);
+      } catch (err) {
+        pushEvent("warn", `Couldn't arm ${next.name}'s $ bracket: ${(err as Error).message}`, group);
+        notifyActionNeeded(`Couldn't set ${next.name}'s stop/target bracket on Tradovate — check it before trading. (${(err as Error).message})`);
+      }
+    }
   }).catch((err) => log.warn(`Pre-arm failed: ${(err as Error).message}`));
 }
 
@@ -466,6 +477,50 @@ api.post("/accounts/reactivate", (req, res) => {
     armNext(lastAlertGroup);
   }
   res.json({ ok });
+});
+
+api.post("/accounts/bracket", (req, res) => {
+  const label = typeof req.body?.label === "string" ? req.body.label : "";
+  const target = Number(req.body?.targetPerContract);
+  const stop = Number(req.body?.stopPerContract);
+  if (!Number.isFinite(target) || !Number.isFinite(stop) || target < 0 || stop < 0) {
+    return res.status(400).json({ ok: false, error: "target and stop must be 0 or a positive dollar amount." });
+  }
+  const ok = store.setBracket(label, target, stop);
+  if (ok) {
+    const acct = store.find(label);
+    pushEvent(
+      "info",
+      target > 0 && stop > 0
+        ? `${acct?.name ?? label} bracket set: make $${target} / lose $${stop} per contract.`
+        : `${acct?.name ?? label} bracket cleared (uses whatever's on the Tradovate ticket).`,
+    );
+    armNext(acct?.group ?? lastAlertGroup); // re-arm so the new bracket takes effect
+  }
+  res.json({ ok });
+});
+
+/** Calibration/test: write a bracket to the ATM dialog now, no order placed. */
+api.post("/test-bracket", async (req, res) => {
+  const target = Number(req.body?.targetPerContract);
+  const stop = Number(req.body?.stopPerContract);
+  if (!Number.isFinite(target) || target <= 0 || !Number.isFinite(stop) || stop <= 0) {
+    return res.json({ ok: true, set: false, message: "Enter a positive $ target and $ stop." });
+  }
+  if (!browser.status().loggedIn) {
+    return res.json({ ok: true, set: false, message: "Connect the browser and log into Tradovate first." });
+  }
+  const started = Date.now();
+  try {
+    await enqueue(() => browser.setBracket(target, stop, true));
+    const ms = Date.now() - started;
+    pushEvent("info", `🎯 Set ATM bracket to make $${target} / lose $${stop} per contract in ${ms}ms (test — no order).`);
+    res.json({ ok: true, set: true, ms, target, stop });
+  } catch (err) {
+    const fields = await enqueue(() => browser.inspectFields()).catch(() => []);
+    pushEvent("warn", `Bracket test couldn't set it: ${(err as Error).message}`);
+    res.json({ ok: true, set: false, message: (err as Error).message, fields });
+  }
 });
 
 api.post("/accounts/unrest", (req, res) => {

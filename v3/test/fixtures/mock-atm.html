@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>Mock ATM dialog</title>
+<style>#dialog{display:none}</style>
+</head>
+<body>
+  <!-- "Buy Mkt" is the logged-in marker the bot checks for. -->
+  <button>Buy Mkt</button>
+  <button>Sell Mkt</button>
+
+  <!-- The ATM gear that opens the settings dialog (labelled, so the bot's safe
+       opener finds it and can never mistake it for a trade button). -->
+  <button aria-label="ATM settings" onclick="document.getElementById('dialog').style.display='block'">⚙</button>
+
+  <div id="dialog" role="dialog">
+    <h2>ATM Settings</h2>
+    <div><span>Show in</span> <span id="showin">$ Value</span></div>
+    <div><label>Take Profit</label> <input id="tp" type="number" value="150" /></div>
+    <div><label>Stop Loss</label> <input id="sl" type="number" value="100" /></div>
+    <button onclick="document.getElementById('dialog').style.display='none'">Save</button>
+    <button onclick="document.getElementById('dialog').style.display='none'">Cancel</button>
+  </div>
+</body>
+</html>

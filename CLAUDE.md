@@ -89,6 +89,33 @@ SETUP-GUIDE.md); a friend was given repo access and a copy of that guide (each
 person runs their own ngrok domain + secret). Secret/token appeared in chat
 screenshots — user was advised to rotate the ngrok token.
 
+## 🎯 V3 DOLLAR BRACKET (2026-07-10) — per-account $ stop/target via ATM
+User wanted exits in DOLLARS not points, and win/loss to match reality (the
+strategy's SL/TP and the browser ATM's tick bracket disagreed). Solution the
+user picked: bot writes the ATM **"$ Value"** bracket, in dollars **PER
+CONTRACT** (Tradovate's $ Value is per-contract — confirmed: 200-tick SL showed
+$100 = 200×$0.50 MNQ). Per-contract = size-independent, so it's set at ARM time
+(idle, off the entry click). Exchange holds the stop/target = exchange-speed
+exits, and win/loss (balance in vs out) finally matches what closed the trade.
+- `StoredAccount.targetPerContract`/`stopPerContract` ($, 0=leave ticket's);
+  `store.setBracket`. Dashboard: 🎯 button per account → modal; a 🎯 line shows
+  the current bracket; global **🎯 Test bracket** button → `/api/test-bracket`.
+- `browser.setBracket(tp,sl,force)`: opens ATM Settings dialog (`openAtmSettings`
+  — SAFE: only clicks aria/title=setting or class cog/gear, Escape-closes a
+  wrong dialog, NEVER a trade button), `ensureShowInDollars` (forces Show-in=$
+  Value so numbers are dollars not ticks — critical safety), `setDialogNumber`
+  (find input in the row labelled Take Profit / Stop Loss, clear+type, read-back
+  verify), Save. Cancels + throws on any miss (no wrong bracket armed). Cached
+  `lastBracket`; reset on connect/recover. `armNext` calls it after armFor when
+  the account has amounts; failure → warn + notifyActionNeeded, trade still fires
+  on the existing ATM.
+- **⚠️ ATM selectors unverified against the real dialog** — guarded by
+  `test/bracket.browser.test.ts` + `fixtures/mock-atm.html` (labelled gear +
+  dialog). NEEDS one live calibration pass (esp. `openAtmSettings` gear +
+  `ensureShowInDollars`), same as the qty box. Test-bracket returns the field
+  list on a miss for calibration. **26 tests pass**, type-checks clean, endpoints
+  verified in practice. V2 untouched.
+
 ## ✅ DYNAMIC ORDER SIZE re-added — fast (2026-07-05) — read this third
 The user needs the contract size to come from the alert (it's dynamic inside the
 strategy) but **without** re-introducing the lag. Key realization stated to them:
