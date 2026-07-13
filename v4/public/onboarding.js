@@ -1,6 +1,31 @@
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
 const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
 let statusData;
+const BRACKET_DEFAULTS = {
+  eval: { targetPerContract: 1520, stopPerContract: 1000 },
+  funded: { targetPerContract: 4000, stopPerContract: 1000 },
+};
+
+function stageDefaults(stage) { return BRACKET_DEFAULTS[stage] || BRACKET_DEFAULTS.eval; }
+
+function wireStageDefaults(card) {
+  const stage = card.querySelector('[name="stage"]');
+  stage.addEventListener("change", () => {
+    const target = card.querySelector('[name="targetPerContract"]');
+    const stop = card.querySelector('[name="stopPerContract"]');
+    const currentTarget = Number(target.value);
+    const currentStop = Number(stop.value);
+    const recordedTarget = Number(card.dataset.autoTarget);
+    const recordedStop = Number(card.dataset.autoStop);
+    const next = stageDefaults(stage.value);
+    if (currentTarget === recordedTarget && currentStop === recordedStop) {
+      target.value = String(next.targetPerContract);
+      stop.value = String(next.stopPerContract);
+    }
+    card.dataset.autoTarget = String(next.targetPerContract);
+    card.dataset.autoStop = String(next.stopPerContract);
+  });
+}
 
 async function loadStatus() {
   const selected = document.querySelector("#connection").value;
@@ -31,6 +56,7 @@ document.querySelector("#scan").addEventListener("click", async () => {
     const account = statusData.accounts.find((item) => item.connectionId === connection.id && item.platformLabel === label);
     return accountForm(connection, label, account);
   }).join("") || "<p>No matching account labels were found. Check the connection's accountPattern.</p>";
+  document.querySelectorAll("#discovered .onboard-card").forEach(wireStageDefaults);
   document.querySelector("#missing").innerHTML = body.missing.map((label) => `<article><div class="row"><h3>${esc(label)}</h3><span class="pill bad">Not visible in browser</span></div></article>`).join("") || "<p>No configured accounts are missing.</p>";
 });
 
@@ -38,13 +64,16 @@ function accountForm(connection, label, account) {
   const poolChecks = statusData.pools.map((pool) => `<label class="check"><input type="checkbox" name="pool" value="${esc(pool.id)}"${account && pool.accountIds.includes(account.id) ? " checked" : ""}> ${esc(pool.name)}</label>`).join("");
   const id = account?.id || slug(`${connection.firm}-${label}`);
   const stage = account?.stage || "eval";
-  return `<article class="onboard-card" data-label="${esc(label)}" data-account-id="${esc(account?.id || "")}"><div class="row"><h3>${esc(label)}</h3><span class="pill ${account ? "good" : ""}">${account ? "Configured" : "New"}</span></div><div class="onboard-grid">
+  const defaults = stageDefaults(stage);
+  const targetPerContract = account?.targetPerContract ?? defaults.targetPerContract;
+  const stopPerContract = account?.stopPerContract ?? defaults.stopPerContract;
+  return `<article class="onboard-card" data-label="${esc(label)}" data-account-id="${esc(account?.id || "")}" data-auto-target="${defaults.targetPerContract}" data-auto-stop="${defaults.stopPerContract}"><div class="row"><h3>${esc(label)}</h3><span class="pill ${account ? "good" : ""}">${account ? "Configured" : "New"}</span></div><div class="onboard-grid">
     <label>Internal id<input name="id" value="${esc(id)}"${account ? " readonly" : ""}></label>
     <label>Friendly name<input name="name" value="${esc(account?.name || label)}"></label>
     <label>Firm<input name="firm" value="${esc(account?.firm || connection.firm)}"></label>
     <label>Stage<select name="stage"><option value="eval"${stage === "eval" ? " selected" : ""}>Evaluation</option><option value="funded"${stage === "funded" ? " selected" : ""}>Funded</option></select></label>
-    <label>Take profit / contract ($)<input name="targetPerContract" type="number" min="0" step="0.01" value="${esc(account?.targetPerContract ?? 0)}"></label>
-    <label>Stop loss / contract ($)<input name="stopPerContract" type="number" min="0" step="0.01" value="${esc(account?.stopPerContract ?? 0)}"></label>
+    <label>Take profit / contract ($)<input name="targetPerContract" type="number" min="0" step="0.01" value="${esc(targetPerContract)}"></label>
+    <label>Stop loss / contract ($)<input name="stopPerContract" type="number" min="0" step="0.01" value="${esc(stopPerContract)}"></label>
   </div><div class="pool-list"><strong>Rotation pools</strong>${poolChecks || "<p>No rotation pools are configured.</p>"}</div><button type="button" onclick="saveAccount(this)">${account ? "Save changes" : "Save account"}</button><p class="save-result"></p></article>`;
 }
 

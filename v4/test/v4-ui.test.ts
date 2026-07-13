@@ -16,6 +16,19 @@ test("configured scanned accounts remain editable", () => {
   assert.match(source, /test-bracket/);
 });
 
+test("onboarding prefills editable brackets from the selected account stage", () => {
+  const source = readFileSync(resolve("public/onboarding.js"), "utf8");
+  assert.match(source, /eval:\s*\{\s*targetPerContract:\s*1520,\s*stopPerContract:\s*1000\s*\}/);
+  assert.match(source, /funded:\s*\{\s*targetPerContract:\s*4000,\s*stopPerContract:\s*1000\s*\}/);
+  assert.match(source, /stageDefaults/);
+  assert.match(source, /wireStageDefaults/);
+  assert.match(source, /addEventListener\("change"/);
+  assert.match(source, /autoTarget/);
+  assert.match(source, /autoStop/);
+  assert.match(source, /currentTarget.*recordedTarget/s);
+  assert.match(source, /currentStop.*recordedStop/s);
+});
+
 test("control center renders every rotation with explicit account controls", () => {
   const app = readFileSync(resolve("public/app.js"), "utf8");
   const html = readFileSync(resolve("public/index.html"), "utf8");
