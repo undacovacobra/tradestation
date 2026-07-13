@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Mock Tradovate login</title></head>
+<body>
+  <section id="login"><button onclick="showSimulator()">Login</button></section>
+  <section id="environment" hidden><button onclick="showTrader()">Simulator</button></section>
+  <section id="trader" hidden><button>Buy Mkt</button></section>
+  <script>
+    function showSimulator() {
+      document.getElementById('login').hidden = true;
+      document.getElementById('environment').hidden = false;
+    }
+    function showTrader() {
+      document.getElementById('environment').hidden = true;
+      document.getElementById('trader').hidden = false;
+    }
+  </script>
+</body>
+</html>

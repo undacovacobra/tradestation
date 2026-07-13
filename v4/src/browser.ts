@@ -22,7 +22,7 @@ const TXT = {
   exit: "Exit at Mkt", // "Exit at Mkt & Cxl" — flatten position + cancel orders
   confirm: /Place Order|Confirm|OK/i, // confirmation modal button, if one appears
   loginButton: "Login",
-  simButton: /Start Simulated Trading/i,
+  simButton: /Start Simulated Trading|Simulator|Simulation/i,
   equity: /EQUITY/i, // top bar: "EQUITY  50,320.00 USD" for the SELECTED account
 };
 
