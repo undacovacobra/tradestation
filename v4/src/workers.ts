@@ -22,10 +22,11 @@ type EntryBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket" | "set
 
 /** Prepare every account-specific ticket setting before the only order-producing click. */
 export async function prepareEntry(browser: EntryBrowser, account: AccountDefinition, alert: V4Alert): Promise<void> {
-  await browser.switchAccount(account.platformLabel);
-  if (account.targetPerContract > 0 && account.stopPerContract > 0) {
-    await browser.setBracket(account.targetPerContract, account.stopPerContract);
+  if (!(account.targetPerContract > 0) || !(account.stopPerContract > 0)) {
+    throw new Error(`Configure both take profit and stop loss dollars for ${account.name} before it can trade.`);
   }
+  await browser.switchAccount(account.platformLabel);
+  await browser.setBracket(account.targetPerContract, account.stopPerContract);
   if (alert.quantity != null) await browser.setQuantity(alert.quantity);
   await browser.clickOrder(alert.action as "buy" | "sell", account.platformLabel);
 }

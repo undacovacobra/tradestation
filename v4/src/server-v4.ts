@@ -193,6 +193,23 @@ app.patch("/api/accounts/:accountId", (req, res) => {
   }
 });
 
+app.post("/api/accounts/:accountId/bracket", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const accountId = req.params.accountId;
+    if (coordinator.hasOpenTradeForAccount(accountId)) throw new Error("This account has an open trade");
+    const account = registry.updateAccountBracket(
+      accountId,
+      Number(req.body?.targetPerContract),
+      Number(req.body?.stopPerContract),
+    );
+    pushEvent("info", `Saved +$${account.targetPerContract} / -$${account.stopPerContract} bracket for ${account.name}.`);
+    return res.json({ ok: true, account });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
 app.post("/api/pools/:id/lane", (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   try {

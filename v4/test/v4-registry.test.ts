@@ -128,3 +128,24 @@ test("one-sided dollar brackets are rejected", () => {
   const registry = new Registry(path);
   assert.throws(() => registry.updateAccount("a1", { name: "Account", firm: "Firm", stage: "eval", poolIds: ["p1"], targetPerContract: 30, stopPerContract: 0 }), /both.*positive|both.*zero/i);
 });
+
+test("bracket-only updates preserve account identity and pool membership", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-inline-bracket-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice",
+    connections: [{ id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com", sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false }],
+    accounts: [{ id: "a1", name: "Original", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "BROKER-A1", enabled: true, status: "active", tags: [] }],
+    pools: [{ id: "p1", name: "Pool", accountIds: ["a1"], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  const updated = registry.updateAccountBracket("a1", 1500, 1000);
+  assert.deepEqual(
+    { name: updated.name, firm: updated.firm, stage: updated.stage, connectionId: updated.connectionId, platformLabel: updated.platformLabel },
+    { name: "Original", firm: "Firm", stage: "eval", connectionId: "c1", platformLabel: "BROKER-A1" },
+  );
+  assert.equal(updated.targetPerContract, 1500);
+  assert.equal(updated.stopPerContract, 1000);
+  assert.deepEqual(registry.pool("p1")?.accountIds, ["a1"]);
+  assert.throws(() => registry.updateAccountBracket("a1", 1500, 0), /both.*positive|both.*zero/i);
+});

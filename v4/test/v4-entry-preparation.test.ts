@@ -34,7 +34,7 @@ test("a failed bracket verification blocks the order click", async () => {
   assert.deepEqual(calls, ["switch", "bracket"]);
 });
 
-test("accounts with no bracket configured keep legacy entry behavior", async () => {
+test("accounts with no bracket configured are blocked before browser interaction", async () => {
   const calls: string[] = [];
   const browser = {
     async switchAccount() { calls.push("switch"); },
@@ -42,6 +42,9 @@ test("accounts with no bracket configured keep legacy entry behavior", async () 
     async setQuantity() { calls.push("qty"); },
     async clickOrder() { calls.push("order"); },
   };
-  await prepareEntry(browser, { ...account, targetPerContract: 0, stopPerContract: 0 }, alert);
-  assert.deepEqual(calls, ["switch", "qty", "order"]);
+  await assert.rejects(
+    () => prepareEntry(browser, { ...account, targetPerContract: 0, stopPerContract: 0 }, alert),
+    /configure.*take profit.*stop loss/i,
+  );
+  assert.deepEqual(calls, []);
 });

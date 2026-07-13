@@ -34,12 +34,13 @@ test("setBracket writes Take Profit and Stop Loss in dollars and caches", async 
     const page = await launched.newPage({ viewport: { width: 900, height: 500 } });
     await page.goto(fixture);
     const browser = fake(page);
-    await browser.setBracket(30, 20);
-    assert.equal(await page.locator("#tp").inputValue(), "30");
-    assert.equal(await page.locator("#sl").inputValue(), "20");
-    assert.equal(browser.lastBracket, "30/20");
-    await browser.setBracket(30, 20);
-    assert.equal(browser.lastBracket, "30/20");
+    await browser.setBracket(1500, 1000);
+    assert.equal(await page.locator("#tp").inputValue(), "1500");
+    assert.equal(await page.locator("#sl").inputValue(), "1000");
+    assert.equal(await page.evaluate(() => (window as unknown as { dayGearClicks?: number }).dayGearClicks ?? 0), 0);
+    assert.equal(browser.lastBracket, "1500/1000");
+    await browser.setBracket(1500, 1000);
+    assert.equal(browser.lastBracket, "1500/1000");
   } finally { await launched.close(); }
 });
 

@@ -39,6 +39,7 @@ function fake(page: unknown): any {
   b.page = page;
   b.loggedIn = true;
   b.currentAccount = null;
+  b.accountIdPattern = /LFE\d{14}/;
   b.shotDir = tmpdir();
   b.config = { orderConfirmWaitMs: 100, switchSettleMs: 50, captureShots: false };
   return b;
