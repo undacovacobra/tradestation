@@ -102,6 +102,15 @@ export interface WorkerStatus {
   busy: boolean;
   selectedAccount: string | null;
   lastError?: string;
+  armed?: ArmedSignature;
+}
+
+export interface ArmedSignature {
+  accountId: string;
+  platformLabel: string;
+  targetPerContract: number;
+  stopPerContract: number;
+  armedAt: string;
 }
 
 export interface TradeResult {

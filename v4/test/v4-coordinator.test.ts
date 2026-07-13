@@ -13,6 +13,7 @@ let maxActive = 0;
 class FakeAdapter implements ConnectionAdapter {
   balance = 50_000;
   closes = 0;
+  prepares: string[] = [];
   constructor(private readonly id: string) {}
   async connect() {}
   async recover() {}
@@ -22,6 +23,8 @@ class FakeAdapter implements ConnectionAdapter {
   async setBracket() {}
   async inspectFields() { return []; }
   async inspectAtmControls() { return []; }
+  async prepare(account: AccountDefinition) { this.prepares.push(account.id); }
+  async enterPrepared(account: AccountDefinition, alert: V4Alert) { await this.enter(account, alert); }
   async enter(_account: AccountDefinition, _alert: V4Alert) {
     active++;
     maxActive = Math.max(maxActive, active);

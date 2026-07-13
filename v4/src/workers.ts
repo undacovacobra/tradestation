@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { config, ROOT, type Config } from "./config.js";
-import type { AccountDefinition, ConnectionDefinition, V4Alert, WorkerStatus } from "./models.js";
+import type { AccountDefinition, ArmedSignature, ConnectionDefinition, V4Alert, WorkerStatus } from "./models.js";
 import { TradovateBrowser } from "./browser.js";
 
 export interface ConnectionAdapter {
@@ -12,6 +12,8 @@ export interface ConnectionAdapter {
   setBracket(targetPerContract: number, stopPerContract: number, force?: boolean): Promise<void>;
   inspectFields(): Promise<Array<Record<string, string>>>;
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>>;
+  prepare(account: AccountDefinition): Promise<void>;
+  enterPrepared(account: AccountDefinition, alert: V4Alert): Promise<void>;
   enter(account: AccountDefinition, alert: V4Alert): Promise<void>;
   close(account: AccountDefinition): Promise<void>;
   readBalance(account: AccountDefinition): Promise<number | null>;
@@ -19,17 +21,31 @@ export interface ConnectionAdapter {
   readSettledBalance(account: AccountDefinition): Promise<number | null>;
 }
 
-type EntryBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket" | "setQuantity" | "clickOrder">;
+type PreparationBrowser = Pick<TradovateBrowser, "switchAccount" | "setBracket">;
+type EntryBrowser = PreparationBrowser & Pick<TradovateBrowser, "setQuantity" | "clickOrder">;
 
-/** Prepare every account-specific ticket setting before the only order-producing click. */
-export async function prepareEntry(browser: EntryBrowser, account: AccountDefinition, alert: V4Alert): Promise<void> {
+function requireBracket(account: AccountDefinition): void {
   if (!(account.targetPerContract > 0) || !(account.stopPerContract > 0)) {
     throw new Error(`Configure both take profit and stop loss dollars for ${account.name} before it can trade.`);
   }
+}
+
+/** Select and verify the next account's ATM values without placing an order. */
+export async function prepareAccount(browser: PreparationBrowser, account: AccountDefinition): Promise<void> {
+  requireBracket(account);
   await browser.switchAccount(account.platformLabel);
   await browser.setBracket(account.targetPerContract, account.stopPerContract);
+}
+
+async function enterPrepared(browser: Pick<TradovateBrowser, "setQuantity" | "clickOrder">, account: AccountDefinition, alert: V4Alert): Promise<void> {
   if (alert.quantity != null) await browser.setQuantity(alert.quantity);
   await browser.clickOrder(alert.action as "buy" | "sell", account.platformLabel);
+}
+
+/** Prepare every account-specific ticket setting before the only order-producing click. */
+export async function prepareEntry(browser: EntryBrowser, account: AccountDefinition, alert: V4Alert): Promise<void> {
+  await prepareAccount(browser, account);
+  await enterPrepared(browser, account, alert);
 }
 
 /** One queue per login: safe serialization inside a browser, parallelism across logins. */
@@ -37,6 +53,7 @@ export class ConnectionWorker {
   private tail: Promise<unknown> = Promise.resolve();
   private busy = false;
   private lastError: string | undefined;
+  private armed: ArmedSignature | undefined;
 
   constructor(readonly definition: ConnectionDefinition, private readonly adapter: ConnectionAdapter) {}
 
@@ -52,10 +69,49 @@ export class ConnectionWorker {
     return result;
   }
 
-  status(): WorkerStatus { return { ...this.adapter.status(), busy: this.busy, lastError: this.lastError }; }
-  connect(): Promise<void> { return this.run((a) => a.connect()); }
-  recover(): Promise<void> { return this.run((a) => a.recover()); }
-  disconnect(): Promise<void> { return this.run((a) => a.disconnect()); }
+  status(): WorkerStatus { return { ...this.adapter.status(), busy: this.busy, lastError: this.lastError, armed: this.armed ? { ...this.armed } : undefined }; }
+
+  isArmed(account: AccountDefinition): boolean {
+    return this.armed?.accountId === account.id
+      && this.armed.platformLabel === account.platformLabel
+      && this.armed.targetPerContract === account.targetPerContract
+      && this.armed.stopPerContract === account.stopPerContract;
+  }
+
+  invalidateArmed(): void { this.armed = undefined; }
+
+  private markArmed(account: AccountDefinition): void {
+    this.armed = {
+      accountId: account.id,
+      platformLabel: account.platformLabel,
+      targetPerContract: account.targetPerContract,
+      stopPerContract: account.stopPerContract,
+      armedAt: new Date().toISOString(),
+    };
+  }
+
+  async prearm(account: AccountDefinition): Promise<void> {
+    this.invalidateArmed();
+    await this.run((adapter) => adapter.prepare(account));
+    this.markArmed(account);
+  }
+
+  async enter(account: AccountDefinition, alert: V4Alert): Promise<number | null> {
+    return this.run(async (adapter) => {
+      const balance = await adapter.readBalance(account);
+      if (this.isArmed(account)) await adapter.enterPrepared(account, alert);
+      else {
+        this.invalidateArmed();
+        await adapter.enter(account, alert);
+        this.markArmed(account);
+      }
+      return balance;
+    });
+  }
+
+  connect(): Promise<void> { this.invalidateArmed(); return this.run((a) => a.connect()); }
+  recover(): Promise<void> { this.invalidateArmed(); return this.run((a) => a.recover()); }
+  disconnect(): Promise<void> { this.invalidateArmed(); return this.run((a) => a.disconnect()); }
 }
 
 class TradovateAdapter implements ConnectionAdapter {
@@ -83,6 +139,8 @@ class TradovateAdapter implements ConnectionAdapter {
   }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.browser.inspectFields(); }
   inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return this.browser.inspectAtmControls(); }
+  async prepare(account: AccountDefinition): Promise<void> { await prepareAccount(this.browser, account); }
+  async enterPrepared(account: AccountDefinition, alert: V4Alert): Promise<void> { await enterPrepared(this.browser, account, alert); }
   async enter(account: AccountDefinition, alert: V4Alert): Promise<void> {
     await prepareEntry(this.browser, account, alert);
   }
@@ -113,7 +171,9 @@ class SimulatedAdapter implements ConnectionAdapter {
   async setBracket(): Promise<void> {}
   async inspectFields(): Promise<Array<Record<string, string>>> { return []; }
   async inspectAtmControls(): Promise<Array<Record<string, string | number | boolean>>> { return []; }
-  async enter(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
+  async prepare(account: AccountDefinition): Promise<void> { requireBracket(account); this.selected = account.platformLabel; }
+  async enterPrepared(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
+  async enter(account: AccountDefinition): Promise<void> { await this.prepare(account); }
   async close(account: AccountDefinition): Promise<void> { this.selected = account.platformLabel; }
   async readBalance(): Promise<number | null> { return null; }
   async readSelectedBalance(): Promise<number | null> { return null; }
