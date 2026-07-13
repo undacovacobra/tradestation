@@ -28,7 +28,7 @@ export const config = {
   tradovateUrl: process.env.TRADOVATE_URL ?? "https://trader.tradovate.com",
   // Order-path speed knobs. If Tradovate is set to pop an order-confirm dialog,
   // raise ORDER_CONFIRM_WAIT_MS so the bot has time to see and click it.
-  orderConfirmWaitMs: Number(process.env.ORDER_CONFIRM_WAIT_MS ?? 250),
+  orderConfirmWaitMs: Number(process.env.ORDER_CONFIRM_WAIT_MS ?? 0),
   switchSettleMs: Number(process.env.SWITCH_SETTLE_MS ?? 250),
   // Save a screenshot on every order (slower). Failures always screenshot.
   captureShots: (process.env.SCREENSHOTS ?? "false") === "true",

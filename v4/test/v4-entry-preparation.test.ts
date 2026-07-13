@@ -55,12 +55,13 @@ test("preparing the next account switches and verifies its bracket without touch
   const browser = {
     async switchAccount(label: string) { calls.push(`switch:${label}`); },
     async setBracket(target: number, stop: number) { calls.push(`bracket:${target}/${stop}`); },
+    async setQuantity(quantity: number) { calls.push(`qty:${quantity}`); },
   };
   await prepareAccount(browser, account);
-  assert.deepEqual(calls, ["switch:ACCOUNT-1", "bracket:30/20"]);
+  assert.deepEqual(calls, ["switch:ACCOUNT-1", "bracket:30/20", "qty:1"]);
 });
 
-test("worker uses the fast entry path only while the exact account bracket remains armed", async () => {
+test("worker pre-arms balance, bracket, and quantity so entry performs only the order click", async () => {
   const events: string[] = [];
   const definition: ConnectionDefinition = {
     id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com",
@@ -70,25 +71,24 @@ test("worker uses the fast entry path only while the exact account bracket remai
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare(prepared) { events.push(`prepare:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}`); },
+    async prepare(prepared, quantity) { events.push(`prepare:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}:q${quantity}`); },
     async verifyPrepared(prepared) { events.push(`verify:${prepared.id}:${prepared.targetPerContract}/${prepared.stopPerContract}`); },
     async enterPrepared(prepared) { events.push(`fast:${prepared.id}`); },
     async enter(prepared) { events.push(`full:${prepared.id}`); }, async close() {},
     async readBalance() { events.push("balance"); return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
   };
   const worker = new ConnectionWorker(definition, adapter);
-  await worker.prearm(account);
-  assert.equal(worker.isArmed(account), true);
+  await worker.prearm(account, 2);
+  assert.equal(worker.isArmed(account, 2), true);
   await worker.enter(account, alert);
-  assert.deepEqual(events, ["prepare:a1:30/20", "balance", "verify:a1:30/20", "fast:a1"]);
+  assert.deepEqual(events, ["balance", "prepare:a1:30/20:q2", "fast:a1"]);
 
   const changed = { ...account, targetPerContract: 31 };
-  await worker.enter(changed, alert);
-  assert.deepEqual(events.slice(-3), ["balance", "prepare:a1:31/20", "fast:a1"]);
-  assert.equal(worker.isArmed(changed), true);
+  await assert.rejects(() => worker.enter(changed, alert), /not ready|not armed/i);
+  await assert.rejects(() => worker.enter(account, { ...alert, quantity: 3 }), /quantity|not ready|not armed/i);
 });
 
-test("worker dry run prepares and verifies without quantity or an order click", async () => {
+test("worker dry run is instant when already armed and never places an order", async () => {
   const events: string[] = [];
   const definition: ConnectionDefinition = {
     id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com",
@@ -98,18 +98,22 @@ test("worker dry run prepares and verifies without quantity or an order click", 
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare(prepared: AccountDefinition) { events.push(`prepare:${prepared.id}`); },
+    async prepare(prepared: AccountDefinition, quantity: number) { events.push(`prepare:${prepared.id}:q${quantity}`); },
     async verifyPrepared(prepared: AccountDefinition) { events.push(`verify:${prepared.id}`); },
     async enterPrepared() { events.push("ORDER"); }, async enter() { events.push("ORDER"); }, async close() {},
-    async readBalance() { return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
+    async readBalance() { events.push("balance"); return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
   };
   const worker = new ConnectionWorker(definition, adapter);
-  await worker.dryRun(account);
-  assert.deepEqual(events, ["prepare:a1", "verify:a1"]);
-  assert.equal(worker.isArmed(account), true);
+  const first = await worker.dryRun(account, 2);
+  assert.equal(first.alreadyArmed, false);
+  assert.deepEqual(events, ["balance", "prepare:a1:q2"]);
+  const second = await worker.dryRun(account, 2);
+  assert.equal(second.alreadyArmed, true);
+  assert.deepEqual(events, ["balance", "prepare:a1:q2"]);
+  assert.equal(worker.isArmed(account, 2), true);
 });
 
-test("one worker serializes differently bracketed entries without interleaving", async () => {
+test("one worker blocks a second differently bracketed account until it is separately prepared", async () => {
   const events: string[] = [];
   const definition: ConnectionDefinition = {
     id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com",
@@ -133,14 +137,15 @@ test("one worker serializes differently bracketed entries without interleaving",
   };
   const worker = new ConnectionWorker(definition, adapter);
   const funded = { ...account, id: "a2", name: "Funded", platformLabel: "ACCOUNT-2", stage: "funded" as const, targetPerContract: 4000, stopPerContract: 1000 };
-  await Promise.all([worker.enter(account, alert), worker.enter(funded, alert)]);
+  await worker.prearm(account, 2);
+  await worker.enter(account, alert);
+  await assert.rejects(() => worker.enter(funded, alert), /not ready/i);
   assert.deepEqual(events, [
     "balance:a1", "start:a1:30/20", "order:a1",
-    "balance:a2", "start:a2:4000/1000", "order:a2",
   ]);
 });
 
-test("final preparation verification failure blocks an armed order", async () => {
+test("unarmed order is blocked before any browser order call", async () => {
   let ordered = false;
   const definition: ConnectionDefinition = {
     id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com",
@@ -150,12 +155,32 @@ test("final preparation verification failure blocks an armed order", async () =>
     async connect() {}, async recover() {}, async disconnect() {},
     status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
     async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
-    async prepare() {}, async verifyPrepared() { throw new Error("ATM verification mismatch"); },
+    async prepare() {}, async verifyPrepared() {},
     async enterPrepared() { ordered = true; }, async enter() { ordered = true; }, async close() {},
     async readBalance() { return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
   };
   const worker = new ConnectionWorker(definition, adapter);
-  await worker.prearm(account);
-  await assert.rejects(() => worker.enter(account, alert), /ATM verification mismatch/);
+  await assert.rejects(() => worker.enter(account, alert), /not ready|not armed/i);
   assert.equal(ordered, false);
+});
+
+test("live entry is blocked instead of waiting behind preparation work", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const definition: ConnectionDefinition = {
+    id: "c1", name: "Login", firm: "Firm", adapter: "simulated", url: "https://example.com",
+    sessionDir: ".s", accountPattern: ".+", enabled: true, autoConnect: false,
+  };
+  const adapter = {
+    async connect() {}, async recover() {}, async disconnect() {},
+    status(): WorkerStatus { return { connectionId: "c1", connected: true, loggedIn: true, busy: false, selectedAccount: "ACCOUNT-1" }; },
+    async discoverAccounts() { return []; }, async setBracket() {}, async inspectFields() { return []; }, async inspectAtmControls() { return []; },
+    async prepare() { await gate; }, async verifyPrepared() {}, async enterPrepared() {}, async enter() {}, async close() {},
+    async readBalance() { return 50_000; }, async readSelectedBalance() { return 50_000; }, async readSettledBalance() { return 50_000; },
+  };
+  const worker = new ConnectionWorker(definition, adapter);
+  const preparing = worker.prearm(account, 2);
+  await assert.rejects(() => worker.enter(account, alert), /busy.*blocked/i);
+  release();
+  await preparing;
 });

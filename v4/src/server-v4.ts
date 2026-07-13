@@ -75,6 +75,26 @@ app.get("/api/status", (_req, res) => {
   });
 });
 
+app.post("/api/mode", (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const mode = String(req.body?.mode ?? "");
+    if (mode !== "practice" && mode !== "live") throw new Error("Mode must be practice or live");
+    if (mode === "live") {
+      if (req.body?.confirmLive !== true) throw new Error("Live mode requires explicit confirmation");
+      if (!workers.values().some((worker) => worker.status().loggedIn)) throw new Error("Connect and log into at least one execution session before enabling Live mode");
+    }
+    registry.setMode(mode);
+    const message = mode === "live"
+      ? "LIVE MODE ENABLED — armed webhook signals can place real orders."
+      : "Practice mode enabled — webhook signals will not place orders.";
+    pushEvent(mode === "live" ? "warn" : "info", message);
+    return res.json({ ok: true, mode, message });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
 app.post("/api/tunnel/connect", async (req, res) => {
   if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
   const tunnel = await connectTunnel();
@@ -289,10 +309,22 @@ app.post("/api/pools/:poolId/test-webhook", async (req, res) => {
   }
 });
 
+app.post("/api/pools/:id/quantity", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(401).json({ ok: false, error: "Invalid secret" });
+  try {
+    const pool = registry.setPoolQuantity(req.params.id, Number(req.body?.quantity));
+    await coordinator.prearmPool(pool.id);
+    return res.json({ ok: true, pool });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
 app.post("/webhook/:poolId", async (req, res) => {
   try {
     const alert = parseAuthorizedAlert(req);
     const result = await coordinator.handle(req.params.poolId, alert);
+    if (result.timingMs) pushEvent("trade", `${req.params.poolId} entry click completed in ${result.timingMs.total} ms (queue ${result.timingMs.queueWait} ms, browser ${result.timingMs.execution} ms).`);
     if (result.won) notifyGoodNews(`🏅 Confirmed winning trade closed. ${result.message}`);
     return res.status(result.ok ? 200 : 409).json(result);
   } catch (error) {

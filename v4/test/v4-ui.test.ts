@@ -108,6 +108,20 @@ test("dashboard and onboarding use the ATLAS identity", () => {
   assert.doesNotMatch(dashboard, /V4 Control Center/);
 });
 
+test("dashboard exposes deliberate Practice and Live controls with readiness guidance", () => {
+  const dashboard = readFileSync(resolve("public/index.html"), "utf8");
+  const app = readFileSync(resolve("public/app.js"), "utf8");
+  assert.match(dashboard, /id="mode-practice"/);
+  assert.match(dashboard, /id="mode-live"/);
+  assert.match(app, /\/api\/mode/);
+  assert.match(app, /confirmLive/);
+  assert.match(app, /real orders|real trades/i);
+  assert.match(app, /Order confirmations.*disabled/i);
+  assert.match(app, /Execution quantity/i);
+  assert.match(app, /READY|NOT READY/);
+  assert.match(app, /execution session/i);
+});
+
 test("dashboard groups configured accounts under each logged-in session", () => {
   const html = readFileSync(resolve("public/index.html"), "utf8");
   const app = readFileSync(resolve("public/app.js"), "utf8");

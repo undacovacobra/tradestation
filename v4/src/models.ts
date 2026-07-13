@@ -42,6 +42,7 @@ export const PoolSchema = z.object({
   enabled: z.boolean().default(true),
   benchWinnersForDay: z.boolean().default(true),
   executionLane: z.string().min(1).optional(),
+  quantity: z.number().int().positive().default(1),
   balanceTarget: z.number().positive().optional(),
 });
 export type PoolDefinition = z.infer<typeof PoolSchema>;
@@ -110,6 +111,8 @@ export interface ArmedSignature {
   platformLabel: string;
   targetPerContract: number;
   stopPerContract: number;
+  quantity: number;
+  entryBalance?: number;
   armedAt: string;
 }
 
@@ -121,4 +124,5 @@ export interface TradeResult {
   connectionId?: string;
   simulated: boolean;
   won?: boolean;
+  timingMs?: { queueWait: number; execution: number; total: number };
 }

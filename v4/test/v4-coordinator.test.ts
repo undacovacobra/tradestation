@@ -78,6 +78,8 @@ function setup(mode: "practice" | "live" = "live", executionLanes?: [string, str
 test("broadcast runs independent logins concurrently", async () => {
   active = 0; maxActive = 0;
   const { coordinator } = setup("live");
+  await coordinator.prearmConnection("c1");
+  await coordinator.prearmConnection("c2");
   const results = await coordinator.handleMany(["p1", "p2"], { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   assert.equal(results.every((r) => r.ok), true);
   assert.equal(maxActive, 2);
@@ -86,6 +88,8 @@ test("broadcast runs independent logins concurrently", async () => {
 test("pools in the same execution lane cannot open at the same time", async () => {
   active = 0; maxActive = 0;
   const { coordinator } = setup("live", ["shared", "shared"]);
+  await coordinator.prearmConnection("c1");
+  await coordinator.prearmConnection("c2");
   const results = await coordinator.handleMany(["p1", "p2"], { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   assert.equal(results.filter((result) => result.ok).length, 1);
   assert.equal(results.filter((result) => !result.ok).length, 1);
@@ -99,11 +103,12 @@ test("test webhook is plan-only and never opens pool state", async () => {
   assert.match(result.message, /TEST ONLY/);
   assert.equal(coordinator.status().find((p) => p.id === "p1")?.state?.openTrade, null);
   assert.deepEqual(adapters.get("c1")?.prepares, ["a1"]);
-  assert.deepEqual(adapters.get("c1")?.verifications, ["a1"]);
+  assert.deepEqual(adapters.get("c1")?.verifications, []);
 });
 
 test("evaluation pool automatically closes and passes account at 53000", async () => {
   const { coordinator, registry, adapters } = setup("live", undefined, 53_000);
+  await coordinator.prearmPool("p1");
   await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   adapters.get("c1")!.balance = 53_000;
   const results = await coordinator.monitorBalanceTargets();
@@ -115,6 +120,7 @@ test("evaluation pool automatically closes and passes account at 53000", async (
 
 test("funded pool never uses the evaluation balance target", async () => {
   const { coordinator, adapters } = setup("live", undefined, 53_000);
+  await coordinator.prearmPool("p2");
   await coordinator.handle("p2", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   adapters.get("c2")!.balance = 60_000;
   const results = await coordinator.monitorBalanceTargets();
@@ -124,6 +130,7 @@ test("funded pool never uses the evaluation balance target", async () => {
 
 test("coordinator exposes skip-today status and allows resuming the account", async () => {
   const { coordinator } = setup("live");
+  await coordinator.prearmPool("p1");
   await coordinator.skipToday("p1", "a1");
   const skipped = coordinator.status().find((pool) => pool.id === "p1")?.accounts.find((account) => account.id === "a1");
   assert.equal(skipped?.skippedToday, true);
@@ -139,6 +146,7 @@ test("coordinator exposes skip-today status and allows resuming the account", as
 
 test("daily rotation controls reject the account holding an open trade", async () => {
   const { coordinator } = setup("live");
+  await coordinator.prearmPool("p1");
   await coordinator.handle("p1", { action: "buy", symbol: "MNQ", quantity: 1, test: false });
   assert.equal(coordinator.hasOpenTradeForAccount("a1"), true);
   await assert.rejects(() => coordinator.skipToday("p1", "a1"), /open trade/i);
@@ -175,13 +183,14 @@ test("closing a trade advances and immediately re-arms the resulting next accoun
   assert.deepEqual(adapters.get("c1")?.prepares, ["a1", "a1"]);
 });
 
-test("one login exposes only its last prepared account as armed across multiple pools", async () => {
+test("one login prepares only one pool and explains the simultaneous-lane conflict", async () => {
   const { coordinator, adapters } = setup("live", undefined, undefined, true);
   await coordinator.prearmConnection("c1");
   const status = coordinator.status();
-  assert.equal(status.find((pool) => pool.id === "p1")?.armed, false);
-  assert.equal(status.find((pool) => pool.id === "p2")?.armed, true);
-  assert.deepEqual(adapters.get("c1")?.prepares, ["a1", "a2"]);
+  assert.equal(status.find((pool) => pool.id === "p1")?.armed, true);
+  assert.equal(status.find((pool) => pool.id === "p2")?.armed, false);
+  assert.match(status.find((pool) => pool.id === "p2")?.prearmError ?? "", /separate saved execution session/i);
+  assert.deepEqual(adapters.get("c1")?.prepares, ["a1"]);
 });
 
 test("a failed pre-arm is visible and never claims the pool is ready", async () => {
@@ -200,7 +209,7 @@ test("balance refresh continues after one missing account and updates later acco
   const c1 = results.find((result) => result.connectionId === "c1");
   assert.equal(c1?.refreshed, 2);
   assert.deepEqual(c1?.accountErrors?.map((item) => item.accountId), ["a3"]);
-  assert.deepEqual(adapters.get("c1")?.balanceReads, ["a1", "a3", "a4"]);
+  assert.deepEqual(adapters.get("c1")?.balanceReads, ["a1", "a3", "a4", "a1"]);
   const pool = coordinator.status().find((item) => item.id === "p1");
   assert.equal(pool?.accounts.find((account) => account.id === "a1")?.balance, 50_000);
   assert.equal(pool?.accounts.find((account) => account.id === "a3")?.balance, null);

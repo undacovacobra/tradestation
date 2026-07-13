@@ -39,14 +39,20 @@ export class TradeCoordinator {
       }
       const nextAccount = nextAccountId ? this.registry.account(nextAccountId) : undefined;
       const nextWorker = nextAccount ? this.workers.get(nextAccount.connectionId) : undefined;
-      const armedAccountId = nextWorker?.status().armed?.accountId;
+      const workerStatus = nextWorker?.status();
+      const armedAccountId = workerStatus?.armed?.accountId;
+      const armed = Boolean(nextAccount && nextWorker?.isArmed(nextAccount, pool.quantity));
+      const sessionConflict = nextAccount && workerStatus?.armed && !armed
+        ? `${nextWorker?.definition.name} is prepared for another account or quantity. One execution session can instantly serve one lane; add a separate saved login session for simultaneous lanes.`
+        : undefined;
       return {
         ...pool,
         executionLane: pool.executionLane ?? pool.id,
         state: state ? { ...state, nextAccountId } : undefined,
-        armed: Boolean(nextAccount && nextWorker?.isArmed(nextAccount)),
+        armed,
         armedAccountId: armedAccountId ?? null,
-        prearmError: this.prearmErrors.get(pool.id),
+        prearmError: armed ? undefined : this.prearmErrors.get(pool.id) ?? sessionConflict,
+        readinessReason: armed ? "Exact account, ATM, and quantity are prepared." : this.prearmErrors.get(pool.id) ?? sessionConflict ?? "Click Make next to prepare this execution session.",
         accounts: pool.accountIds.map((id) => this.registry.account(id)).filter((account): account is AccountDefinition => Boolean(account)).map((account) => {
           const record = balanceSnapshot[account.id];
           return {
@@ -126,32 +132,38 @@ export class TradeCoordinator {
       const worker = this.workers.get(account.connectionId);
       if (!worker) throw new Error(`No worker for connection ${account.connectionId}`);
       const simulated = alert.test || this.registry.mode === "practice";
+      const executionAlert: V4Alert = alert.quantity == null ? { ...alert, quantity: pool.quantity } : alert;
 
       if (alert.test) {
         const status = worker.status();
         if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-        await worker.dryRun(account);
+        const readiness = await worker.dryRun(account, pool.quantity);
+        this.prearmErrors.delete(poolId);
         return {
           ok: true,
           poolId,
           accountId: account.id,
           connectionId: account.connectionId,
           simulated: true,
-          message: `TEST ONLY — prepared and verified ${account.name} via ${worker.definition.name}; no trade was placed`,
+          timingMs: { queueWait: 0, execution: readiness.elapsedMs, total: readiness.elapsedMs },
+          message: `TEST ONLY — ${readiness.alreadyArmed ? "already ready" : "prepared and verified"} ${account.name} at quantity ${pool.quantity} via ${worker.definition.name} in ${readiness.elapsedMs} ms; no trade was placed`,
         };
       }
 
       this.reservedAccounts.set(account.id, poolId);
       this.reservedLanes.set(lane, poolId);
       let entryBalance: number | null = null;
+      let timingMs: TradeResult["timingMs"];
       try {
         if (!simulated) {
           const status = worker.status();
           if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-          entryBalance = await worker.enter(account, alert);
+          const entry = await worker.enter(account, executionAlert);
+          entryBalance = entry.balance;
+          timingMs = entry.timingMs;
           if (entryBalance != null) this.balances?.set(account.id, entryBalance);
         }
-        rotation.recordOpen(account, alert, simulated, entryBalance ?? undefined);
+        rotation.recordOpen(account, executionAlert, simulated, entryBalance ?? undefined);
       } finally {
         this.reservedAccounts.delete(account.id);
         this.reservedLanes.delete(lane);
@@ -164,6 +176,7 @@ export class TradeCoordinator {
         connectionId: account.connectionId,
         simulated,
         message: `${simulated ? "Planned" : "Opened"} ${alert.action} ${alert.symbol} on ${account.name} via ${worker.definition.name}`,
+        timingMs,
       };
     });
   }
@@ -265,7 +278,7 @@ export class TradeCoordinator {
       if (!worker) throw new Error(`No worker for connection ${account.connectionId}`);
       const status = worker.status();
       if (!status.connected || !status.loggedIn) throw new Error(`${worker.definition.name} is not connected and logged in`);
-      await worker.prearm(account);
+      await worker.prearm(account, this.registry.pool(poolId)?.quantity ?? 1);
       this.prearmErrors.delete(poolId);
     } catch (error) {
       this.prearmErrors.set(poolId, (error as Error).message);
@@ -273,12 +286,19 @@ export class TradeCoordinator {
   }
 
   async prearmConnection(connectionId: string): Promise<void> {
+    let preparedPoolId: string | undefined;
     for (const pool of this.registry.pools()) {
       const rotation = this.rotations.get(pool.id);
       if (!pool.enabled || !rotation || rotation.snapshot().openTrade) continue;
       try {
         const next = rotation.select(this.registry.accountsInPool(pool.id), this.lockedAccounts(pool.id));
-        if (next.connectionId === connectionId) await this.prearmPool(pool.id);
+        if (next.connectionId !== connectionId) continue;
+        if (!preparedPoolId) {
+          await this.prearmPool(pool.id);
+          preparedPoolId = pool.id;
+        } else {
+          this.prearmErrors.set(pool.id, `This execution session is prepared for ${preparedPoolId}. Add the same login as a separate saved execution session for simultaneous lanes.`);
+        }
       } catch (error) {
         this.prearmErrors.set(pool.id, (error as Error).message);
       }

@@ -33,6 +33,32 @@ test("execution lane can be changed and persists", () => {
   assert.equal(new Registry(path).pool("eval-primary")?.executionLane, "weekday-cycle");
 });
 
+test("execution mode changes persist", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-registry-mode-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({ version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] }));
+  const registry = new Registry(path);
+  registry.setMode("live");
+  assert.equal(registry.mode, "live");
+  assert.equal(new Registry(path).mode, "live");
+  registry.setMode("practice");
+  assert.equal(new Registry(path).mode, "practice");
+});
+
+test("pool execution quantity defaults to one and can be changed", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-registry-quantity-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({
+    version: 4, running: true, mode: "practice", connections: [], accounts: [],
+    pools: [{ id: "p1", name: "Pool", accountIds: [], enabled: true, benchWinnersForDay: false }],
+  }));
+  const registry = new Registry(path);
+  assert.equal(registry.pool("p1")?.quantity, 1);
+  registry.setPoolQuantity("p1", 3);
+  assert.equal(new Registry(path).pool("p1")?.quantity, 3);
+  assert.throws(() => registry.setPoolQuantity("p1", 0), /positive whole number/i);
+});
+
 test("connection can be added dynamically and persists", () => {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-connection-"));
   const path = resolve(dir, "registry.json");

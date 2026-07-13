@@ -21,6 +21,18 @@ V4 is an isolated, multi-login account-rotation orchestrator. V2 and V3 remain u
 
 V4 defaults to `practice` mode and the included sample connection uses the `simulated` adapter. Change both intentionally before expecting live browser actions.
 
+The ATLAS dashboard now has an explicit **Practice / Live** control. Enabling Live requires confirmation and at least one logged-in execution session. Live means an armed TradingView webhook can click a real Buy/Sell button. Test webhook buttons remain non-ordering in both modes.
+
+## Near-instant execution sessions
+
+ATLAS does all slow work before the signal arrives. **READY** means the exact next account, dollar ATM bracket, and execution quantity are already selected and verified. An armed live webhook does not switch accounts, open ATM settings, change quantity, read a balance, or wait before the Buy/Sell click. If the exact setup is not READY, ATLAS blocks the signal and sends the existing action-needed alert instead of attempting a slow trade.
+
+One saved login is one browser execution session and can keep one lane ready at a time. If evaluation and funded pools must enter simultaneously using the same credentials, add that login twice as two saved execution sessions, log into both persistent windows once, and assign each lane's accounts to its own session. Different sessions run concurrently; one shared session cannot safely hold two different accounts and ATM settings at the same instant.
+
+Set each pool's **Execution quantity** on the dashboard, then click **Save quantity & prepare** or **Make next**. TradingView may omit `quantity`; ATLAS then uses the prepared pool quantity. A different explicit webhook quantity is blocked until the pool is reconfigured and prepared.
+
+For the fastest one-click path, disable order confirmations in Tradovate Application Settings. Chromium background throttling is disabled by ATLAS, so the session does not need to be the foreground window. Recent activity reports queue, browser-click, and total internal timing for live entries; this does not include TradingView internet transit or exchange fill time.
+
 Within one login, actions are serialized. Across independent logins, workers run concurrently. Pools with different execution-lane names may hold trades at the same time; pools sharing a lane are mutually exclusive, so a conflicting entry is rejected while that lane is occupied. Browser-based execution cannot be atomic across firms; a broadcast response reports each leg separately.
 
 ## Registry

@@ -872,7 +872,7 @@ export class TradovateBrowser {
   async clickOrder(action: "buy" | "sell", label: string): Promise<void> {
     const btn = action === "buy" ? TXT.buy : TXT.sell;
     await this.clickThroughPopups(
-      () => this.p.getByText(btn, { exact: true }).first().click({ timeout: 10_000 }),
+      () => this.p.getByText(btn, { exact: true }).first().click({ timeout: 2_000 }),
       action.toUpperCase(),
     );
     await this.confirmIfPrompted();

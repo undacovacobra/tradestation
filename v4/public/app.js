@@ -13,6 +13,9 @@ async function refresh() {
 function render() {
   document.querySelector("#overall").className = `pill ${data.running ? "good" : "bad"}`;
   document.querySelector("#overall").textContent = `${data.running ? "Running" : "Paused"} · ${data.mode}`;
+  document.querySelector("#mode-practice").classList.toggle("active", data.mode === "practice");
+  document.querySelector("#mode-live").classList.toggle("active", data.mode === "live");
+  document.querySelector("#mode-live").classList.toggle("danger-active", data.mode === "live");
   const ready = data.connections.filter((connection) => connection.status.loggedIn).length;
   document.querySelector("#summary").innerHTML = `<article><span>Connections</span><strong>${ready}/${data.connections.length} ready</strong></article>${data.pools.map((pool) => `<article><span>${esc(pool.name)}</span><strong>${pool.accounts.filter((account) => account.enabled && account.status === "active").length} active · ${pool.state?.openTrade ? "Trading" : "Flat"}</strong></article>`).join("")}`;
   document.querySelector("#login-sessions").innerHTML = data.connections.map((connection) => {
@@ -37,13 +40,13 @@ function renderPool(pool) {
     ? " <small>The address is configured; ngrok must be connected before TradingView can reach it.</small>"
     : " <small>No public ngrok domain is configured.</small>";
   const armStatus = open ? "" : pool.armed
-    ? `<p><span class="pill good">Armed</span> The next account and bracket are prepared.</p>`
+    ? `<p><span class="pill good">READY</span> ${esc(pool.readinessReason)}</p>`
     : pool.prearmError
-      ? `<p class="error"><span class="pill bad">Pre-arm failed</span> ${esc(pool.prearmError)}</p>`
-      : `<p><span class="pill">Not armed</span> Click Make next to prepare the account.</p>`;
+      ? `<p class="error"><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || pool.prearmError)}</p>`
+      : `<p><span class="pill bad">NOT READY</span> ${esc(pool.readinessReason || "Click Make next to prepare the account, ATM, and quantity in this execution session.")}</p>`;
   return `<article class="pool-panel"><div class="pool-title"><div><h3>${esc(pool.name)}</h3><p>Lane ${esc(pool.executionLane)}${pool.balanceTarget ? ` · auto-close ${money(pool.balanceTarget)}` : " · no balance auto-close"}</p><p><strong>${webhookKind} webhook:</strong> <code>${esc(poolWebhookUrl(pool.id))}</code> <button onclick="copyWebhook('${esc(pool.id)}')">Copy webhook</button> <button id="test-button-${esc(pool.id)}" ${testState?.kind === "testing" ? "disabled" : ""} onclick="testWebhook('${esc(pool.id)}')">Test webhook</button>${webhookNote}</p><p id="test-result-${esc(pool.id)}" class="webhook-test-result ${esc(testState?.kind || "")}">${esc(testState?.message || "")}</p></div><span class="pill ${open?"bad":"good"}">${open ? `${esc(open.action)} ${esc(open.symbol)} · ${esc(open.accountName)}` : "Flat"}</span></div>
   ${armStatus}<div class="table-wrap"><table><thead><tr><th>#</th><th>Account</th><th>Login / firm</th><th>Last-known balance</th><th>Status</th><th>Controls</th></tr></thead><tbody>${pool.accounts.map((account,index) => renderAccountRow(pool, account, index)).join("")}</tbody></table></div>
-  <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button></div></article>`;
+  <div class="lane-row"><label>Execution lane<input id="lane-${esc(pool.id)}" value="${esc(pool.executionLane)}"></label><button onclick="saveLane('${esc(pool.id)}')">Save lane</button><label>Execution quantity<input id="quantity-${esc(pool.id)}" type="number" min="1" step="1" value="${esc(pool.quantity || 1)}"></label><button onclick="saveQuantity('${esc(pool.id)}')">Save quantity &amp; prepare</button></div></article>`;
 }
 
 function renderAccountRow(pool, account, index) {
@@ -98,6 +101,15 @@ function setPoolTestResult(poolId, kind, message) {
 }
 async function accountAction(poolId, accountId, action, confirmFirst=false) { if (confirmFirst && !confirm("Permanently delete this account from V4 and every rotation?")) return; await post(`/api/pools/${encodeURIComponent(poolId)}/accounts/${encodeURIComponent(accountId)}`, { action }); }
 async function saveLane(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/lane`, { executionLane:document.getElementById(`lane-${poolId}`).value.trim() }); }
+async function saveQuantity(poolId) { await post(`/api/pools/${encodeURIComponent(poolId)}/quantity`, { quantity:Number(document.getElementById(`quantity-${poolId}`).value) }); }
+async function setMode(mode) {
+  const confirmLive = mode === "live";
+  if (confirmLive && !confirm("Enable LIVE mode? READY webhook signals can place real orders. Confirm that Tradovate order confirmations are disabled and the correct accounts are prepared.")) return;
+  const response = await fetch("/api/mode", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ mode, confirmLive }) });
+  const result = await response.json();
+  document.querySelector("#action-result").textContent = result.ok ? result.message : result.error;
+  await refresh();
+}
 async function saveBracket(poolId, accountId) {
   const key = `${poolId}-${accountId}`;
   const targetPerContract = Number(document.getElementById(`tp-${key}`).value);
@@ -136,5 +148,7 @@ document.querySelector("#refresh-balances").addEventListener("click", async () =
     button.disabled = false;
   }
 });
-window.accountAction=accountAction; window.saveLane=saveLane; window.saveBracket=saveBracket; window.copyWebhook=copyWebhook; window.testWebhook=testWebhook;
+document.querySelector("#mode-practice").addEventListener("click", () => setMode("practice"));
+document.querySelector("#mode-live").addEventListener("click", () => setMode("live"));
+window.accountAction=accountAction; window.saveLane=saveLane; window.saveQuantity=saveQuantity; window.saveBracket=saveBracket; window.copyWebhook=copyWebhook; window.testWebhook=testWebhook;
 refresh().catch((error)=>{ document.querySelector("#overall").textContent="Offline"; document.querySelector("#action-result").textContent=error.message; }); setInterval(refresh,5000);

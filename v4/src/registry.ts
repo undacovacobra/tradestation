@@ -50,6 +50,11 @@ export class Registry {
   snapshot(): RegistryData { return structuredClone(this.data); }
   get running(): boolean { return this.data.running; }
   get mode(): "practice" | "live" { return this.data.mode; }
+  setMode(mode: "practice" | "live"): RegistryData {
+    this.data.mode = mode;
+    this.save();
+    return this.snapshot();
+  }
   connections(): ConnectionDefinition[] { return this.data.connections.filter((x) => x.enabled); }
   connection(id: string): ConnectionDefinition | undefined { return this.data.connections.find((x) => x.id === id); }
   account(id: string): AccountDefinition | undefined { return this.data.accounts.find((x) => x.id === id); }
@@ -152,6 +157,15 @@ export class Registry {
     const lane = executionLane.trim();
     if (!lane) throw new Error("Execution lane is required");
     pool.executionLane = lane;
+    this.save();
+    return structuredClone(pool);
+  }
+
+  setPoolQuantity(poolId: string, quantity: number): PoolDefinition {
+    const pool = this.pool(poolId);
+    if (!pool) throw new Error(`Unknown pool: ${poolId}`);
+    if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Execution quantity must be a positive whole number");
+    pool.quantity = quantity;
     this.save();
     return structuredClone(pool);
   }
