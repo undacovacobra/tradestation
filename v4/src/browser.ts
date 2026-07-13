@@ -747,8 +747,9 @@ export class TradovateBrowser {
     for (const frame of this.page.frames()) {
       const records = await frame.evaluate(() => {
         const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
+        const toolbar = document.querySelector('[data-testid="bracket-toolbar"]');
         const matches = [...document.querySelectorAll("*")]
-          .filter((node) => /\bATM\b/i.test((node.textContent || "").trim()) || /atm|setting|gear/i.test(`${node.getAttribute("class") || ""} ${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""}`))
+          .filter((node) => toolbar?.contains(node) || /\bATM\b/i.test((node.textContent || "").trim()) || /atm|setting|gear/i.test(`${node.getAttribute("class") || ""} ${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""}`))
           .slice(0, 30)
           .map((node) => {
             const el = node as HTMLElement;
