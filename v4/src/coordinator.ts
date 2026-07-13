@@ -285,26 +285,46 @@ export class TradeCoordinator {
     for (const pool of this.registry.pools()) if (pool.accountIds.includes(accountId)) await this.prearmPool(pool.id);
   }
 
-  async refreshBalances(): Promise<Array<{ connectionId: string; refreshed: number; deferred: boolean; error?: string }>> {
+  async refreshBalances(): Promise<Array<{
+    connectionId: string;
+    refreshed: number;
+    deferred: boolean;
+    error?: string;
+    accountErrors: Array<{ accountId: string; platformLabel: string; error: string }>;
+  }>> {
     const results = [];
+    const activeAccountIds = new Set(
+      this.registry.pools().filter((pool) => pool.enabled).flatMap((pool) => pool.accountIds),
+    );
     for (const connection of this.registry.connections()) {
       const worker = this.workers.get(connection.id);
       if (!worker) continue;
       if (this.hasOpenTradeForConnection(connection.id)) {
-        results.push({ connectionId: connection.id, refreshed: 0, deferred: true });
+        results.push({ connectionId: connection.id, refreshed: 0, deferred: true, accountErrors: [] });
         continue;
       }
       let refreshed = 0;
+      const accountErrors: Array<{ accountId: string; platformLabel: string; error: string }> = [];
       try {
         worker.invalidateArmed();
-        for (const account of this.registry.snapshot().accounts.filter((item) => item.connectionId === connection.id && item.enabled)) {
-          const balance = await worker.run((adapter) => adapter.readBalance(account));
-          if (balance != null) { this.balances?.set(account.id, balance); refreshed++; }
+        for (const account of this.registry.snapshot().accounts.filter((item) =>
+          item.connectionId === connection.id && item.enabled && activeAccountIds.has(item.id)
+        )) {
+          try {
+            const balance = await worker.run((adapter) => adapter.readBalance(account));
+            if (balance != null) { this.balances?.set(account.id, balance); refreshed++; }
+          } catch (error) {
+            accountErrors.push({
+              accountId: account.id,
+              platformLabel: account.platformLabel,
+              error: (error as Error).message,
+            });
+          }
         }
-        results.push({ connectionId: connection.id, refreshed, deferred: false });
+        results.push({ connectionId: connection.id, refreshed, deferred: false, accountErrors });
         await this.prearmConnection(connection.id);
       } catch (error) {
-        results.push({ connectionId: connection.id, refreshed, deferred: false, error: (error as Error).message });
+        results.push({ connectionId: connection.id, refreshed, deferred: false, error: (error as Error).message, accountErrors });
       }
     }
     return results;

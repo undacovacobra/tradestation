@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
+import { BalanceLog } from "../src/balances.js";
 import { TradeCoordinator } from "../src/coordinator.js";
 import type { AccountDefinition, ConnectionDefinition, V4Alert, WorkerStatus } from "../src/models.js";
 import { Registry } from "../src/registry.js";
@@ -15,6 +16,8 @@ class FakeAdapter implements ConnectionAdapter {
   closes = 0;
   prepares: string[] = [];
   connected = true;
+  balanceFailures = new Set<string>();
+  balanceReads: string[] = [];
   constructor(private readonly id: string) {}
   async connect() {}
   async recover() {}
@@ -33,12 +36,16 @@ class FakeAdapter implements ConnectionAdapter {
     active--;
   }
   async close() { this.closes++; }
-  async readBalance() { return this.balance; }
+  async readBalance(account: AccountDefinition) {
+    this.balanceReads.push(account.id);
+    if (this.balanceFailures.has(account.id)) throw new Error(`missing ${account.platformLabel}`);
+    return this.balance;
+  }
   async readSelectedBalance() { return this.balance; }
   async readSettledBalance() { return this.balance; }
 }
 
-function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number, sameConnection = false) {
+function setup(mode: "practice" | "live" = "live", executionLanes?: [string, string], evalTarget?: number, sameConnection = false, extraRefreshAccounts = false) {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-coordinator-"));
   const connections: ConnectionDefinition[] = [
     { id: "c1", name: "Login 1", firm: "Firm A", adapter: "simulated", url: "https://example.com", sessionDir: ".s1", accountPattern: ".+", enabled: true, autoConnect: false },
@@ -49,16 +56,21 @@ function setup(mode: "practice" | "live" = "live", executionLanes?: [string, str
     accounts: [
       { id: "a1", name: "A", firm: "Firm A", stage: "eval", connectionId: "c1", platformLabel: "X1", enabled: true, status: "active", tags: [] },
       { id: "a2", name: "B", firm: "Firm B", stage: "funded", connectionId: sameConnection ? "c1" : "c2", platformLabel: "Y2", enabled: true, status: "active", tags: [] },
+      ...(extraRefreshAccounts ? [
+        { id: "a3", name: "Missing", firm: "Firm A", stage: "eval", connectionId: "c1", platformLabel: "X3", enabled: true, status: "active", tags: [] },
+        { id: "a4", name: "Later", firm: "Firm A", stage: "eval", connectionId: "c1", platformLabel: "X4", enabled: true, status: "active", tags: [] },
+      ] : []),
     ],
     pools: [
-      { id: "p1", name: "Pool 1", accountIds: ["a1"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[0], balanceTarget: evalTarget },
+      { id: "p1", name: "Pool 1", accountIds: extraRefreshAccounts ? ["a1", "a3", "a4"] : ["a1"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[0], balanceTarget: evalTarget },
       { id: "p2", name: "Pool 2", accountIds: ["a2"], enabled: true, benchWinnersForDay: false, executionLane: executionLanes?.[1] },
     ],
   }));
   const adapters = new Map(connections.map((connection) => [connection.id, new FakeAdapter(connection.id)]));
   const workers = new Map<string, ConnectionWorker>(connections.map((connection) => [connection.id, new ConnectionWorker(connection, adapters.get(connection.id)!)]));
   const registry = new Registry(resolve(dir, "registry.json"));
-  return { coordinator: new TradeCoordinator(registry, workers, resolve(dir, "state"), () => "2026-07-10"), registry, adapters };
+  const balances = new BalanceLog(resolve(dir, "balances.json"));
+  return { coordinator: new TradeCoordinator(registry, workers, resolve(dir, "state"), () => "2026-07-10", balances), registry, adapters };
 }
 
 test("broadcast runs independent logins concurrently", async () => {
@@ -175,4 +187,18 @@ test("a failed pre-arm is visible and never claims the pool is ready", async () 
   const pool = coordinator.status().find((item) => item.id === "p1");
   assert.equal(pool?.armed, false);
   assert.match(pool?.prearmError ?? "", /not connected and logged in/i);
+});
+
+test("balance refresh continues after one missing account and updates later accounts", async () => {
+  const { coordinator, adapters } = setup("live", undefined, undefined, false, true);
+  adapters.get("c1")!.balanceFailures.add("a3");
+  const results = await coordinator.refreshBalances();
+  const c1 = results.find((result) => result.connectionId === "c1");
+  assert.equal(c1?.refreshed, 2);
+  assert.deepEqual(c1?.accountErrors?.map((item) => item.accountId), ["a3"]);
+  assert.deepEqual(adapters.get("c1")?.balanceReads, ["a1", "a3", "a4"]);
+  const pool = coordinator.status().find((item) => item.id === "p1");
+  assert.equal(pool?.accounts.find((account) => account.id === "a1")?.balance, 50_000);
+  assert.equal(pool?.accounts.find((account) => account.id === "a3")?.balance, null);
+  assert.equal(pool?.accounts.find((account) => account.id === "a4")?.balance, 50_000);
 });
