@@ -151,23 +151,34 @@ export class TradovateBrowser {
   private async tryAutoLogin(): Promise<void> {
     await this.snapshot("autologin-1-loginpage");
     const loginCandidates = [
-      this.p.getByText(TXT.loginButton, { exact: true }),
       this.p.getByRole("button", { name: TXT.loginButton }),
+      this.p.getByText(TXT.loginButton, { exact: true }),
       this.p.locator('button:has-text("Login"), [role="button"]:has-text("Login")'),
     ];
     for (const cand of loginCandidates) {
       const el = cand.first();
       if (await el.isVisible({ timeout: 4_000 }).catch(() => false)) {
         await el.click({ timeout: 5_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
+        await this.p.waitForTimeout(750).catch(() => {});
+        // Tradovate occasionally ignores a synthetic mouse click while its
+        // saved credentials are settling. Invoke the same visible button once
+        // through the DOM if the login screen is still present.
+        if (await el.isVisible({ timeout: 500 }).catch(() => false)) {
+          await el.evaluate((node) => (node as HTMLElement).click()).catch(() => {});
+        }
         break;
       }
     }
     await this.p.waitForTimeout(2_500).catch(() => {});
     await this.snapshot("autologin-2-after-login");
 
-    const simBtn = this.p.getByText(TXT.simButton).first();
+    const simBtn = this.p.getByRole("button", { name: TXT.simButton }).or(this.p.getByText(TXT.simButton)).filter({ visible: true }).first();
     if (await simBtn.isVisible({ timeout: 15_000 }).catch(() => false)) {
       await simBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Sim click error: ${e.message}`));
+      await this.p.waitForTimeout(750).catch(() => {});
+      if (await simBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+        await simBtn.evaluate((node) => (node as HTMLElement).click()).catch(() => {});
+      }
     }
     await this.p.waitForTimeout(2_000).catch(() => {});
     await this.snapshot("autologin-3-after-sim");
@@ -579,24 +590,9 @@ export class TradovateBrowser {
   private async ensureShowInDollars(): Promise<boolean> {
     const dollarShown = () => this.p.getByText(/\$\s*value/i).filter({ visible: true }).first().isVisible({ timeout: 1_000 }).catch(() => false);
     if (await dollarShown()) return true;
-    const marked = await this.p.evaluate(() => {
-      const label = [...document.querySelectorAll("*")]
-        .filter((el) => /^show\s*in$/i.test((el.textContent || "").trim()))
-        .sort((a, b) => (a.textContent || "").length - (b.textContent || "").length)[0];
-      let row: Element | null = label || null;
-      for (let up = 0; up < 5 && row; up++, row = row.parentElement) {
-        const select = row.querySelector('.select-input [tabindex], .select-input, [role="combobox"]') as HTMLElement | null;
-        if (select) { select.setAttribute("data-bot-show-in", "1"); return true; }
-      }
-      return false;
-    }).catch(() => false);
-    if (marked) {
-      const select = this.p.locator("[data-bot-show-in]").first();
-      await select.click({ timeout: 2_000 }).catch(() => {});
-      await select.evaluate((el) => el.removeAttribute("data-bot-show-in")).catch(() => {});
-    } else {
-      await this.p.getByText(/^\s*Ticks\s*$/i).filter({ visible: true }).first().click({ timeout: 2_000 }).catch(() => {});
-    }
+    // "SHOW IN" and "ATM NAME" share the same form container in Tradovate.
+    // Anchor to the visible current value so we open SHOW IN, not ATM NAME.
+    await this.p.getByText(/^\s*Ticks\s*$/i).filter({ visible: true }).first().click({ timeout: 2_000 }).catch(() => {});
     const option = this.p.getByText(/\$\s*value/i).filter({ visible: true }).last();
     if (await option.isVisible({ timeout: 1_500 }).catch(() => false)) await option.click({ timeout: 2_000 }).catch(() => {});
     return await dollarShown();
