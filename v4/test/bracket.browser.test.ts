@@ -55,3 +55,16 @@ test("setBracket rejects one-sided or non-positive amounts", async (t) => {
     await assert.rejects(() => browser.setBracket(30, 0), /positive/i);
   } finally { await launched.close(); }
 });
+
+test("setBracket rejects when Tradovate persists different values after Save", async (t) => {
+  const launched = await launch();
+  if (!launched) return t.skip("no Chromium available");
+  try {
+    const page = await launched.newPage({ viewport: { width: 900, height: 500 } });
+    await page.goto(fixture);
+    await page.evaluate(() => { (window as unknown as { clampTarget: boolean }).clampTarget = true; });
+    const browser = fake(page);
+    await assert.rejects(() => browser.setBracket(1520, 1000), /persisted|saved|mismatch/i);
+    assert.equal(browser.lastBracket, null);
+  } finally { await launched.close(); }
+});

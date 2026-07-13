@@ -16,10 +16,18 @@
       <div class="select-input"><div id="show-in" tabindex="0" onclick="document.getElementById('dollar-option').hidden=false"><span class="form-control">Ticks</span></div></div>
       <button id="dollar-option" hidden onclick="document.querySelector('#show-in .form-control').textContent='$ Value';this.hidden=true">$ Value</button>
     </div>
-    <div><label>Take Profit</label> <input id="tp" type="number" value="150"></div>
-    <div><label>Stop Loss</label> <input id="sl" type="number" value="100"></div>
-    <button onclick="document.getElementById('dialog').style.display='none'">Save</button>
+    <div id="bracket-grid" style="display:grid;grid-template-columns:140px 180px">
+      <div style="display:grid;grid-template-rows:40px 40px"><label>Take Profit</label><label>Stop Loss</label></div>
+      <div style="display:grid;grid-template-rows:40px 40px"><input id="tp" type="number" value="150"><input id="sl" type="number" value="100"></div>
+    </div>
+    <button onclick="saveAtm()">Save</button>
     <button onclick="document.getElementById('dialog').style.display='none'">Cancel</button>
   </div>
+  <script>
+    function saveAtm() {
+      if (window.clampTarget) document.getElementById('tp').value = '1000';
+      document.getElementById('dialog').style.display = 'none';
+    }
+  </script>
 </body>
 </html>

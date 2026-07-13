@@ -514,6 +514,14 @@ export class TradovateBrowser {
       if (!tpOk || !slOk) throw new Error(`Couldn't set the bracket to $${tp}/$${sl} per contract.`);
       await this.clickDialogButton(/^\s*save\s*$/i);
       await this.p.waitForTimeout(200).catch(() => {});
+      await this.openAtmSettings();
+      if (!(await this.atmDialogVisible())) throw new Error("Couldn't reopen ATM Settings to verify the saved bracket.");
+      const savedTp = await this.readDialogNumber(/take\s*profit/i);
+      const savedSl = await this.readDialogNumber(/stop\s*loss/i);
+      await this.clickDialogButton(/cancel|close/i);
+      if (savedTp !== tp || savedSl !== sl) {
+        throw new Error(`Tradovate persisted $${savedTp ?? "?"}/$${savedSl ?? "?"}, not the requested $${tp}/$${sl} bracket.`);
+      }
       this.lastBracket = key;
       log.info(`ATM bracket set: +$${tp} / -$${sl} per contract.`);
     } catch (err) {
@@ -608,13 +616,14 @@ export class TradovateBrowser {
         if (t && t.length < 30 && re.test(t) && (!labelEl || t.length < (labelEl.textContent || "").length)) labelEl = el;
       }
       if (!labelEl) return false;
-      let container: Element | null = labelEl;
-      let input: HTMLInputElement | null = null;
-      for (let up = 0; up < 4 && container; up++) {
-        input = container.querySelector("input");
-        if (input) break;
-        container = container.parentElement;
-      }
+      const labelRect = (labelEl as HTMLElement).getBoundingClientRect();
+      const labelY = labelRect.top + labelRect.height / 2;
+      const input = [...document.querySelectorAll("input")]
+        .map((el) => ({ el: el as HTMLInputElement, rect: (el as HTMLElement).getBoundingClientRect() }))
+        .filter(({ rect }) => rect.width > 0 && rect.height > 0)
+        .map(({ el, rect }) => ({ el, distance: Math.abs((rect.top + rect.height / 2) - labelY), x: rect.left }))
+        .filter(({ distance }) => distance <= 28)
+        .sort((a, b) => a.distance - b.distance || a.x - b.x)[0]?.el ?? null;
       if (!input) return false;
       input.setAttribute("data-bot-atm", "1");
       return true;
@@ -628,6 +637,32 @@ export class TradovateBrowser {
     const read = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
     await box.evaluate((el) => el.removeAttribute("data-bot-atm")).catch(() => {});
     return read === value;
+  }
+
+  private async readDialogNumber(labelRe: RegExp): Promise<number | null> {
+    return await this.p.evaluate((args) => {
+      const re = new RegExp(args.src, args.flags);
+      const labels = [...document.querySelectorAll("*")]
+        .filter((el) => {
+          const text = (el.textContent || "").trim();
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          return text.length > 0 && text.length < 30 && re.test(text) && rect.width > 0 && rect.height > 0;
+        })
+        .sort((a, b) => (a.textContent || "").length - (b.textContent || "").length);
+      const label = labels[0] as HTMLElement | undefined;
+      if (!label) return null;
+      const labelRect = label.getBoundingClientRect();
+      const labelY = labelRect.top + labelRect.height / 2;
+      const input = [...document.querySelectorAll("input")]
+        .map((el) => ({ el: el as HTMLInputElement, rect: (el as HTMLElement).getBoundingClientRect() }))
+        .filter(({ rect }) => rect.width > 0 && rect.height > 0)
+        .map(({ el, rect }) => ({ el, distance: Math.abs((rect.top + rect.height / 2) - labelY), x: rect.left }))
+        .filter(({ distance }) => distance <= 28)
+        .sort((a, b) => a.distance - b.distance || a.x - b.x)[0]?.el;
+      if (!input) return null;
+      const value = Number(input.value);
+      return Number.isFinite(value) ? value : null;
+    }, { src: labelRe.source, flags: labelRe.flags }).catch(() => null);
   }
 
   private async clickDialogButton(nameRe: RegExp): Promise<void> {
