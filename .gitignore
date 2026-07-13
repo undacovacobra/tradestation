@@ -1,4 +1,5 @@
 node_modules/
+.worktrees/
 .env
 data/state.json
 data/accounts.json
