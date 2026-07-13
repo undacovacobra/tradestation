@@ -45,6 +45,18 @@ test("execution mode changes persist", () => {
   assert.equal(new Registry(path).mode, "practice");
 });
 
+test("execution style defaults to standard and Fast Entry persists", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "v4-registry-execution-style-"));
+  const path = resolve(dir, "registry.json");
+  writeFileSync(path, JSON.stringify({ version: 4, running: true, mode: "practice", connections: [], accounts: [], pools: [] }));
+  const registry = new Registry(path);
+  assert.equal(registry.executionStyle, "standard");
+  registry.setExecutionStyle("fast-entry");
+  assert.equal(new Registry(path).executionStyle, "fast-entry");
+  registry.setExecutionStyle("standard");
+  assert.equal(new Registry(path).executionStyle, "standard");
+});
+
 test("remote access preference persists", () => {
   const dir = mkdtempSync(resolve(tmpdir(), "v4-registry-remote-access-"));
   const path = resolve(dir, "registry.json");
