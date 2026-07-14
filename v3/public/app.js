@@ -263,12 +263,12 @@ function balanceLine(acct) {
   return `<span class="balance-row">💰 <strong>${money(acct.balance)}</strong> · ${money(toGo)} to ${money(target)}</span>`;
 }
 
-/** One line showing the account's $-per-contract stop/target bracket. */
+/** One line showing which saved ATM preset this account uses. */
 function bracketLine(acct) {
-  if (acct.targetPerContract > 0 && acct.stopPerContract > 0) {
-    return `<span class="balance-row">🎯 make ${money(acct.targetPerContract)} / lose ${money(acct.stopPerContract)} per contract</span>`;
+  if (acct.atmPreset) {
+    return `<span class="balance-row">🎯 ATM preset: <strong>${esc(acct.atmPreset)}</strong></span>`;
   }
-  return `<span class="balance-row muted">🎯 no $ bracket — uses the Tradovate ticket's</span>`;
+  return `<span class="balance-row muted">🎯 no ATM preset — uses the Tradovate ticket's</span>`;
 }
 
 /** Tiny inline SVG sparkline of an account's recent balance history. */
@@ -404,28 +404,20 @@ $("#btn-scan").addEventListener("click", () =>
 );
 
 function showBracketModal(acct) {
-  const inp = (id, val) =>
-    `<input id="${id}" type="number" min="0" step="1" value="${val || 0}" style="font:inherit;width:90px;padding:10px;border-radius:8px;border:1px solid var(--line)" />`;
   showModal(`
-    <h2>🎯 ${esc(acct.name)} — stop &amp; target</h2>
-    <p>How much to <strong>make</strong> or <strong>lose</strong> <em>per contract</em> before the trade auto-closes at the exchange. Set both to <strong>0</strong> to just use whatever bracket is on the Tradovate ticket.</p>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:14px 0">
-      <label>Make&nbsp;$&nbsp;${inp("brk-target", acct.targetPerContract)}</label>
-      <label>Lose&nbsp;$&nbsp;${inp("brk-stop", acct.stopPerContract)}</label>
-      <span style="color:var(--muted);font-size:13px">per contract</span>
+    <h2>🎯 ${esc(acct.name)} — ATM preset</h2>
+    <p>Type the <strong>name</strong> of the saved Tradovate ATM preset this account should use (e.g. <strong>25</strong>, <strong>50</strong>, <strong>funded</strong>). The bot picks it from the ATM dropdown before each trade, so the exchange holds the stop/target. Leave it blank to just use whatever ATM is on the ticket.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:14px 0">
+      <label>ATM preset name <input id="atm-preset" type="text" value="${esc(acct.atmPreset || "")}" placeholder="e.g. 25" style="font:inherit;width:160px;padding:10px;border-radius:8px;border:1px solid var(--line)" /></label>
     </div>
-    <p style="color:var(--muted);font-size:13px">Example: make $30 / lose $20 per contract → a 10-lot aims for $300 / risks $200.</p>
+    <p style="color:var(--muted);font-size:13px">It must match the preset name in Tradovate <em>exactly</em> (same spelling and capitals).</p>
     <div class="modal-actions">
       <button class="btn" data-close>Cancel</button>
-      <button class="btn primary" id="brk-apply">Save</button>
+      <button class="btn primary" id="atm-apply">Save</button>
     </div>`);
-  $("#brk-apply").addEventListener("click", () =>
+  $("#atm-apply").addEventListener("click", () =>
     doAction(async () => {
-      await api("/accounts/bracket", {
-        label: acct.tradovateLabel,
-        targetPerContract: Number($("#brk-target").value) || 0,
-        stopPerContract: Number($("#brk-stop").value) || 0,
-      });
+      await api("/accounts/atm-preset", { label: acct.tradovateLabel, preset: $("#atm-preset").value });
       closeModal();
     }),
   );
@@ -434,13 +426,12 @@ function showBracketModal(acct) {
 $("#btn-testbracket").addEventListener("click", () => {
   if (!status) return;
   showModal(`
-    <h2>🎯 Test the ATM bracket</h2>
-    <p>Type a make $ and lose $ (per contract). The bot opens the ATM settings, sets them, and saves — <strong>no order is placed.</strong> Watch the Tradovate ATM box change.</p>
+    <h2>🎯 Test an ATM preset</h2>
+    <p>Type the name of a saved ATM preset. The bot picks it from the Tradovate ATM dropdown — <strong>no order is placed.</strong> Watch the ATM name change on the Tradovate screen.</p>
     <p style="color:var(--muted);font-size:13px">The browser must be connected, logged in, and on an account.</p>
     <form id="brk-form" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0">
-      <label>Make&nbsp;$&nbsp;<input id="brk-t" type="number" min="1" step="1" value="30" style="font:inherit;width:80px;padding:10px;border-radius:8px;border:1px solid var(--line)" /></label>
-      <label>Lose&nbsp;$&nbsp;<input id="brk-s" type="number" min="1" step="1" value="20" style="font:inherit;width:80px;padding:10px;border-radius:8px;border:1px solid var(--line)" /></label>
-      <button class="btn primary" type="submit">Set &amp; time it</button>
+      <label>Preset name <input id="brk-preset" type="text" value="25" style="font:inherit;width:150px;padding:10px;border-radius:8px;border:1px solid var(--line)" /></label>
+      <button class="btn primary" type="submit">Pick &amp; time it</button>
     </form>
     <div id="brk-result" style="font-size:18px;min-height:24px"></div>
     <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
@@ -448,27 +439,16 @@ $("#btn-testbracket").addEventListener("click", () => {
   const result = $("#brk-result");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const target = Math.floor(Number($("#brk-t").value));
-    const stop = Math.floor(Number($("#brk-s").value));
+    const preset = String($("#brk-preset").value || "").trim();
     const btn = form.querySelector("button");
     btn.disabled = true;
-    result.textContent = "Setting…";
+    result.textContent = "Selecting…";
     try {
-      const r = await api("/test-bracket", { targetPerContract: target, stopPerContract: stop });
+      const r = await api("/test-preset", { preset });
       if (r.set) {
-        result.innerHTML = `<strong>Set: make $${r.target} / lose $${r.stop} in ${r.ms}ms</strong> ✅`;
+        result.innerHTML = `<strong>Selected preset "${esc(r.preset)}" in ${r.ms}ms</strong> ✅`;
       } else {
-        let html = `<div style="font-size:16px;color:var(--red)">⚠️ ${esc(r.message || "Couldn't set it.")}</div>`;
-        if (r.fields && r.fields.length) {
-          html += `<p style="font-size:13px;color:var(--muted);margin:8px 0 4px">Boxes the bot can see — <strong>screenshot this for Claude</strong>:</p>`;
-          html += `<div style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px"><table style="width:100%;font-size:12px;border-collapse:collapse">`;
-          r.fields.forEach((f, i) => {
-            const lbl = [f.ariaLabel, f.name, f.placeholder, f.cls].filter(Boolean).join(" · ") || "—";
-            html += `<tr style="border-top:1px solid var(--line)"><td style="padding:3px 6px">${i}</td><td style="padding:3px 6px">${esc(f.tag)}${f.type ? "/" + esc(f.type) : ""}</td><td style="padding:3px 6px">${esc(lbl)}</td><td style="padding:3px 6px">${esc(f.near || "")}</td><td style="padding:3px 6px">${esc(f.value)}</td></tr>`;
-          });
-          html += `</table></div>`;
-        }
-        result.innerHTML = html;
+        result.innerHTML = `<div style="font-size:16px;color:var(--red)">⚠️ ${esc(r.message || "Couldn't select it.")}</div>`;
       }
     } catch (err) {
       result.innerHTML = `<span style="color:var(--red)">⚠️ ${esc(err.message)}</span>`;

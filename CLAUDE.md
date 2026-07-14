@@ -89,7 +89,30 @@ SETUP-GUIDE.md); a friend was given repo access and a copy of that guide (each
 person runs their own ngrok domain + secret). Secret/token appeared in chat
 screenshots — user was advised to rotate the ngrok token.
 
-## 🎯 V3 DOLLAR BRACKET (2026-07-10) — per-account $ stop/target via ATM
+## 🎯 V3 ATM PRESET SELECTION (2026-07-11) — replaced the $-dialog approach
+The $-Value dialog automation (below) proved too fragile — `openAtmSettings`
+couldn't reliably find the gear, so trades fired on whatever ATM was on the
+ticket. Pivoted (user's call) to **saved ATM presets picked by name**: the user
+creates named ATM presets in Tradovate once (they made "25", "50", "funded"),
+and the bot SELECTS the account's preset from the ATM dropdown at arm time —
+the same robust "click the matching name in a dropdown" as account switching,
+far less fragile than editing a dialog.
+- `StoredAccount.atmPreset` (string) replaced `targetPerContract/stopPerContract`;
+  `store.setAtmPreset`. `browser.selectAtmPreset(name, force)`: skip if
+  `lastPreset===name` or already shown; open the ATM combobox (`:near(:text("ATM"))`
+  candidates — never a trade button), click `getByRole("option",{name,exact})`
+  (or a menu/listbox text match), verify the panel shows it, else throw. Cached
+  `lastPreset`, reset on connect/recover. `armNext` calls it after armFor.
+- Endpoints: `/api/accounts/atm-preset` (set the name), `/api/test-preset`
+  (select by name, no order). Dashboard 🎯 modal = a preset-name text field; per
+  account a "🎯 ATM preset: X" line; global **🎯 Test ATM preset** button.
+- Guarded by `test/preset.browser.test.ts` + `fixtures/mock-atm.html` (combobox
+  near "ATM" + role=option list). **Still needs one live check** via Test ATM
+  preset (dropdown selectors unverified against the real panel). Removed the
+  dialog `setBracket`/`openAtmSettings`/etc. **26 tests pass**, type-checks clean,
+  endpoints verified in practice. V2 untouched.
+
+## 🎯 V3 DOLLAR BRACKET (2026-07-10) — per-account $ stop/target via ATM [SUPERSEDED]
 User wanted exits in DOLLARS not points, and win/loss to match reality (the
 strategy's SL/TP and the browser ATM's tick bracket disagreed). Solution the
 user picked: bot writes the ATM **"$ Value"** bracket, in dollars **PER

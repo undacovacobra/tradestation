@@ -10,11 +10,10 @@ const AccountSchema = z.object({
   enabled: z.boolean().default(true),
   /** "active" = trades; "passed" = hit the eval target, retired from rotation. */
   status: z.enum(["active", "passed"]).default("active"),
-  /** ATM bracket, in dollars PER CONTRACT. When both are set, the bot writes
-   *  them into Tradovate's $-Value ATM at arm time so the exchange holds the
-   *  stop/target. 0 / unset = leave whatever bracket is on the ticket. */
-  targetPerContract: z.number().nonnegative().default(0),
-  stopPerContract: z.number().nonnegative().default(0),
+  /** Name of the saved Tradovate ATM preset to use for this account (e.g. "25").
+   *  The bot selects it from the ATM dropdown at arm time so the exchange holds
+   *  the stop/target. "" = leave whatever ATM is on the ticket. */
+  atmPreset: z.string().default(""),
 });
 
 const SettingsSchema = z.object({
@@ -123,18 +122,17 @@ export class SettingsStore {
       this.save();
       return existing;
     }
-    const account: StoredAccount = { tradovateLabel: label, name: name?.trim() || label, group, enabled: true, status: "active", targetPerContract: 0, stopPerContract: 0 };
+    const account: StoredAccount = { tradovateLabel: label, name: name?.trim() || label, group, enabled: true, status: "active", atmPreset: "" };
     this.settings.accounts.push(account);
     this.save();
     return account;
   }
 
-  /** Set an account's per-contract $ target and stop (0 = leave the ticket's). */
-  setBracket(label: string, targetPerContract: number, stopPerContract: number): boolean {
+  /** Set which saved ATM preset an account uses ("" = leave the ticket's). */
+  setAtmPreset(label: string, preset: string): boolean {
     const acct = this.find(label);
     if (!acct) return false;
-    acct.targetPerContract = Math.max(0, targetPerContract) || 0;
-    acct.stopPerContract = Math.max(0, stopPerContract) || 0;
+    acct.atmPreset = preset.trim();
     this.save();
     return true;
   }

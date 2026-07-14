@@ -7,10 +7,9 @@ import { chromium, type Browser } from "playwright";
 import { TradovateBrowser } from "../src/browser.js";
 
 /**
- * setBracket against a mock ATM Settings dialog: opens the (labelled) gear,
- * sets Take Profit + Stop Loss in $ Value, and saves — verifying the numbers
- * stuck. Guards the dialog-driving logic and the esbuild __name gotcha. Skips
- * if no Chromium.
+ * selectAtmPreset against a mock ATM dropdown: opens the combobox next to the
+ * "ATM" label and clicks the option with the exact preset name, then verifies
+ * the panel shows it. Guards the dropdown-driving logic. Skips if no Chromium.
  */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -34,13 +33,16 @@ function fake(page: unknown): any {
   b.loggedIn = true;
   b.currentAccount = "LFE05079261220006";
   b.lastQty = null;
-  b.lastBracket = null;
+  b.lastPreset = null;
   b.shotDir = tmpdir();
   b.config = { orderConfirmWaitMs: 100, switchSettleMs: 50, captureShots: false };
   return b;
 }
 
-test("setBracket writes Take Profit + Stop Loss and caches", async (t) => {
+const shown = (page: import("playwright").Page) =>
+  page.evaluate(() => document.getElementById("atmbox")!.textContent);
+
+test("selectAtmPreset opens the ATM dropdown and picks the named preset", async (t) => {
   const browser = await launch();
   if (!browser) return t.skip("no Chromium available");
   try {
@@ -48,29 +50,29 @@ test("setBracket writes Take Profit + Stop Loss and caches", async (t) => {
     await page.goto(fixture);
     const b = fake(page);
 
-    await b.setBracket(30, 20);
-    assert.equal(await page.evaluate(() => (document.getElementById("tp") as HTMLInputElement).value), "30");
-    assert.equal(await page.evaluate(() => (document.getElementById("sl") as HTMLInputElement).value), "20");
-    assert.equal(b.lastBracket, "30/20");
+    await b.selectAtmPreset("50");
+    assert.equal(await shown(page), "50", "panel should show preset 50");
+    assert.equal(b.lastPreset, "50");
 
-    // Same amounts again = cached no-op (and the dialog is closed, so if it
-    // tried to re-open+set it would still succeed; the point is it returns fast).
-    await b.setBracket(30, 20);
-    assert.equal(b.lastBracket, "30/20");
+    await b.selectAtmPreset("funded");
+    assert.equal(await shown(page), "funded");
+
+    // Cached: same preset again is a no-op (still shows funded).
+    await b.selectAtmPreset("funded");
+    assert.equal(await shown(page), "funded");
   } finally {
     await browser.close();
   }
 });
 
-test("setBracket rejects non-positive amounts before touching the page", async (t) => {
+test("selectAtmPreset throws for a name that isn't in the dropdown", async (t) => {
   const browser = await launch();
   if (!browser) return t.skip("no Chromium available");
   try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({ viewport: { width: 900, height: 500 } });
     await page.goto(fixture);
     const b = fake(page);
-    await assert.rejects(() => b.setBracket(0, 20), /positive/i);
-    await assert.rejects(() => b.setBracket(30, 0), /positive/i);
+    await assert.rejects(() => b.selectAtmPreset("999"), /wasn't in the dropdown|Couldn't open/i);
   } finally {
     await browser.close();
   }

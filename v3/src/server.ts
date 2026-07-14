@@ -58,15 +58,15 @@ function armNext(group: Group): void {
     // This becomes the entry baseline used to judge win/loss at close.
     const eq = await browser.readSelectedEquity();
     if (eq != null) balanceLog.set(next.tradovateLabel, eq);
-    // Arm the account's $-per-contract ATM bracket now (idle — off the entry
-    // path). It's per-contract, so it doesn't depend on the trade size. If it
-    // fails, leave the existing ATM and tell the user; the trade can still fire.
-    if (next.targetPerContract > 0 && next.stopPerContract > 0) {
+    // Select the account's saved ATM preset now (idle — off the entry path), so
+    // the exchange holds its stop/target. If it fails, leave the existing ATM and
+    // tell the user; the trade can still fire on whatever ATM is on the ticket.
+    if (next.atmPreset) {
       try {
-        await browser.setBracket(next.targetPerContract, next.stopPerContract);
+        await browser.selectAtmPreset(next.atmPreset);
       } catch (err) {
-        pushEvent("warn", `Couldn't arm ${next.name}'s $ bracket: ${(err as Error).message}`, group);
-        notifyActionNeeded(`Couldn't set ${next.name}'s stop/target bracket on Tradovate — check it before trading. (${(err as Error).message})`);
+        pushEvent("warn", `Couldn't select ${next.name}'s ATM preset "${next.atmPreset}": ${(err as Error).message}`, group);
+        notifyActionNeeded(`Couldn't pick ${next.name}'s ATM preset "${next.atmPreset}" on Tradovate — check it before trading. (${(err as Error).message})`);
       }
     }
   }).catch((err) => log.warn(`Pre-arm failed: ${(err as Error).message}`));
@@ -479,47 +479,39 @@ api.post("/accounts/reactivate", (req, res) => {
   res.json({ ok });
 });
 
-api.post("/accounts/bracket", (req, res) => {
+api.post("/accounts/atm-preset", (req, res) => {
   const label = typeof req.body?.label === "string" ? req.body.label : "";
-  const target = Number(req.body?.targetPerContract);
-  const stop = Number(req.body?.stopPerContract);
-  if (!Number.isFinite(target) || !Number.isFinite(stop) || target < 0 || stop < 0) {
-    return res.status(400).json({ ok: false, error: "target and stop must be 0 or a positive dollar amount." });
-  }
-  const ok = store.setBracket(label, target, stop);
+  const preset = typeof req.body?.preset === "string" ? req.body.preset : "";
+  const ok = store.setAtmPreset(label, preset);
   if (ok) {
     const acct = store.find(label);
     pushEvent(
       "info",
-      target > 0 && stop > 0
-        ? `${acct?.name ?? label} bracket set: make $${target} / lose $${stop} per contract.`
-        : `${acct?.name ?? label} bracket cleared (uses whatever's on the Tradovate ticket).`,
+      preset.trim()
+        ? `${acct?.name ?? label} will use ATM preset "${preset.trim()}".`
+        : `${acct?.name ?? label} ATM preset cleared (uses whatever's on the Tradovate ticket).`,
     );
-    armNext(acct?.group ?? lastAlertGroup); // re-arm so the new bracket takes effect
+    armNext(acct?.group ?? lastAlertGroup); // re-arm so the new preset takes effect
   }
   res.json({ ok });
 });
 
-/** Calibration/test: write a bracket to the ATM dialog now, no order placed. */
-api.post("/test-bracket", async (req, res) => {
-  const target = Number(req.body?.targetPerContract);
-  const stop = Number(req.body?.stopPerContract);
-  if (!Number.isFinite(target) || target <= 0 || !Number.isFinite(stop) || stop <= 0) {
-    return res.json({ ok: true, set: false, message: "Enter a positive $ target and $ stop." });
-  }
+/** Calibration/test: select an ATM preset by name now, no order placed. */
+api.post("/test-preset", async (req, res) => {
+  const preset = typeof req.body?.preset === "string" ? req.body.preset.trim() : "";
+  if (!preset) return res.json({ ok: true, set: false, message: "Type the ATM preset name to test." });
   if (!browser.status().loggedIn) {
     return res.json({ ok: true, set: false, message: "Connect the browser and log into Tradovate first." });
   }
   const started = Date.now();
   try {
-    await enqueue(() => browser.setBracket(target, stop, true));
+    await enqueue(() => browser.selectAtmPreset(preset, true));
     const ms = Date.now() - started;
-    pushEvent("info", `🎯 Set ATM bracket to make $${target} / lose $${stop} per contract in ${ms}ms (test — no order).`);
-    res.json({ ok: true, set: true, ms, target, stop });
+    pushEvent("info", `🎯 Selected ATM preset "${preset}" in ${ms}ms (test — no order).`);
+    res.json({ ok: true, set: true, ms, preset });
   } catch (err) {
-    const fields = await enqueue(() => browser.inspectFields()).catch(() => []);
-    pushEvent("warn", `Bracket test couldn't set it: ${(err as Error).message}`);
-    res.json({ ok: true, set: false, message: (err as Error).message, fields });
+    pushEvent("warn", `Preset test couldn't select "${preset}": ${(err as Error).message}`);
+    res.json({ ok: true, set: false, message: (err as Error).message });
   }
 });
 

@@ -65,9 +65,8 @@ export interface StoredAccount {
   enabled: boolean;
   /** "active" = trades; "passed" = hit the eval target, retired from rotation. */
   status: "active" | "passed";
-  /** ATM bracket in dollars PER CONTRACT (0 = leave the ticket's own bracket). */
-  targetPerContract: number;
-  stopPerContract: number;
+  /** Saved Tradovate ATM preset name to select at arm time ("" = leave ticket's). */
+  atmPreset: string;
 }
 
 /** A normalized order the executor knows how to act on. */

@@ -47,8 +47,8 @@ export class TradovateBrowser {
   /** The order size we last set on the ticket. Lets us skip re-setting the same
    *  size (a pure no-op) and forces a re-set after an account switch. */
   private lastQty: number | null = null;
-  /** The ATM bracket ("$target/$stop") we last wrote, to skip re-setting it. */
-  private lastBracket: string | null = null;
+  /** The ATM preset we last selected, to skip re-selecting the same one. */
+  private lastPreset: string | null = null;
   private readonly shotDir: string;
 
   constructor(private readonly config: Config) {
@@ -99,7 +99,7 @@ export class TradovateBrowser {
         this.loggedIn = false;
         this.currentAccount = null;
         this.lastQty = null;
-        this.lastBracket = null;
+        this.lastPreset = null;
       });
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
       await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" });
@@ -127,7 +127,7 @@ export class TradovateBrowser {
     log.warn("Recovering Tradovate session (reload + re-login)…");
     this.currentAccount = null;
     this.lastQty = null;
-    this.lastBracket = null;
+    this.lastPreset = null;
     await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
     await this.refreshLoginState(6_000);
     if (!this.loggedIn) {
@@ -477,142 +477,89 @@ export class TradovateBrowser {
   }
 
   /**
-   * Write the ATM bracket (Take Profit + Stop Loss) in DOLLARS PER CONTRACT via
-   * Tradovate's "ATM Settings" dialog, so the exchange holds the stop/target and
-   * exits fire at exchange speed. Set at ARM time (idle), so it never touches the
-   * entry click. Cached (same amounts = no-op). SAFETY: it forces the dialog's
-   * "Show in" to "$ Value" before typing (so numbers are dollars, not ticks),
-   * verifies each field reads back the exact amount, and on any miss it CANCELS
-   * without saving and throws — so a wrong bracket can never be armed.
+   * Select a saved Tradovate ATM preset by NAME from the ATM dropdown, so the
+   * exchange holds that preset's stop/target. Done at ARM time (idle) — off the
+   * entry click. Cached (same preset = no-op). Verifies the preset shows after
+   * and throws on any miss, so a wrong bracket can't be armed. SAFE: only ever
+   * opens the ATM dropdown and clicks a matching option — never a trade button.
    */
-  async setBracket(targetPerContract: number, stopPerContract: number, force = false): Promise<void> {
-    if (!(targetPerContract > 0) || !(stopPerContract > 0)) {
-      throw new Error(`Bracket needs a positive $ target and stop (got target ${targetPerContract}, stop ${stopPerContract}).`);
-    }
-    const tp = Math.round(targetPerContract * 100) / 100;
-    const sl = Math.round(stopPerContract * 100) / 100;
-    const key = `${tp}/${sl}`;
-    if (!force && this.lastBracket === key) return;
+  async selectAtmPreset(name: string, force = false): Promise<void> {
+    const want = name.trim();
+    if (!want) return;
+    if (!force && this.lastPreset === want) return;
     await this.requireLoggedIn();
-
-    if (!(await this.atmDialogVisible())) await this.openAtmSettings();
-    if (!(await this.atmDialogVisible())) {
-      await this.snapshot("atm-dialog-not-open", true);
-      throw new Error("Couldn't open the ATM Settings dialog to set the bracket.");
-    }
-    try {
-      if (!(await this.ensureShowInDollars())) {
-        throw new Error('Couldn\'t switch the ATM "Show in" to "$ Value".');
-      }
-      const tpOk = await this.setDialogNumber(/take\s*profit/i, tp);
-      const slOk = await this.setDialogNumber(/stop\s*loss/i, sl);
-      if (!tpOk || !slOk) throw new Error(`Couldn't set the bracket to $${tp}/$${sl} per contract.`);
-      await this.clickDialogButton(/^\s*save\s*$/i);
-      await this.p.waitForTimeout(200).catch(() => {});
-      this.lastBracket = key;
-      log.info(`ATM bracket set: +$${tp} / -$${sl} per contract.`);
-    } catch (err) {
-      await this.snapshot("set-bracket-failed", true);
-      await this.clickDialogButton(/cancel|close/i).catch(() => {});
-      this.lastBracket = null;
-      throw new Error(`${(err as Error).message} — bracket left unchanged so a wrong stop/target can't fire.`);
-    }
-  }
-
-  private async atmDialogVisible(): Promise<boolean> {
-    if (!this.page) return false;
-    return await this.page
-      .getByText(/ATM Settings/i)
-      .first()
-      .isVisible({ timeout: 1_000 })
-      .catch(() => false);
-  }
-
-  /**
-   * Click the little gear next to the ATM strategy to open its settings.
-   * SAFETY: only ever clicks clearly settings/gear controls — never anything
-   * that could be a Buy/Sell/Exit button. If a click opens the WRONG dialog it
-   * presses Escape and tries the next candidate.
-   */
-  private async openAtmSettings(): Promise<void> {
     const p = this.p;
-    const candidates = [
-      p.locator('[aria-label*="atm" i][aria-label*="setting" i]'),
-      p.locator('[title*="atm" i][title*="setting" i]'),
-      p.locator('[aria-label*="setting" i]'),
-      p.locator('[class*="cog" i], [class*="gear" i]'),
+
+    if (await this.atmPresetShown(want)) {
+      this.lastPreset = want;
+      return;
+    }
+
+    // Open the ATM strategy dropdown (a dropdown/combobox by the "ATM" label).
+    const openers = [
+      p.locator('[role="combobox"]:near(:text("ATM"))'),
+      p.locator('[class*="dropdown" i]:near(:text("ATM"))'),
+      p.locator('[class*="select" i]:near(:text("ATM"))'),
+      p.locator("select:near(:text(\"ATM\"))"),
     ];
-    for (const c of candidates) {
-      const el = c.first();
-      if (await el.isVisible({ timeout: 1_500 }).catch(() => false)) {
-        await el.click({ timeout: 3_000 }).catch(() => {});
-        if (await this.atmDialogVisible()) return;
-        // Wrong dialog/menu — close it before trying the next candidate.
+    let opened = false;
+    for (const o of openers) {
+      const el = o.first();
+      if (await el.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        await el.click({ timeout: 2_500 }).catch(() => {});
+        if (await this.atmOptionVisible(want)) {
+          opened = true;
+          break;
+        }
         await p.keyboard.press("Escape").catch(() => {});
-        await p.waitForTimeout(150).catch(() => {});
+        await p.waitForTimeout(120).catch(() => {});
       }
     }
-  }
-
-  /** Ensure the dialog's "Show in" is "$ Value" so amounts are DOLLARS, not ticks. */
-  private async ensureShowInDollars(): Promise<boolean> {
-    const p = this.p;
-    const dollarShown = () => p.getByText(/\$\s*value/i).first().isVisible({ timeout: 1_000 }).catch(() => false);
-    if (await dollarShown()) return true;
-    // Open the "Show in" control and pick "$ Value".
-    await p.getByText(/show\s*in/i).first().click({ timeout: 2_000 }).catch(() => {});
-    const opt = p.getByText(/\$\s*value/i).first();
-    if (await opt.isVisible({ timeout: 1_500 }).catch(() => false)) {
-      await opt.click({ timeout: 2_000 }).catch(() => {});
+    if (!opened) {
+      await this.snapshot("atm-dropdown-not-open", true);
+      throw new Error(`Couldn't open the ATM dropdown to pick preset "${want}".`);
     }
-    return await dollarShown();
+
+    if (!(await this.clickAtmOption(want))) {
+      await p.keyboard.press("Escape").catch(() => {});
+      await this.snapshot("atm-preset-not-found", true);
+      throw new Error(`ATM preset "${want}" wasn't in the dropdown — check the name matches exactly.`);
+    }
+    await p.waitForTimeout(200).catch(() => {});
+    if (!(await this.atmPresetShown(want))) {
+      await this.snapshot("atm-preset-not-applied", true);
+      this.lastPreset = null;
+      throw new Error(`ATM preset "${want}" didn't apply — bracket left unchanged so a wrong one can't fire.`);
+    }
+    this.lastPreset = want;
+    log.info(`ATM preset selected: ${want}`);
   }
 
-  /** Find the number input in the dialog row labelled `labelRe`, type `value`,
-   *  and return true only if it reads back exactly. */
-  private async setDialogNumber(labelRe: RegExp, value: number): Promise<boolean> {
-    const marked = await this.p
-      .evaluate((args) => {
-        const re = new RegExp(args.src, args.flags);
-        const all = document.querySelectorAll("*");
-        let labelEl: Element | null = null;
-        for (let i = 0; i < all.length; i++) {
-          const el = all[i];
-          if (!el) continue;
-          const t = (el.textContent || "").trim();
-          if (t && t.length < 30 && re.test(t)) {
-            if (!labelEl || (el.textContent || "").length < (labelEl.textContent || "").length) labelEl = el;
-          }
-        }
-        if (!labelEl) return false;
-        let container: Element | null = labelEl;
-        let input: HTMLInputElement | null = null;
-        for (let up = 0; up < 4 && container; up++) {
-          const inp = container.querySelector("input");
-          if (inp) {
-            input = inp as HTMLInputElement;
-            break;
-          }
-          container = container.parentElement;
-        }
-        if (!input) return false;
-        input.setAttribute("data-bot-atm", "1");
-        return true;
-      }, { src: labelRe.source, flags: labelRe.flags })
-      .catch(() => false);
-    if (!marked) return false;
-    const box = this.p.locator("[data-bot-atm]").first();
-    await box.click({ timeout: 3_000 }).catch(() => {});
-    await box.press("ControlOrMeta+a").catch(() => {});
-    await box.pressSequentially(String(value), { delay: 15 }).catch(() => {});
-    await box.press("Tab").catch(() => {});
-    const read = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
-    await box.evaluate((el) => el.removeAttribute("data-bot-atm")).catch(() => {});
-    return read === value;
+  /** Is `name` the currently-selected ATM preset shown in the panel? */
+  private async atmPresetShown(name: string): Promise<boolean> {
+    if (!this.page) return false;
+    const exact = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
+    const box = this.page
+      .locator('[role="combobox"], select, [class*="dropdown" i], [class*="select" i]')
+      .filter({ hasText: exact });
+    return await box.first().isVisible({ timeout: 800 }).catch(() => false);
   }
 
-  private async clickDialogButton(nameRe: RegExp): Promise<void> {
-    await this.p.getByRole("button", { name: nameRe }).first().click({ timeout: 3_000 });
+  private atmOption(name: string) {
+    return this.p
+      .getByRole("option", { name, exact: true })
+      .or(this.p.locator('[role="listbox"], [role="menu"], [class*="menu" i], [class*="dropdown" i]').getByText(name, { exact: true }));
+  }
+
+  private async atmOptionVisible(name: string): Promise<boolean> {
+    return await this.atmOption(name).first().isVisible({ timeout: 1_200 }).catch(() => false);
+  }
+
+  private async clickAtmOption(name: string): Promise<boolean> {
+    const el = this.atmOption(name).first();
+    if (!(await el.isVisible({ timeout: 1_000 }).catch(() => false))) return false;
+    await el.click({ timeout: 2_500 }).catch(() => {});
+    return true;
   }
 
   /**
