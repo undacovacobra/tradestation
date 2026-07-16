@@ -3,7 +3,7 @@
   "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "V3 (self-healing test copy of V2, port 3400): auto-connect on boot, popup-killer, phone notifications, crash watchdog. Browser automation, no API.",
+  "description": "ATLAS Tradovate execution manager: credential lanes, funded-first scheduling, persistent browser sessions, and safe browser automation.",
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",

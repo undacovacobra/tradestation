@@ -99,12 +99,6 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 }
 .banner.red { background: var(--red-soft); color: var(--red); border: 1px solid #f3c2c6; }
 
-.groups { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-@media (max-width: 800px) { .groups { grid-template-columns: 1fr; } }
-
-.group h2 { margin: 0 0 12px; font-size: 18px; }
-.group h2 small { color: var(--muted); font-weight: 500; }
-
 .webhook-row {
   display: flex;
   align-items: center;
@@ -116,15 +110,133 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
   margin-bottom: 12px;
 }
 .webhook-label { font-size: 13px; color: var(--blue); font-weight: 600; }
-.webhook-url {
-  font-size: 13px;
-  background: #fff;
-  padding: 4px 8px;
-  border-radius: 6px;
+.section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.section-heading h2 { margin-bottom: 3px; }
+.section-heading small { color: var(--muted); }
+.credential-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #cdd8f5;
+  border-radius: 10px;
+  background: #f4f7ff;
+}
+.credential-tools > div { display: grid; gap: 2px; flex: 1 1 300px; min-width: 0; }
+.credential-tools small { color: var(--muted); }
+.login-list { display: grid; gap: 8px; margin-bottom: 12px; }
+.credential-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fbfcff; }
+.credential-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.credential-stage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.credential-stage-panel {
+  min-width: 0;
   border: 1px solid var(--line);
-  word-break: break-all;
-  flex: 1;
-  min-width: 160px;
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--card);
+}
+.credential-stage-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  min-width: 0;
+  min-height: 34px;
+  padding-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.credential-stage-heading > strong { color: var(--ink); font-size: 15px; margin-right: auto; }
+.credential-stage-heading .readiness-error { flex-basis: 100%; margin: 0; }
+.credential-account-list { list-style: none; padding: 0; margin: 0; }
+.credential-account-row {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.9fr) minmax(280px, 1.4fr) minmax(260px, auto);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.credential-account-row:first-child { border-top: 0; }
+.credential-account-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.credential-account-identity { display: block; min-width: 0; overflow: hidden; }
+.credential-account-identity strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.credential-account-id { display: block; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.credential-account-details {
+  display: flex;
+  align-items: center;
+  gap: 6px 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.credential-account-details .balance-row { display: inline-flex; margin: 0; min-width: 0; }
+.credential-account-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.credential-account-actions .btn.small { padding: 4px 7px; font-size: 12px; border-radius: 7px; }
+.credential-stage-panel .credential-account-row { grid-template-columns: 1fr; gap: 7px; }
+.credential-stage-panel .credential-account-actions { justify-content: flex-start; }
+.credential-account-empty { color: var(--muted); font-size: 13px; padding: 14px 0 4px; border-top: 1px solid var(--line); }
+.stage-tag { flex: none; padding: 2px 6px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: .03em; }
+.stage-tag.evals { color: #3156a3; background: #e8eefc; }
+.stage-tag.funded { color: #8a5500; background: var(--amber-soft); }
+.open-account-trade { color: var(--amber); font-size: 12px; font-weight: 700; }
+.login-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 9px; padding: 10px; }
+.login-details { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.login-details span, .login-details small { color: var(--muted); font-size: 12.5px; }
+.login-picker { display: grid; gap: 8px; margin: 14px 0; }
+.modal-form-grid { display: grid; gap: 12px; margin-top: 14px; }
+.field-stack { display: grid; gap: 5px; color: var(--muted); font-size: 13px; font-weight: 600; min-width: 0; }
+.field-stack input, .field-stack select { width: 100%; min-width: 0; font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+.modal-result { min-height: 22px; line-height: 1.4; }
+.flatten-results { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 8px; }
+.flatten-result { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #f7f8fb; }
+.flatten-result.closed, .flatten-result.already-flat { border-color: #b7dfc8; background: var(--green-soft); }
+.flatten-result.failed { border-color: #f3c2c6; background: var(--red-soft); color: var(--red); }
+.flatten-result span, .modal-note { color: var(--muted); font-size: 13px; }
+.account-broker-position { color: var(--red); font-size: 12px; font-weight: 700; }
+.webhook-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.webhook-card { display: grid; grid-template-columns: 1fr auto; align-items: center; margin: 0; padding: 9px 11px; }
+.webhook-card .webhook-label { grid-column: 1 / -1; }
+.webhook-card code { min-width: 0; overflow-wrap: anywhere; font-size: 10.75px; line-height: 1.25; }
+.ready-tag { display: inline-block; margin-left: 7px; padding: 2px 6px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.ready-tag.ready { color: var(--green); background: var(--green-soft); }
+.ready-tag.not-ready { color: var(--red); background: var(--red-soft); }
+.readiness-error { margin-top: 5px; color: var(--red); font-size: 12.5px; }
+.broker-position strong { color: var(--green); }
+.broker-position[data-broker-state="UNKNOWN"] strong,
+.broker-position[data-broker-state="AWAITING BROKER"] strong { color: var(--red); }
+.broker-position[data-broker-state^="FLAT CHECK"] strong { color: var(--amber); }
+@media (max-width: 700px) {
+  .section-heading, .login-row, .credential-heading { align-items: stretch; flex-direction: column; }
+  .login-row .btn { width: 100%; }
+  .webhook-grid { grid-template-columns: 1fr; }
+  .credential-account-row { grid-template-columns: 1fr; gap: 7px; }
+  .credential-account-actions { justify-content: flex-start; }
+  .credential-stage-grid { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 701px) and (max-width: 1050px) {
+  .credential-stage-panel .credential-account-row { grid-template-columns: 1fr; }
+  .credential-stage-panel .credential-account-actions { grid-column: auto; justify-content: flex-start; }
 }
 
 .contracts-row {
@@ -161,6 +273,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .account-list { list-style: none; margin: 0 0 12px; padding: 0; }
 .account-list li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 9px 6px;
@@ -207,17 +320,6 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .icon-btn:hover { background: #f0f2f7; }
 .icon-btn.remove { color: var(--red); }
 .icon-btn.nextbtn { color: var(--blue); border-color: #c9d6f5; }
-
-.add-form { display: flex; gap: 8px; flex-wrap: wrap; }
-.add-form input {
-  font: inherit;
-  font-size: 14px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  flex: 1;
-  min-width: 130px;
-}
 
 .log-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .tally-chip {

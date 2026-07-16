@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { normalizePublicWebhookBase } from "./publicWebhookBase.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const ROOT = resolve(__dirname, "..");
@@ -14,7 +15,7 @@ function required(name: string): string {
 export const config = {
   webhookSecret: required("WEBHOOK_SECRET"),
   dashboardPassword: process.env.DASHBOARD_PASSWORD ?? "",
-  // V3 lives on 3400 so it can run alongside V2 (3300) while being tested.
+  // ATLAS keeps the established V3 port so existing webhooks remain valid.
   port: Number(process.env.PORT ?? 3400),
   headed: (process.env.HEADED ?? "true") === "true",
   // Self-healing: open + log into the Tradovate browser automatically on boot
@@ -29,6 +30,9 @@ export const config = {
   // raise ORDER_CONFIRM_WAIT_MS so the bot has time to see and click it.
   orderConfirmWaitMs: Number(process.env.ORDER_CONFIRM_WAIT_MS ?? 250),
   switchSettleMs: Number(process.env.SWITCH_SETTLE_MS ?? 250),
+  // Hold evaluation-only entries very briefly so a funded entry arriving at
+  // nearly the same moment can take priority on the shared credential queue.
+  fundedPriorityWindowMs: Math.max(0, Number(process.env.FUNDED_PRIORITY_WINDOW_MS ?? 75)),
   // Save a screenshot on every order (slower). Failures always screenshot.
   captureShots: (process.env.SCREENSHOTS ?? "false") === "true",
   // Daily WIN bench: an account that closes a winner sits out the rest of the
@@ -45,6 +49,7 @@ export const config = {
   ngrokAuthtoken: process.env.NGROK_AUTHTOKEN ?? "",
   ngrokDomain: process.env.NGROK_DOMAIN ?? "",
   ngrokAutostart: (process.env.NGROK_AUTOSTART ?? "true") === "true",
+  publicWebhookBaseUrl: normalizePublicWebhookBase(process.env.PUBLIC_WEBHOOK_BASE_URL),
   dataDir: resolve(ROOT, "data"),
   settingsPath: resolve(ROOT, "data", "settings.json"),
   balancesPath: resolve(ROOT, "data", "balances.json"),

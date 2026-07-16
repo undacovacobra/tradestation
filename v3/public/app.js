@@ -4,6 +4,10 @@
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
+const loginOptions = (selectedId = "") => ((status && status.logins) || [])
+  .map((login) => `<option value="${esc(login.id)}" ${login.id === selectedId ? "selected" : ""}>${esc(login.name)} - ${esc(login.firm)}</option>`)
+  .join("");
+
 let lastStatusJson = "";
 let status = null;
 let busy = false;
@@ -34,6 +38,30 @@ async function api(path, body) {
   return data;
 }
 
+async function apiDelete(path) {
+  const res = await fetchAuthed("/api" + path, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+async function flattenApi(path, body) {
+  const res = await fetchAuthed("/api" + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    showLogin(false);
+    throw new Error("Please log in.");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (((!res.ok && res.status !== 207) && !data.result) || (!data.results && !data.result)) {
+    throw new Error(data.error || "The broker flatten scan could not run.");
+  }
+  return data;
+}
+
 async function refresh() {
   try {
     const res = await fetchAuthed("/api/status");
@@ -46,7 +74,7 @@ async function refresh() {
     status = data;
     render();
   } catch {
-    setPill("pill-running", "red", "Can't reach bot");
+    setPill("pill-running", "red", "Can't reach ATLAS");
   }
 }
 
@@ -79,7 +107,7 @@ function render() {
   setPill("pill-mode", status.mode === "live" ? "red" : "green", status.mode === "live" ? "LIVE MODE" : "Practice mode", false);
 
   const btnRunning = $("#btn-running");
-  btnRunning.textContent = status.running ? "⏸ Pause bot" : "▶ Start bot";
+  btnRunning.textContent = status.running ? "⏸ Pause ATLAS" : "▶ Start ATLAS";
   btnRunning.className = "btn big " + (status.running ? "" : "success");
 
   const btnMode = $("#btn-mode");
@@ -101,7 +129,7 @@ function render() {
     banner.hidden = true;
   }
 
-  for (const group of ["evals", "funded"]) renderGroup(group);
+  renderLogins();
   renderPassed();
   renderTradeLog();
   renderEvents();
@@ -112,9 +140,10 @@ function renderTradeLog() {
   const summary = $("#log-summary");
   const table = $("#log-table");
   let rows = [];
-  for (const group of ["evals", "funded"]) {
-    const info = status.groups[group];
-    if (info && info.log) rows = rows.concat(info.log.map((t) => ({ ...t, group })));
+  for (const credential of status.credentials || []) {
+    for (const lane of credential.lanes || []) {
+      if (lane.log) rows = rows.concat(lane.log.map((t) => ({ ...t, group: lane.stage, credential: credential.name })));
+    }
   }
   rows.sort((a, b) => new Date(b.closedAt) - new Date(a.closedAt));
 
@@ -159,64 +188,124 @@ function renderTradeLog() {
   table.innerHTML = html;
 }
 
-function renderGroup(group) {
-  const card = $("#group-" + group);
-  const info = status.groups[group];
-  if (!card || !info) return;
+function renderLogins() {
+  const list = $("#login-list");
+  if (!list) return;
+  const credentials = status.credentials || [];
+  const webhookBase = status.publicWebhookBaseUrl || (status.tunnel && status.tunnel.url) || window.location.origin;
 
-  $(".webhook-url", card).textContent = new URL(info.webhookPath, window.location.origin).href;
+  list.innerHTML = credentials.map((credential) => {
+    const connection = credential.status || {};
+    const connectionState = connection.loggedIn ? "Logged in" : connection.connected ? "Needs login" : "Not connected";
+    const lanes = credential.lanes || [];
+    const orderedStages = ["evals", "funded"];
+    const stagePanels = orderedStages.map((stage) => {
+      const lane = lanes.find((candidate) => candidate.stage === stage) || {
+        stage,
+        accounts: [],
+        next: "None",
+        nextLabel: null,
+        queue: { totalPending: 0, running: false },
+        brokerPosition: { state: "FLAT" },
+      };
+      const queue = lane.queue || { totalPending: 0, running: false };
+      const brokerPosition = lane.brokerPosition || { state: lane.openTrade ? "AWAITING BROKER" : "FLAT" };
+      const accountRows = (lane.accounts || []).map((account) => {
+        const isNext = lane.nextLabel === account.tradovateLabel;
+        const isOpen = lane.openTrade && (
+          lane.openTrade.tradovateLabel === account.tradovateLabel ||
+          lane.openTrade.accountName === account.name
+        );
+        const brokerAccountOpen = account.brokerPosition?.status === "open";
+        const stageLabel = account.group === "funded" ? "FUNDED" : "EVAL";
+        return `<li class="credential-account-row ${account.enabled ? "" : "disabled"}" data-stage="${esc(account.group)}" data-label="${esc(account.tradovateLabel)}">
+          <div class="credential-account-main">
+            <span class="credential-account-identity">
+              <strong>${esc(account.name)}</strong>
+              <small class="credential-account-id">${esc(account.tradovateLabel)}</small>
+            </span>
+            <span class="stage-tag ${esc(account.group)}">${stageLabel}</span>
+            ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
+          </div>
+          <div class="credential-account-details">
+            ${balanceLine(account)}
+            ${bracketLine(account)}
+            ${sparkline(account.history)}
+            ${isOpen ? `<span class="open-account-trade">Open: ${esc(lane.openTrade.symbol || "position")}</span>` : ""}
+            ${account.brokerPosition ? `<span class="account-broker-position">Position: <strong>${account.brokerPosition.status === "open" ? esc(String(account.brokerPosition.netPosition)) : esc(account.brokerPosition.status.toUpperCase())}</strong></span>` : ""}
+          </div>
+          <div class="credential-account-actions">
+            ${!isNext && account.enabled ? '<button class="btn small credential-account-action" data-act="next">Next</button>' : ""}
+            <button class="btn small credential-account-action" data-act="bracket">ATM</button>
+            <button class="btn small credential-position-check">Position</button>
+            ${brokerAccountOpen ? '<button class="btn small danger credential-flatten-position">Flatten position</button>' : ""}
+            <button class="btn small credential-account-action" data-act="up" title="Move up">&#9650;</button>
+            <button class="btn small credential-account-action" data-act="down" title="Move down">&#9660;</button>
+            <button class="btn small credential-account-action" data-act="toggle">${account.enabled ? "Disable" : "Enable"}</button>
+            <button class="btn small credential-account-action remove" data-act="remove">Remove</button>
+            ${isOpen ? '<button class="btn small credential-reset">Mark closed / reset</button>' : ""}
+          </div>
+        </li>`;
+      }).join("") || '<li class="credential-account-empty">No accounts assigned. Use Scan &amp; assign accounts above.</li>';
 
-  const nextRow = $(".next-row", card);
-  let html = info.next
-    ? `Next trade goes to: <strong>${esc(info.next)}</strong>`
-    : `<span style="color:var(--muted)">No account is ready for the next trade.</span>`;
-  if (info.openTrade) {
-    const q = info.openTrade.quantity != null ? info.openTrade.quantity + "x " : "";
-    html += `<span class="open-trade">📈 Trade open: ${esc(info.openTrade.action.toUpperCase())} ${esc(q)}${esc(info.openTrade.symbol)} on ${esc(info.openTrade.accountName)}
-      <button class="btn small reset-trade" title="Tell the bot this trade is closed and move to the next account (places no order)">✖ Mark closed / reset</button></span>`;
-  }
-  html += `<div style="color:var(--muted);font-size:13px;margin-top:4px">Round-trips finished today: ${info.tradesToday}</div>`;
-  nextRow.innerHTML = html;
+      return `<section class="credential-stage-panel" data-stage="${esc(lane.stage)}">
+        <header class="credential-stage-heading">
+          <strong>${lane.stage === "funded" ? "Funded" : "Evaluations"}</strong>
+          <span>Next: ${esc(lane.next || "None")}</span>
+          <span>Queue: ${queue.totalPending || 0}${queue.running ? " + running" : ""}</span>
+          <span class="broker-position" data-broker-state="${esc(brokerPosition.state || "UNKNOWN")}">Broker: <strong>${esc(brokerPosition.state || "UNKNOWN")}</strong></span>
+          ${brokerPosition.reason ? `<span class="readiness-error">${esc(brokerPosition.reason)}</span>` : ""}
+          ${lane.readinessError ? `<span class="readiness-error">${esc(lane.readinessError)}</span>` : ""}
+        </header>
+        <ul class="credential-account-list">${accountRows}</ul>
+      </section>`;
+    }).join("");
 
-  const resetBtn = $(".reset-trade", nextRow);
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      if (!confirm("Tell the bot this trade is CLOSED and move to the next account?\n\nThis only fixes the bot's memory — it does NOT close any real position on Tradovate. Use it only when the bot thinks a trade is open but there isn't one.")) return;
-      doAction(() => api("/reset-trade", { group }));
-    });
-  }
-
-  const list = $(".account-list", card);
-  list.innerHTML = "";
-  if (info.accounts.length === 0) {
-    list.innerHTML = `<li style="color:var(--muted)">No accounts yet — add one below or use “Scan Tradovate accounts”.</li>`;
-  }
-  for (const acct of info.accounts) {
-    const li = document.createElement("li");
-    if (!acct.enabled) li.classList.add("disabled");
-    const resting = acct.restingToday;
-    if (resting) li.classList.add("resting");
-    const isNext = info.next && acct.name === info.next && acct.enabled && !resting;
-    if (isNext) li.classList.add("next-up");
-    li.innerHTML = `
-      <div class="acct-name">
-        <span class="nick">${esc(acct.name)}</span>
-        ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
-        ${resting ? '<span class="rest-tag">😴 WON TODAY</span>' : ""}
-        <span class="label">${esc(acct.tradovateLabel)}</span>
-        ${balanceLine(acct)}
+    const accountCount = lanes.flatMap((lane) => lane.accounts || []).length;
+    return `<div class="credential-card" data-login-id="${esc(credential.id)}">
+      <div class="credential-heading">
+        <div class="login-details">
+          <strong>${esc(credential.name)}</strong>
+          <span>${esc(credential.firm)} &middot; Tradovate &middot; one browser connection for all accounts</span>
+          <small>${esc(connectionState)} &middot; ${accountCount} account${accountCount === 1 ? "" : "s"}</small>
+        </div>
+        ${accountCount === 0 ? '<button class="btn small login-remove">Remove unused login</button>' : ""}
       </div>
-      ${sparkline(acct.history)}
-      ${acct.enabled && !isNext && !resting ? '<button class="icon-btn nextbtn" title="Make this the next account to trade" data-act="next">⏭</button>' : ""}
-      <button class="icon-btn" title="Move up" data-act="up">▲</button>
-      <button class="icon-btn" title="Move down" data-act="down">▼</button>
-      <button class="icon-btn" title="${acct.enabled ? "Turn off (skip this account)" : "Turn on"}" data-act="toggle">${acct.enabled ? "✅" : "🚫"}</button>
-      <button class="icon-btn remove" title="Remove" data-act="remove">✕</button>`;
-    for (const btn of $$(".icon-btn", li)) btn.addEventListener("click", () => accountAction(btn.dataset.act, acct));
-    list.appendChild(li);
+      <div class="credential-stage-grid">${stagePanels}</div>
+    </div>`;
+  }).join("") || '<p style="color:var(--muted)">No saved Tradovate credentials.</p>';
+
+  $("#global-evals-webhook-url").textContent = new URL((status.globalWebhookPaths || {}).evals || "/webhook/evals", webhookBase).href;
+  $("#global-funded-webhook-url").textContent = new URL((status.globalWebhookPaths || {}).funded || "/webhook/funded", webhookBase).href;
+
+  for (const credentialRow of $$(".credential-card", list)) {
+    const loginId = credentialRow.dataset.loginId;
+    const credential = credentials.find((item) => item.id === loginId);
+    const remove = $(".login-remove", credentialRow);
+    if (remove) remove.addEventListener("click", () => doAction(() => apiDelete(`/logins/${loginId}`)));
+
+    for (const accountRow of $$(".credential-account-row", credentialRow)) {
+      const stage = accountRow.dataset.stage;
+      const label = accountRow.dataset.label;
+      const lane = (credential.lanes || []).find((item) => item.stage === stage);
+      const account = lane && (lane.accounts || []).find((item) => item.tradovateLabel === label);
+      if (!account) continue;
+
+      for (const button of $$(".credential-account-action", accountRow)) {
+        button.addEventListener("click", () => accountAction(button.dataset.act, account));
+      }
+      $(".credential-position-check", accountRow).addEventListener("click", () => doAction(() => api("/browser/position", {
+        loginId,
+        group: stage,
+        label,
+      })));
+      const flatten = $(".credential-flatten-position", accountRow);
+      if (flatten) flatten.addEventListener("click", () => showFlattenOneModal(account));
+      const reset = $(".credential-reset", accountRow);
+      if (reset) reset.addEventListener("click", () => doAction(() => api("/reset-trade", { group: stage, credentialId: loginId })));
+    }
   }
 }
-
 function renderPassed() {
   const card = $("#passed-card");
   const list = $("#passed-list");
@@ -253,11 +342,22 @@ function balanceLine(acct) {
   if (acct.balance == null) {
     return `<span class="balance-row muted">Balance: not read yet (updates when it's armed or trading).</span>`;
   }
+  if (acct.group === "funded") {
+    return `<span class="balance-row">&#128176; <strong>${money(acct.balance)}</strong></span>`;
+  }
   if (acct.balance >= target) {
     return `<span class="balance-row">💰 <strong>${money(acct.balance)}</strong> — at the ${money(target)} target 🎯</span>`;
   }
   const toGo = acct.toTarget != null ? acct.toTarget : target - acct.balance;
   return `<span class="balance-row">💰 <strong>${money(acct.balance)}</strong> · ${money(toGo)} to ${money(target)}</span>`;
+}
+
+/** One line showing which saved ATM preset this account uses. */
+function bracketLine(acct) {
+  if (acct.atmPreset) {
+    return `<span class="balance-row">🎯 ATM preset: <strong>${esc(acct.atmPreset)}</strong></span>`;
+  }
+  return `<span class="balance-row muted">🎯 no ATM preset — uses the Tradovate ticket's</span>`;
 }
 
 /** Tiny inline SVG sparkline of an account's recent balance history. */
@@ -321,6 +421,7 @@ async function doAction(fn) {
 }
 
 async function accountAction(act, acct) {
+  if (act === "bracket") return showBracketModal(acct);
   return doAction(async () => {
     if (act === "remove") {
       if (!confirm(`Remove ${acct.name} (${acct.tradovateLabel}) from the rotation?`)) return;
@@ -328,14 +429,85 @@ async function accountAction(act, acct) {
     } else if (act === "toggle") {
       await api("/accounts/toggle", { label: acct.tradovateLabel });
     } else if (act === "next") {
-      await api("/next", { group: acct.group, label: acct.tradovateLabel });
+      await api("/next", { group: acct.group, credentialId: acct.loginId, label: acct.tradovateLabel });
+    } else if (act === "unrest") {
+      await api("/accounts/unrest", { group: acct.group, label: acct.tradovateLabel });
     } else {
       await api("/accounts/move", { label: acct.tradovateLabel, direction: act });
     }
   });
 }
 
+function chooseLogin(title, action) {
+  const logins = status.logins || [];
+  if (logins.length === 1) return action(logins[0].id);
+  if (logins.length === 0) return alert("Add a Tradovate login first.");
+  showModal(`<h2>${esc(title)}</h2>
+    <p>Choose the saved Tradovate session to use.</p>
+    <div class="login-picker">${logins.map((login) => `<button class="btn pick-login" data-login-id="${esc(login.id)}">${esc(login.name)} - ${esc(login.firm)}</button>`).join("")}</div>
+    <div class="modal-actions"><button class="btn" data-close>Cancel</button></div>`);
+  for (const button of $$(".pick-login", $("#modal-box"))) {
+    button.addEventListener("click", () => {
+      const loginId = button.dataset.loginId;
+      closeModal();
+      action(loginId);
+    });
+  }
+}
+
+function showFlattenResults(title, results) {
+  const rows = (results || []).map((result) => `<li class="flatten-result ${esc(result.outcome)}">
+    <strong>${esc(result.name)} (${esc(result.label)})</strong>
+    <span>${esc(result.message)}</span>
+  </li>`).join("");
+  showModal(`<h2>${esc(title)}</h2>
+    <ul class="flatten-results">${rows || '<li class="flatten-result failed">No account results were returned.</li>'}</ul>
+    <p class="modal-note">ATLAS kept its existing Running or Paused state.</p>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+}
+
+function showFlattenOneModal(account) {
+  showModal(`<h2>Flatten ${esc(account.name)}?</h2>
+    <div class="warn-box">
+      ATLAS will re-check <strong>${esc(account.tradovateLabel)}</strong> on Tradovate and only click
+      <strong>Exit at Mkt &amp; Cxl</strong> if the broker confirms a nonzero position.
+      This is a <strong>REAL broker action even in Practice mode</strong>.
+    </div>
+    <p>This does not pause ATLAS. Completion requires two consecutive broker-flat reads.</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn danger" id="confirm-flatten-one">Flatten this position</button>
+    </div>`);
+  $("#confirm-flatten-one").addEventListener("click", () => doAction(async () => {
+    const data = await flattenApi("/positions/flatten-one", {
+      confirm: "FLATTEN ONE",
+      loginId: account.loginId,
+      group: account.group,
+      label: account.tradovateLabel,
+    });
+    showFlattenResults("Flatten result", [data.result]);
+  }));
+}
+
 $("#btn-running").addEventListener("click", () => doAction(() => api("/running", { running: !status.running })));
+
+$("#btn-flatten-all").addEventListener("click", () => {
+  showModal(`<h2>Flatten every open position?</h2>
+    <div class="warn-box">
+      ATLAS will scan <strong>every saved account</strong>, including disabled and passed accounts.
+      It will only click <strong>Exit at Mkt &amp; Cxl</strong> where Tradovate confirms a nonzero position.
+      These are <strong>REAL broker actions even in Practice mode</strong>.
+    </div>
+    <p>Funded accounts are checked first within each login. This does not pause ATLAS; its current Running or Paused state stays unchanged.</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn danger" id="confirm-flatten-all">Flatten all confirmed positions</button>
+    </div>`);
+  $("#confirm-flatten-all").addEventListener("click", () => doAction(async () => {
+    const data = await flattenApi("/positions/flatten-all", { confirm: "FLATTEN ALL" });
+    showFlattenResults("Flatten all results", data.results);
+  }));
+});
 
 $("#btn-mode").addEventListener("click", () => {
   if (!status) return;
@@ -361,41 +533,125 @@ $("#btn-mode").addEventListener("click", () => {
   });
 });
 
-$("#btn-browser").addEventListener("click", () =>
+$("#btn-browser").addEventListener("click", () => chooseLogin("Connect a Tradovate login", (loginId) =>
   doAction(async () => {
     const btn = $("#btn-browser");
     btn.disabled = true;
     btn.textContent = "Opening browser…";
     try {
-      await api("/browser/connect", {});
+      await api("/browser/connect", { loginId });
     } finally {
       btn.disabled = false;
     }
   }),
-);
+));
 
-$("#btn-scan").addEventListener("click", () =>
+$("#btn-scan-assign").addEventListener("click", () => chooseLogin("Scan and assign a Tradovate login", (loginId) =>
   doAction(async () => {
-    const btn = $("#btn-scan");
-    btn.disabled = true;
-    btn.textContent = "Scanning…";
+    const result = await api(`/logins/${loginId}/accounts`);
+    showScanModal(result.labels, loginId);
+  }),
+));
+
+function showAddLoginModal() {
+  showModal(`
+    <h2>Add a Tradovate login</h2>
+    <p>Add another login only for a different Tradovate username and password. Evaluation and Funded accounts under the same username belong together in one login. After adding it, connect and log in, then scan and assign its accounts.</p>
+    <form id="add-login-modal" class="modal-form-grid">
+      <label class="field-stack">Login name<input name="name" placeholder="e.g. Tradovate Funded" required /></label>
+      <label class="field-stack">Prop firm<input name="firm" placeholder="e.g. Apex" required /></label>
+      <div id="add-login-result" class="modal-result" aria-live="polite"></div>
+      <div class="modal-actions">
+        <button class="btn" type="button" data-close>Cancel</button>
+        <button class="btn primary" type="submit">Add login</button>
+      </div>
+    </form>`);
+  const form = $("#add-login-modal");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    const result = $("#add-login-result");
+    button.disabled = true;
+    result.textContent = "Adding login…";
     try {
-      const { labels } = await api("/scan", {});
-      showScanModal(labels);
+      await api("/logins", { name: form.elements.name.value.trim(), firm: form.elements.firm.value.trim() });
+      closeModal();
+      lastStatusJson = "";
+      await refresh();
+    } catch (error) {
+      result.innerHTML = `<span class="error-text">${esc(error.message || "Could not add this login.")}</span>`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+$("#btn-add-login").addEventListener("click", showAddLoginModal);
+
+function showBracketModal(acct) {
+  showModal(`
+    <h2>🎯 ${esc(acct.name)} — ATM preset</h2>
+    <p>Type the <strong>name</strong> of the saved Tradovate ATM preset this account should use (e.g. <strong>25</strong>, <strong>50</strong>, <strong>funded</strong>). ATLAS picks it from the ATM dropdown before each trade, so the exchange holds the stop/target. Leave it blank to just use whatever ATM is on the ticket.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:14px 0">
+      <label>ATM preset name <input id="atm-preset" type="text" value="${esc(acct.atmPreset || "")}" placeholder="e.g. 25" style="font:inherit;width:160px;padding:10px;border-radius:8px;border:1px solid var(--line)" /></label>
+    </div>
+    <p style="color:var(--muted);font-size:13px">It must match the preset name in Tradovate <em>exactly</em> (same spelling and capitals).</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="atm-apply">Save</button>
+    </div>`);
+  $("#atm-apply").addEventListener("click", () =>
+    doAction(async () => {
+      await api("/accounts/atm-preset", { label: acct.tradovateLabel, preset: $("#atm-preset").value });
+      closeModal();
+    }),
+  );
+}
+
+$("#btn-testbracket").addEventListener("click", () => {
+  if (!status) return;
+  showModal(`
+    <h2>🎯 Test an ATM preset</h2>
+    <p>Type the name of a saved ATM preset. ATLAS picks it from the Tradovate ATM dropdown — <strong>no order is placed.</strong> Watch the ATM name change on the Tradovate screen.</p>
+    <p style="color:var(--muted);font-size:13px">The browser must be connected, logged in, and on an account.</p>
+    <form id="brk-form" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0">
+      <label>Login <select id="brk-login">${loginOptions()}</select></label>
+      <label>Preset name <input id="brk-preset" type="text" value="25" style="font:inherit;width:150px;padding:10px;border-radius:8px;border:1px solid var(--line)" /></label>
+      <button class="btn primary" type="submit">Pick &amp; time it</button>
+    </form>
+    <div id="brk-result" style="font-size:18px;min-height:24px"></div>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+  const form = $("#brk-form");
+  const result = $("#brk-result");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const preset = String($("#brk-preset").value || "").trim();
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    result.textContent = "Selecting…";
+    try {
+      const r = await api("/test-preset", { preset, loginId: $("#brk-login").value });
+      if (r.set) {
+        result.innerHTML = `<strong>Selected preset "${esc(r.preset)}" in ${r.ms}ms</strong> ✅`;
+      } else {
+        result.innerHTML = `<div style="font-size:16px;color:var(--red)">⚠️ ${esc(r.message || "Couldn't select it.")}</div>`;
+      }
+    } catch (err) {
+      result.innerHTML = `<span style="color:var(--red)">⚠️ ${esc(err.message)}</span>`;
     } finally {
       btn.disabled = false;
-      btn.textContent = "Scan Tradovate accounts";
     }
-  }),
-);
+  });
+});
 
 $("#btn-testqty").addEventListener("click", () => {
   if (!status) return;
   showModal(`
     <h2>🔢 Test order size</h2>
-    <p>Type a number of contracts and time how long the bot takes to set it on the Tradovate ticket. <strong>No order is placed.</strong></p>
+    <p>Type a number of contracts and time how long ATLAS takes to set it on the Tradovate ticket. <strong>No order is placed.</strong></p>
     <p style="color:var(--muted);font-size:13px">The browser must be connected, logged in, and sitting on an account (so the order ticket is showing). Type a different number each time to see a real set.</p>
     <form id="qty-form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0">
+      <label>Login <select id="qty-login">${loginOptions()}</select></label>
       <input id="qty-input" type="number" min="1" step="1" value="1" style="font:inherit;width:90px;padding:10px;border-radius:8px;border:1px solid var(--line)" />
       <button class="btn primary" type="submit">Set &amp; time it</button>
     </form>
@@ -418,14 +674,14 @@ $("#btn-testqty").addEventListener("click", () => {
     result.textContent = "Setting…";
     const t0 = Date.now();
     try {
-      const r = await api("/test-quantity", { quantity: qty });
+      const r = await api("/test-quantity", { quantity: qty, loginId: $("#qty-login").value });
       const total = Date.now() - t0;
       if (r.set) {
         result.innerHTML = `<strong>Set to ${r.quantity} in ${r.ms}ms</strong> ✅ <span style="color:var(--muted);font-size:13px">(button-to-answer ${total}ms)</span>`;
       } else {
         let html = `<div style="font-size:16px;color:var(--red)">⚠️ ${esc(r.message || "Couldn't set it.")}</div>`;
         if (r.fields && r.fields.length) {
-          html += `<p style="font-size:13px;color:var(--muted);margin:10px 0 4px">Boxes the bot can see on the ticket — <strong>screenshot this whole list for Claude</strong> so it can pick the right one:</p>`;
+          html += `<p style="font-size:13px;color:var(--muted);margin:10px 0 4px">Boxes ATLAS can see on the ticket — <strong>screenshot this whole list for support</strong> so it can be calibrated:</p>`;
           html += `<div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px">`;
           html += `<table style="width:100%;font-size:12px;border-collapse:collapse">`;
           html += `<tr style="text-align:left;color:var(--muted)"><th style="padding:3px 6px">#</th><th style="padding:3px 6px">kind</th><th style="padding:3px 6px">label / name / class</th><th style="padding:3px 6px">near</th><th style="padding:3px 6px">value</th></tr>`;
@@ -436,7 +692,7 @@ $("#btn-testqty").addEventListener("click", () => {
           });
           html += `</table></div>`;
         } else if (r.fields) {
-          html += `<p style="font-size:13px;color:var(--muted)">The bot couldn't see any input boxes at all — make sure the order ticket is open and showing on the Tradovate screen, then try again.</p>`;
+          html += `<p style="font-size:13px;color:var(--muted)">ATLAS couldn't see any input boxes — make sure the order ticket is open on the Tradovate screen, then try again.</p>`;
         }
         result.innerHTML = html;
       }
@@ -464,82 +720,25 @@ $("#btn-tunnel").addEventListener("click", () => {
   });
 });
 
-for (const btn of $$(".speed-test")) {
-  btn.addEventListener("click", () => {
-    if (!status) return;
-    const group = btn.closest(".group").dataset.group;
-    const runTest = (confirmLive) =>
-      doAction(async () => {
-        btn.disabled = true;
-        btn.textContent = "⏱ Testing…";
-        const t0 = Date.now();
-        try {
-          const r = await api("/speedtest", { group, confirmLive });
-          const total = Date.now() - t0;
-          const leg = (label, ok, ms, msg) =>
-            `<p style="font-size:20px;margin:6px 0"><strong>${label}: ${ms}ms</strong> ${ok ? "✅" : `<span style="color:var(--red)">⚠️ ${esc(msg)}</span>`}</p>`;
-          showModal(`
-            <h2>⏱ Speed test — ${esc(group)}</h2>
-            ${leg("Open", r.openOk, r.openMs, r.openMsg)}
-            ${leg("Close", r.closeOk, r.closeMs, r.closeMsg)}
-            <p>${r.mode === "live" ? "LIVE: includes the real browser clicks in Tradovate." : "Practice: measures everything except the browser clicks (no order placed)."}</p>
-            <p style="color:var(--muted);font-size:13px">This is the <strong>bot's</strong> own time. TradingView's own alert delivery adds 1–3s on top and isn't the bot. Button-to-answer total: ${total}ms.</p>
-            <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "⏱ Speed test";
-        }
-      });
-    if (status.mode === "live") {
-      showModal(`
-        <h2>⚠️ Speed test in LIVE mode?</h2>
-        <div class="warn-box">This places a REAL order on the next ${esc(group)} account and immediately flattens it. It may cost a tick or two of slippage.</div>
-        <div class="modal-actions">
-          <button class="btn" data-close>Cancel</button>
-          <button class="btn danger" id="confirm-speedtest">Yes, run live test</button>
-        </div>`);
-      $("#confirm-speedtest").addEventListener("click", () => {
-        closeModal();
-        runTest(true);
-      });
-    } else {
-      runTest(false);
-    }
+function copyButton(button, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    button.textContent = "Copied!";
+    setTimeout(() => (button.textContent = "Copy"), 1500);
   });
 }
 
-for (const form of $$(".add-form")) {
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const group = form.closest(".group").dataset.group;
-    const label = form.elements.label.value.trim();
-    const name = form.elements.name.value.trim();
-    if (!label) return;
-    doAction(async () => {
-      await api("/accounts/add", { label, name, group });
-      form.reset();
-    });
-  });
+for (const button of $$(".copy-global")) {
+  button.addEventListener("click", () => copyButton(button, $("#" + button.dataset.copyTarget).textContent));
 }
 
-for (const btn of $$(".copy-webhook")) {
-  btn.addEventListener("click", () => {
-    const url = $(".webhook-url", btn.closest(".group")).textContent;
-    navigator.clipboard.writeText(url).then(() => {
-      btn.textContent = "Copied!";
-      setTimeout(() => (btn.textContent = "Copy"), 1500);
-    });
-  });
-}
-
-function showScanModal(labels) {
+function showScanModal(labels, loginId) {
   if (!labels || labels.length === 0) {
     showModal(`<h2>No accounts found</h2>
       <p>The scan didn't find any LFE… / LFF… accounts. Make sure the browser is connected and logged in, then try again.</p>
       <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
     return;
   }
-  const known = new Set([...status.groups.evals.accounts, ...status.groups.funded.accounts].map((a) => a.tradovateLabel));
+  const known = new Set((status.credentials || []).flatMap((credential) => credential.lanes || []).flatMap((lane) => lane.accounts || []).map((a) => a.tradovateLabel));
   const rows = labels
     .map((label, i) => {
       const suggested = label.startsWith("LFE") ? "evals" : label.startsWith("LFF") ? "funded" : "skip";
@@ -565,7 +764,7 @@ function showScanModal(labels) {
     doAction(async () => {
       for (let i = 0; i < labels.length; i++) {
         const pick = $(`input[name="scan-${i}"]:checked`);
-        if (pick && pick.value !== "skip") await api("/accounts/add", { label: labels[i], group: pick.value });
+        if (pick && pick.value !== "skip") await api("/accounts/add", { label: labels[i], group: pick.value, loginId });
       }
       closeModal();
     }),
