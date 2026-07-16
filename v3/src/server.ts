@@ -968,6 +968,7 @@ api.post("/browser/position", async (req, res) => {
     } else {
       for (const row of diag.nearby.slice(0, 8)) {
         pushEvent("info", `Calibration [${label}] <${row.tag}> "${row.label}" — nearby numbers: ${row.numbersNearby} — inside order ticket: ${row.insideOrderTicket} — full: ${row.containerText}`, group);
+        if (row.structure) pushEvent("info", `Calibration structure [${label}]: ${row.structure}`, group);
       }
     }
   }

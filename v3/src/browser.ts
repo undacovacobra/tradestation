@@ -703,12 +703,32 @@ export class TradovateBrowser {
             anc = anc.parentElement;
           }
 
+          // Compact element tree of the position cell so the value's real
+          // element boundary is visible (does "0" live in its own box, or is it
+          // glued to the "Position" text?). Direct text nodes are quoted.
+          const parts: string[] = [];
+          const stack: Array<{ node: HTMLElement; depth: number }> = [{ node: el, depth: 0 }];
+          while (stack.length && parts.length < 30) {
+            const { node, depth } = stack.pop()!;
+            const cls = (node.getAttribute("class") || "").split(/\s+/).filter(Boolean).slice(0, 2).join(".");
+            let direct = "";
+            for (let k = 0; k < node.childNodes.length; k++) {
+              const cn = node.childNodes[k]!;
+              if (cn.nodeType === 3) direct += cn.textContent || "";
+            }
+            direct = direct.replace(/\s+/g, " ").trim();
+            parts.push(`${"·".repeat(depth)}<${node.tagName.toLowerCase()}${cls ? "." + cls : ""}>${direct ? ` "${direct.slice(0, 24)}"` : ""}`);
+            const kids = Array.from(node.children) as HTMLElement[];
+            for (let k = kids.length - 1; k >= 0; k--) stack.push({ node: kids[k]!, depth: depth + 1 });
+          }
+
           rows.push({
             tag: el.tagName.toLowerCase(),
             label: own.slice(0, 60),
             containerText,
             numbersNearby: numbers.slice(0, 8).join(" | ") || "(none)",
             insideOrderTicket: insideTicket,
+            structure: parts.join("  "),
           });
         }
       }
