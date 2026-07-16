@@ -129,6 +129,25 @@ test("readSelectedPosition falls back to the visible top Positions counter", asy
   }
 });
 
+test("diagnosePosition reports the live markup near POSITION when the read is UNKNOWN", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=missing`);
+    const out = await fake(page).diagnosePosition();
+    // The reader still fails safe...
+    assert.equal(out.position.status, "unknown");
+    // ...but the calibration probe surfaces what the screen actually shows, so
+    // the selector can be tuned to the real Tradovate DOM.
+    assert.ok(Array.isArray(out.nearby));
+    assert.ok(out.nearby.length >= 1, "should surface at least one position-labelled element");
+    assert.ok(out.nearby.every((r: Record<string, string>) => typeof r.label === "string" && "numbersNearby" in r));
+  } finally {
+    await chrome.close();
+  }
+});
+
 test("readSelectedPosition fails safely for conflicting or unsafe top counter evidence", async (t) => {
   const chrome = await launch();
   if (!chrome) return t.skip("no Chromium available");

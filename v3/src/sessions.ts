@@ -25,6 +25,7 @@ export interface TradingSessionAdapter {
   armFor(label: string): Promise<void>;
   readSelectedEquity(): Promise<number | null>;
   readSelectedPosition(): Promise<BrokerPosition>;
+  diagnosePosition?(): Promise<{ position: BrokerPosition; nearby: Array<Record<string, string>> }>;
   selectAtmPreset(name: string): Promise<void>;
   setQuantity(quantity: number): Promise<void>;
   clickOrder(action: "buy" | "sell", label: string): Promise<void>;
@@ -438,6 +439,24 @@ export class CredentialWorker {
       return this.adapter.readSelectedPosition();
     });
   }
+  diagnoseLanePosition(group: Group, label: string): Promise<{ position: BrokerPosition; nearby: Array<Record<string, string>> }> {
+    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    return this.enqueue(kind, async () => {
+      const checkedAt = new Date().toISOString();
+      const unknown = { position: { status: "unknown" as const, reason: `Could not verify ${label} before reading its broker position.`, checkedAt }, nearby: [] as Array<Record<string, string>> };
+      if (!this.adapter.diagnosePosition) {
+        return { position: await this.readLanePosition(group, label), nearby: [] as Array<Record<string, string>> };
+      }
+      if (this.executionMode === "dual-ticket") {
+        if (!await this.adapter.verifyLaneAccount!(group, label)) return unknown;
+        return this.adapter.diagnosePosition();
+      }
+      if (this.adapter.selectedAccount !== label) await this.adapter.armFor(label);
+      const verified = await (this.adapter.verifyActiveAccount?.(label) ?? Promise.resolve(this.adapter.selectedAccount === label));
+      if (!verified) return unknown;
+      return this.adapter.diagnosePosition();
+    });
+  }
   readSettledEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSettledEquity()); }
   dismissPopups(): Promise<boolean> { return this.enqueue("diagnostic", () => this.adapter.dismissPopups()); }
   refreshLoginState(timeout?: number): Promise<boolean> { return this.enqueue("diagnostic", () => this.adapter.refreshLoginState(timeout)); }
@@ -472,6 +491,7 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   armFor(label: string) { return this.browser.armFor(label); }
   readSelectedEquity() { return this.browser.readSelectedEquity(); }
   readSelectedPosition() { return this.browser.readSelectedPosition(); }
+  diagnosePosition() { return this.browser.diagnosePosition(); }
   selectAtmPreset(name: string) { return this.browser.selectAtmPreset(name); }
   setQuantity(quantity: number) { return this.browser.setQuantity(quantity); }
   clickOrder(action: "buy" | "sell", label: string) { return this.browser.clickOrder(action, label); }

@@ -947,17 +947,31 @@ api.post("/browser/position", async (req, res) => {
     });
   }
 
+  const diag = typeof worker.diagnoseLanePosition === "function"
+    ? await worker.diagnoseLanePosition(group, label).catch(() => null)
+    : null;
   const position = rememberBrokerPosition(
     worker.definition.id,
     label,
-    await worker.readLanePosition(group, label),
+    diag ? diag.position : await worker.readLanePosition(group, label),
   );
   pushEvent(
     position.status === "unknown" ? "warn" : "info",
     `No-order broker check for ${label}: ${brokerStatusLabel(position)}${position.status === "unknown" ? ` (${position.reason})` : ""}.`,
     group,
   );
-  return res.json({ ok: true, placedOrder: false, loginId: worker.definition.id, group, label, position });
+  // On UNKNOWN, dump what Tradovate actually shows near the word "position" so
+  // the reader can be calibrated to the real screen (read-only, no order).
+  if (position.status === "unknown" && diag) {
+    if (diag.nearby.length === 0) {
+      pushEvent("warn", `Calibration: nothing on the Tradovate screen visibly mentioned "position" for ${label}. Make sure the trading screen (with Buy Mkt / Sell Mkt) is open.`, group);
+    } else {
+      for (const row of diag.nearby.slice(0, 8)) {
+        pushEvent("info", `Calibration [${label}] <${row.tag}> "${row.label}" — nearby numbers: ${row.numbersNearby} — inside order ticket: ${row.insideOrderTicket} — full: ${row.containerText}`, group);
+      }
+    }
+  }
+  return res.json({ ok: true, placedOrder: false, loginId: worker.definition.id, group, label, position, diagnostic: diag?.nearby ?? [] });
 });
 
 api.post("/accounts/atm-preset", (req, res) => {

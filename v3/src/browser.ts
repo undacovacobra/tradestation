@@ -652,6 +652,71 @@ export class TradovateBrowser {
     return combineBrokerPositionSources(ticket, summary);
   }
 
+  /**
+   * READ-ONLY calibration probe. When `readSelectedPosition` returns UNKNOWN it
+   * is because the real Tradovate POSITION readout doesn't match the shapes the
+   * classifier expects (the ticket-scoped POSITION cell, or a `Positions: +N/-N`
+   * summary). This dumps everything visible on the page that mentions "position"
+   * so the exact live markup can be seen and the selector calibrated. It never
+   * clicks, types, or changes anything. Capped so the payload stays small.
+   */
+  async diagnosePosition(): Promise<{ position: BrokerPosition; nearby: Array<Record<string, string>> }> {
+    const position = await this.readSelectedPosition();
+    if (!this.page || !this.loggedIn) return { position, nearby: [] };
+    const nearby = await this.page.evaluate(() => {
+      const roots: (Document | ShadowRoot)[] = [document];
+      const rows: Array<Record<string, string>> = [];
+      const seen = new Set<HTMLElement>();
+      while (roots.length && rows.length < 40) {
+        const root = roots.pop()!;
+        const all = root.querySelectorAll("*");
+        for (let i = 0; i < all.length && rows.length < 40; i++) {
+          const el = all[i] as HTMLElement;
+          if (el.shadowRoot) roots.push(el.shadowRoot);
+          const style = getComputedStyle(el);
+          if (el.offsetWidth <= 0 || el.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          const own = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (!/position/i.test(own) || own.length > 80) continue;
+          // Only the tightest element wrapping the word (skip big ancestors that
+          // merely contain a position element deeper down).
+          if (el.parentElement && seen.has(el.parentElement)) continue;
+          seen.add(el);
+
+          const container = el.parentElement ?? el;
+          const containerText = (container.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120);
+          const numbers: string[] = [];
+          const leaves = container.querySelectorAll("*");
+          for (let j = 0; j < leaves.length; j++) {
+            const leaf = leaves[j] as HTMLElement;
+            if (leaf.childElementCount > 0) continue;
+            const ls = getComputedStyle(leaf);
+            if (leaf.offsetWidth <= 0 || leaf.offsetHeight <= 0 || ls.display === "none" || ls.visibility === "hidden") continue;
+            const t = (leaf.textContent || "").replace(/\s+/g, " ").trim();
+            if (t && /\d/.test(t) && t.length <= 24) numbers.push(t);
+          }
+
+          let insideTicket = "no";
+          let anc: HTMLElement | null = container;
+          for (let hops = 0; anc && hops < 25; hops++) {
+            const at = (anc.textContent || "");
+            if (at.includes("Buy Mkt") && at.includes("Sell Mkt")) { insideTicket = "yes"; break; }
+            anc = anc.parentElement;
+          }
+
+          rows.push({
+            tag: el.tagName.toLowerCase(),
+            label: own.slice(0, 60),
+            containerText,
+            numbersNearby: numbers.slice(0, 8).join(" | ") || "(none)",
+            insideOrderTicket: insideTicket,
+          });
+        }
+      }
+      return rows;
+    }).catch(() => [] as Array<Record<string, string>>);
+    return { position, nearby };
+  }
+
   /** Read the balance after a short settle delay (for a just-closed trade). */
   async readSettledEquity(): Promise<number | null> {
     await this.p.waitForTimeout(1_200).catch(() => {});
