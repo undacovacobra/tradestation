@@ -48,6 +48,19 @@
       document.body.append(root);
     }
 
+    function liveInfoColumn(value) {
+      const root = document.createElement("section");
+      root.className = "gm-scroll-view";
+      root.innerHTML = `
+        <div class="info-column">
+          <small class="text-muted">Position</small>
+          <div class="position-number">${value}<small>-.-- USD</small></div>
+        </div>
+        <div class="actions"><button>Buy Mkt</button><button>Sell Mkt</button></div>
+      `;
+      document.body.append(root);
+    }
+
     if (state === "summary-flat") topSummary("Positions: + 0/- 0");
     else if (state === "summary-long") topSummary("Positions: + 2/- 0");
     else if (state === "summary-short") topSummary("Positions: + 0/- 3");
@@ -71,7 +84,10 @@
       separateTopPosition("0");
     }
 
-    if (state === "hidden") ticket({ hidden: true });
+    if (state === "live-column-flat") liveInfoColumn("0");
+    else if (state === "live-column-long") liveInfoColumn("2");
+    else if (state === "live-column-short") liveInfoColumn("-3");
+    else if (state === "hidden") ticket({ hidden: true });
     else if (summaryOnly) {
       if (state === "summary-conflict") {
         // The conflicting ticket was created above.

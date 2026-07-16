@@ -64,6 +64,7 @@ export class TradovateBrowser {
   /** The ATM preset we last selected, to skip re-selecting the same one. */
   private lastPreset: string | null = null;
   private ticketCapabilities: TicketCapabilities | undefined;
+  private positionUnknownCaptured: Set<string> | undefined = new Set();
   private readonly shotDir: string;
 
   constructor(private readonly config: Config) {
@@ -631,11 +632,17 @@ export class TradovateBrowser {
           const descendants = scope.querySelectorAll("*");
           for (let j = 0; j < descendants.length; j++) {
             const node = descendants[j] as HTMLElement;
-            if (node.childElementCount > 0) continue;
             const style = getComputedStyle(node);
             if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
             const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) numeric.push(text);
+            let directText = "";
+            for (let k = 0; k < node.childNodes.length; k++) {
+              const child = node.childNodes[k]!;
+              if (child.nodeType === 3) directText += ` ${child.textContent || ""}`;
+            }
+            directText = directText.replace(/\s+/g, " ").trim();
+            const valueText = node.childElementCount > 0 ? directText : text;
+            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(valueText)) numeric.push(valueText);
           }
           if (numeric.length === 1) {
             candidate = numeric[0]!;
@@ -657,11 +664,18 @@ export class TradovateBrowser {
           const descendants = scope.querySelectorAll("*");
           for (let j = 0; j < descendants.length; j++) {
             const node = descendants[j] as HTMLElement;
-            if (node === label || node.childElementCount > 0) continue;
+            if (node === label) continue;
             const style = getComputedStyle(node);
             if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
             const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) numeric.push(text);
+            let directText = "";
+            for (let k = 0; k < node.childNodes.length; k++) {
+              const child = node.childNodes[k]!;
+              if (child.nodeType === 3) directText += ` ${child.textContent || ""}`;
+            }
+            directText = directText.replace(/\s+/g, " ").trim();
+            const valueText = node.childElementCount > 0 ? directText : text;
+            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(valueText)) numeric.push(valueText);
           }
           if (numeric.length === 1) {
             candidate = numeric[0]!;
@@ -683,7 +697,57 @@ export class TradovateBrowser {
     const formattedSummary = classifyTopPositionSummary(evidence.summaryCandidates, checkedAt);
     const separateSummary = classifyBrokerPosition(evidence.separatePositionCandidates, checkedAt);
     const summary = combineBrokerPositionSources(formattedSummary, separateSummary);
-    return combineBrokerPositionSources(ticket, summary);
+    const combined = combineBrokerPositionSources(ticket, summary);
+    const evidenceKey = this.currentAccount ?? "selected-account";
+    if (combined.status === "unknown" && !this.positionUnknownCaptured?.has(evidenceKey)) {
+      this.positionUnknownCaptured ??= new Set<string>();
+      this.positionUnknownCaptured.add(evidenceKey);
+      await this.snapshot("position-evidence-unknown", true);
+      const diagnostic = await this.page.evaluate(() => {
+        const roots: (Document | ShadowRoot)[] = [document];
+        const positionElements: Array<Record<string, string | number>> = [];
+        const topIntegerElements: Array<Record<string, string | number>> = [];
+        while (roots.length) {
+          const root = roots.pop()!;
+          const all = root.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i] as HTMLElement;
+            if (el.shadowRoot) roots.push(el.shadowRoot);
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+            const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+            const aria = el.getAttribute("aria-label") || "";
+            const title = el.getAttribute("title") || "";
+            const entry = {
+              tag: el.tagName.toLowerCase(),
+              text: text.slice(0, 160),
+              aria: aria.slice(0, 80),
+              title: title.slice(0, 80),
+              cls: (el.getAttribute("class") || "").slice(0, 100),
+              x: Math.round(rect.x),
+              y: Math.round(rect.y),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              children: el.childElementCount,
+              parentText: (el.parentElement?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160),
+            };
+            const compactPositionElement =
+              !["html", "body", "script", "style"].includes(entry.tag as string) &&
+              text.length <= 500 &&
+              /position/i.test(`${text} ${aria} ${title}`);
+            if (compactPositionElement && positionElements.length < 60) positionElements.push(entry);
+            if (rect.top < 320 && el.childElementCount === 0 && /^[+-]?\d+$/.test(text) && topIntegerElements.length < 80) {
+              topIntegerElements.push(entry);
+            }
+          }
+        }
+        return { positionElements, topIntegerElements };
+      }).catch(() => ({ positionElements: [], topIntegerElements: [] }));
+      log.warn(`Position evidence diagnostic: ${JSON.stringify(diagnostic)}`);
+    }
+    if (combined.status !== "unknown") this.positionUnknownCaptured?.delete(evidenceKey);
+    return combined;
   }
 
   /** Read the balance after a short settle delay (for a just-closed trade). */

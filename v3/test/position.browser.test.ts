@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -22,15 +23,39 @@ async function launch(): Promise<Browser | null> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function fake(page: unknown): any {
+function fake(page: unknown, shotDir = tmpdir()): any {
   const browser: any = Object.create(TradovateBrowser.prototype);
   browser.page = page;
   browser.loggedIn = true;
   browser.currentAccount = "LFE05079261220009";
-  browser.shotDir = tmpdir();
+  browser.shotDir = shotDir;
   browser.config = { captureShots: false };
   return browser;
 }
+
+test("a continuous unknown episode captures one screenshot and resets after a definite read", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  const shotDir = mkdtempSync(resolve(tmpdir(), "atlas-position-"));
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=missing`);
+    const browser = fake(page, shotDir);
+    const result = await browser.readSelectedPosition();
+    assert.equal(result.status, "unknown");
+    assert.equal((await browser.readSelectedPosition()).status, "unknown");
+    assert.equal(readdirSync(shotDir).filter((name) => name.includes("position-evidence-unknown") && name.endsWith(".png")).length, 1);
+
+    await page.goto(`${fixture}?state=flat`);
+    assert.equal((await browser.readSelectedPosition()).status, "flat");
+    await page.goto(`${fixture}?state=missing`);
+    assert.equal((await browser.readSelectedPosition()).status, "unknown");
+    assert.equal(readdirSync(shotDir).filter((name) => name.includes("position-evidence-unknown") && name.endsWith(".png")).length, 2);
+  } finally {
+    await chrome.close();
+    rmSync(shotDir, { recursive: true, force: true });
+  }
+});
 
 test("readSelectedPosition classifies Tradovate POSITION 0 as flat", async (t) => {
   const chrome = await launch();
@@ -121,6 +146,29 @@ test("readSelectedPosition falls back to the visible top Positions counter", asy
     if (long.status === "open") assert.equal(long.netPosition, 2);
 
     await page.goto(`${fixture}?state=summary-short`);
+    const short = await browser.readSelectedPosition();
+    assert.equal(short.status, "open");
+    if (short.status === "open") assert.equal(short.netPosition, -3);
+  } finally {
+    await chrome.close();
+  }
+});
+
+test("readSelectedPosition reads Tradovate's live Position value when currency is a child", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    const browser = fake(page);
+    await page.goto(`${fixture}?state=live-column-flat`);
+    assert.equal((await browser.readSelectedPosition()).status, "flat");
+
+    await page.goto(`${fixture}?state=live-column-long`);
+    const long = await browser.readSelectedPosition();
+    assert.equal(long.status, "open");
+    if (long.status === "open") assert.equal(long.netPosition, 2);
+
+    await page.goto(`${fixture}?state=live-column-short`);
     const short = await browser.readSelectedPosition();
     assert.equal(short.status, "open");
     if (short.status === "open") assert.equal(short.netPosition, -3);
