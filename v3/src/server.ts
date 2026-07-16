@@ -26,6 +26,7 @@ import { brokerStatusLabel, decideCloseAction, tradeFingerprint } from "./broker
 import { connectedLoginNextStep, restorePersistedTradeLeases } from "./startupPositionRecovery.js";
 import { flattenPositions, type FlattenTarget } from "./flattenPositions.js";
 import { registerFlattenRoutes } from "./flattenRoutes.js";
+import { runLoginPositionCycles } from "./loginPositionCycle.js";
 
 const store = new SettingsStore(config.settingsPath);
 const sessions = new LoginManager(
@@ -492,41 +493,51 @@ async function forceClose(group: Group, reason: string, lane = primaryLane(group
  */
 async function monitorTick(): Promise<void> {
   if (store.mode !== "live") return;
-  await Promise.allSettled(currentLanes().map((lane) => dispatcher.enqueue(lane.key, async () => {
+  const targets = currentLanes().flatMap((lane) => {
+    const open = ensureLaneRotation(lane).getState().openTrade;
+    if (!open) return [];
+    const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId ?? lane.credentialId;
+    const worker = sessions.get(loginId);
+    if (!worker?.status().loggedIn) return [];
+    return [{ loginId, stage: lane.stage, lane, fingerprint: tradeFingerprint(open), worker }];
+  });
+
+  await runLoginPositionCycles(targets, async (target) => dispatcher.enqueue(target.lane.key, async () => {
+    const { lane, worker } = target;
     const group = lane.stage;
     const open = ensureLaneRotation(lane).getState().openTrade;
-    if (!open) return;
-    const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId;
-    const worker = loginId ? sessions.get(loginId) : undefined;
-    if (!worker?.status().loggedIn) return;
+    if (!open || tradeFingerprint(open) !== target.fingerprint) return;
 
-    const position = await worker.readLanePosition(group, open.tradovateLabel).catch((error) => ({
-      status: "unknown" as const,
-      reason: error instanceof Error ? error.message : String(error),
-      checkedAt: new Date().toISOString(),
-    }));
-    const observation = observeBrokerPosition(lane, open, position);
+    const snapshot = await worker.readLaneSnapshot(group, open.tradovateLabel).catch((error) => {
+      const checkedAt = new Date().toISOString();
+      return {
+        verifiedAccount: false,
+        position: {
+          status: "unknown" as const,
+          reason: error instanceof Error ? error.message : String(error),
+          checkedAt,
+        },
+        equity: null,
+        checkedAt,
+      };
+    });
+    const observation = observeBrokerPosition(lane, open, snapshot.position);
     if (observation.kind === "confirmed-flat") {
       const pending = pendingBrokerClose.get(lane.key);
-      await completeRecordedTrade(lane, tradeFingerprint(open), {
+      await completeRecordedTrade(lane, target.fingerprint, {
         source: pending?.reason ?? "ATM, liquidation, or external broker exit detected",
         won: pending?.won,
         retire: pending?.retire,
       });
       return;
     }
-    if (position.status !== "open") return;
+    if (snapshot.position.status !== "open" || snapshot.equity == null) return;
 
-    const equity = await worker.readLaneEquity(group, open.tradovateLabel).catch((error) => {
-      pushEvent("error", `${open.accountName} could not be verified for balance monitoring: ${(error as Error).message}`, group);
-      return null;
-    });
-    if (equity == null) return;
-    balanceLog.set(open.tradovateLabel, equity);
-    if (usesEvaluationTarget(group) && equity >= store.evalTarget) {
-      await forceClose(group, `balance reached ${money(equity)}`, lane);
+    balanceLog.set(open.tradovateLabel, snapshot.equity);
+    if (usesEvaluationTarget(group) && snapshot.equity >= store.evalTarget) {
+      await forceClose(group, `balance reached ${money(snapshot.equity)}`, lane);
     }
-  })));
+  }));
 }
 
 const monitor = new Monitor(monitorTick, {

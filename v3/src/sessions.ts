@@ -74,6 +74,13 @@ export interface EntryTiming {
   totalMs: number;
 }
 
+export interface LaneSnapshot {
+  verifiedAccount: boolean;
+  position: BrokerPosition;
+  equity: number | null;
+  checkedAt: string;
+}
+
 interface PlannedLane {
   account: StoredAccount;
   callbacks: ArmingCallbacks;
@@ -405,6 +412,13 @@ export class CredentialWorker {
     return this.close(group, label);
   }
   readSelectedEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSelectedEquity()); }
+  private async verifyOrSelectSequentialAccount(label: string): Promise<boolean> {
+    const verify = () => this.adapter.verifyActiveAccount?.(label)
+      ?? Promise.resolve(this.adapter.selectedAccount === label);
+    if (await verify()) return true;
+    await this.adapter.armFor(label);
+    return verify();
+  }
   readLaneEquity(group: Group, label: string): Promise<number | null> {
     const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
     return this.enqueue(kind, async () => {
@@ -414,8 +428,7 @@ export class CredentialWorker {
         }
         return this.adapter.readLaneEquity!(group);
       }
-      if (this.adapter.selectedAccount !== label) await this.adapter.armFor(label);
-      const verified = await (this.adapter.verifyActiveAccount?.(label) ?? Promise.resolve(this.adapter.selectedAccount === label));
+      const verified = await this.verifyOrSelectSequentialAccount(label);
       if (!verified) throw new Error(`Could not verify ${label} before reading its balance.`);
       return this.adapter.readSelectedEquity();
     });
@@ -430,12 +443,42 @@ export class CredentialWorker {
         }
         return this.adapter.readLanePosition!(group);
       }
-      if (this.adapter.selectedAccount !== label) await this.adapter.armFor(label);
-      const verified = await (this.adapter.verifyActiveAccount?.(label) ?? Promise.resolve(this.adapter.selectedAccount === label));
+      const verified = await this.verifyOrSelectSequentialAccount(label);
       if (!verified) {
         return { status: "unknown", reason: `Could not verify ${label} before reading its broker position.`, checkedAt };
       }
       return this.adapter.readSelectedPosition();
+    });
+  }
+  readLaneSnapshot(group: Group, label: string): Promise<LaneSnapshot> {
+    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    return this.enqueue(kind, async () => {
+      const checkedAt = new Date().toISOString();
+      if (this.executionMode === "dual-ticket") {
+        if (!await this.adapter.verifyLaneAccount!(group, label)) {
+          return {
+            verifiedAccount: false,
+            position: { status: "unknown", reason: `Could not verify ${label} before reading its broker position.`, checkedAt },
+            equity: null,
+            checkedAt,
+          };
+        }
+        const position = await this.adapter.readLanePosition!(group);
+        const equity = await this.adapter.readLaneEquity!(group);
+        return { verifiedAccount: true, position, equity, checkedAt: position.checkedAt };
+      }
+
+      if (!await this.verifyOrSelectSequentialAccount(label)) {
+        return {
+          verifiedAccount: false,
+          position: { status: "unknown", reason: `Could not verify ${label} before reading its broker position.`, checkedAt },
+          equity: null,
+          checkedAt,
+        };
+      }
+      const position = await this.adapter.readSelectedPosition();
+      const equity = await this.adapter.readSelectedEquity();
+      return { verifiedAccount: true, position, equity, checkedAt: position.checkedAt };
     });
   }
   readSettledEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSettledEquity()); }

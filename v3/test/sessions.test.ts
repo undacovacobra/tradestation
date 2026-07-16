@@ -19,6 +19,7 @@ class FakeAdapter implements TradingSessionAdapter {
   quantity: number | undefined;
   verificationAllowed = true;
   activeVerificationAllowed = true;
+  activeVerificationResults: boolean[] = [];
   position: BrokerPosition = { status: "flat", checkedAt: "now" };
 
   status() { return { connected: this.connected, loggedIn: this.loggedIn, selectedAccount: this.selectedAccount }; }
@@ -44,7 +45,13 @@ class FakeAdapter implements TradingSessionAdapter {
   async readSettledEquity() { this.calls.push("settled"); return 50_100; }
   async dismissPopups() { this.calls.push("popups"); return false; }
   async refreshLoginState() { return this.loggedIn; }
-  async verifyActiveAccount(label: string) { return this.activeVerificationAllowed && this.selectedAccount === label; }
+  async verifyActiveAccount(label: string) {
+    const allowed = this.activeVerificationResults.length
+      ? this.activeVerificationResults.shift()!
+      : this.activeVerificationAllowed && this.selectedAccount === label;
+    if (!allowed) this.selectedAccount = null;
+    return allowed;
+  }
   async verifyPreparedOrderState(_group: Group, label: string, atmPreset: string, quantity?: number) {
     return this.verificationAllowed && this.selectedAccount === label && this.atmPreset === atmPreset && (quantity == null || this.quantity === quantity);
   }
@@ -286,6 +293,35 @@ test("a sequential position read switches read-only, verifies the exact account,
 
   assert.deepEqual(result, { status: "open", netPosition: -2, checkedAt: "now" });
   assert.deepEqual(adapter.calls, ["arm:E1", "position"]);
+});
+
+test("a lane snapshot force-reselects stale cached account state and reads position plus equity once", async () => {
+  const adapter = new FakeAdapter();
+  adapter.selectedAccount = "E1";
+  adapter.activeVerificationResults = [false, true];
+  adapter.position = { status: "open", netPosition: 3, checkedAt: "position-time" };
+  const worker = new LoginWorker(login("one"), adapter);
+
+  const result = await worker.readLaneSnapshot("evals", "E1");
+
+  assert.equal(result.verifiedAccount, true);
+  assert.deepEqual(result.position, { status: "open", netPosition: 3, checkedAt: "position-time" });
+  assert.equal(result.equity, 50_000);
+  assert.deepEqual(adapter.calls, ["arm:E1", "position", "equity"]);
+});
+
+test("an unverified lane snapshot never reads position or equity from the wrong account", async () => {
+  const adapter = new FakeAdapter();
+  adapter.selectedAccount = "OTHER";
+  adapter.activeVerificationAllowed = false;
+  const worker = new LoginWorker(login("one"), adapter);
+
+  const result = await worker.readLaneSnapshot("funded", "F1");
+
+  assert.equal(result.verifiedAccount, false);
+  assert.equal(result.position.status, "unknown");
+  assert.equal(result.equity, null);
+  assert.deepEqual(adapter.calls, ["arm:F1"]);
 });
 
 test("an unverified account position read fails safe without reading a different account", async () => {
