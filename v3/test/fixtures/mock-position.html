@@ -26,13 +26,22 @@
       document.body.append(root);
     }
 
+    // The live Tradovate ticket wraps the count in <div class="number">, which
+    // ALSO holds a smaller child span (e.g. an average price). "nested" states
+    // reproduce that exact shape; the plain states keep the simpler flat spans.
+    const nested = state.startsWith("nested");
+    const nestedValue = state === "nested-long" ? "+2" : state === "nested-short" ? "-3" : "0";
+    const positionCell = nested
+      ? `<div class="info-column"><small class="text-muted">Position</small><div class="number">${nestedValue}<span class="smaller text-success">29178.50</span></div><div class="small">-.--<span class="currency">USD</span></div></div>`
+      : `<div class="position-row"><span>${positionLabel}</span><span class="position-value">${value}</span><span>-.-- USD</span></div>`;
+
     function ticket({ hidden = false } = {}) {
       const root = document.createElement("section");
       root.className = `ticket${hidden ? " hidden" : ""}`;
       root.innerHTML = `
         <div class="market">MNQU6 <span>29945.00</span></div>
         <div class="open-pnl">OPEN P/L <span>0.00 USD</span></div>
-        ${state === "missing" || (summaryOnly && state !== "summary-conflict") ? "" : `<div class="position-row"><span>${positionLabel}</span><span class="position-value">${value}</span><span>-.-- USD</span></div>`}
+        ${state === "missing" || (summaryOnly && state !== "summary-conflict") ? "" : positionCell}
         <div class="actions"><button>Buy Mkt</button><button>Sell Mkt</button></div>
         <input aria-label="Quantity" value="20">
         <button>Exit at Mkt &amp; Cxl</button>

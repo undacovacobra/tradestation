@@ -626,14 +626,24 @@ export class TradovateBrowser {
         let candidate: string | null = null;
         while (scope) {
           const numeric: string[] = [];
-          const descendants = scope.querySelectorAll("*");
-          for (let j = 0; j < descendants.length; j++) {
-            const node = descendants[j] as HTMLElement;
-            if (node.childElementCount > 0) continue;
+          // Live Tradovate wraps the count in <div class="number">0<span…></span></div>
+          // — the value is the element's OWN text node, and a smaller child span
+          // may carry an average price. So look at each DIRECT child of the
+          // position cell and read only its own (non-descendant) text; a nested
+          // decimal price is deliberately never considered, so it can't be
+          // mistaken for the whole-contract count.
+          const children = scope.children;
+          for (let j = 0; j < children.length; j++) {
+            const node = children[j] as HTMLElement;
             const style = getComputedStyle(node);
             if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
-            const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) numeric.push(text);
+            let own = "";
+            for (let k = 0; k < node.childNodes.length; k++) {
+              const cn = node.childNodes[k]!;
+              if (cn.nodeType === 3) own += cn.textContent || "";
+            }
+            own = own.replace(/\s+/g, " ").trim();
+            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(own)) numeric.push(own);
           }
           if (numeric.length === 1) {
             candidate = numeric[0]!;

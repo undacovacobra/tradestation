@@ -129,6 +129,32 @@ test("readSelectedPosition falls back to the visible top Positions counter", asy
   }
 });
 
+test("readSelectedPosition reads the live nested <div.number> cell (value beside a child span)", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    const browser = fake(page);
+
+    // This is the exact real Tradovate shape that used to read as UNKNOWN: the
+    // count sits in the div's own text while a smaller price span is nested in.
+    await page.goto(`${fixture}?state=nested`);
+    assert.equal((await browser.readSelectedPosition()).status, "flat", "nested 0 must read flat, not unknown");
+
+    await page.goto(`${fixture}?state=nested-long`);
+    const long = await browser.readSelectedPosition();
+    assert.equal(long.status, "open");
+    if (long.status === "open") assert.equal(long.netPosition, 2, "must read the count, not the nested price");
+
+    await page.goto(`${fixture}?state=nested-short`);
+    const short = await browser.readSelectedPosition();
+    assert.equal(short.status, "open");
+    if (short.status === "open") assert.equal(short.netPosition, -3);
+  } finally {
+    await chrome.close();
+  }
+});
+
 test("diagnosePosition reports the live markup near POSITION when the read is UNKNOWN", async (t) => {
   const chrome = await launch();
   if (!chrome) return t.skip("no Chromium available");
