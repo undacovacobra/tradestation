@@ -187,20 +187,24 @@ test("a failed ATM selection never marks the session ready", async () => {
   assert.equal(worker.status().ready, undefined);
 });
 
-test("live entry is rejected when unplanned but queues safely behind credential work", async () => {
+test("unplanned live entry self-prepares and queues safely behind credential work", async () => {
   const adapter = new FakeAdapter();
   const worker = new LoginWorker(login("one"), adapter);
   const acct = account("E1", "evals", "one");
   const order: OrderRequest = { action: "buy", symbol: "MNQ", quantity: 2 };
-  await assert.rejects(() => worker.enterPrepared("evals", acct, order), /not ready/i);
-
-  await worker.prepare("evals", acct, callbacks);
-  adapter.calls.length = 0;
   adapter.delayMs = 30;
   const maintenance = worker.runMaintenance(() => adapter.work("maintenance"));
   const entry = worker.enterPrepared("evals", acct, order, { skipFundedWindow: true });
   await Promise.all([maintenance, entry]);
-  assert.deepEqual(adapter.calls, ["start:maintenance", "end:maintenance", "qty:2:force", "order:buy:E1"]);
+  assert.deepEqual(adapter.calls, [
+    "start:maintenance",
+    "end:maintenance",
+    "arm:E1",
+    "equity",
+    "atm:25",
+    "qty:2:force",
+    "order:buy:E1",
+  ]);
 });
 
 test("prepared entry only sets quantity and clicks, then consumes readiness", async () => {
@@ -353,6 +357,92 @@ test("entry repairs manual account and ATM drift before placing", async () => {
     "qty:4:force",
     "order:sell:F1",
   ]);
+});
+
+test("eval signal self-prepares after a restored funded trade is manually flattened", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const evalAccount = account("E1", "evals", "one");
+
+  // Exact production sequence: startup restored a funded trade, so no lanes
+  // were prepared; account-specific flatten then left the funded ticket visible.
+  worker.restoreOpenTrade("funded", "F1");
+  adapter.selectedAccount = "F1";
+  adapter.atmPreset = "funded";
+  worker.clearOpenTrade("F1");
+  adapter.calls.length = 0;
+
+  await worker.enterPrepared(
+    "evals",
+    evalAccount,
+    { action: "buy", symbol: "MNQ", quantity: 2 },
+    { skipFundedWindow: true },
+  );
+
+  assert.deepEqual(adapter.calls, [
+    "arm:E1",
+    "equity",
+    "atm:25",
+    "qty:2:force",
+    "order:buy:E1",
+  ]);
+});
+
+test("unplanned eval entry can self-prepare while a funded account remains open", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const evalAccount = account("E1", "evals", "one");
+
+  // ATLAS supports different accounts holding positions under one login. A
+  // missing eval plan must use the guarded live-entry switch path, not the
+  // background-preparation path that correctly refuses to switch open trades.
+  worker.restoreOpenTrade("funded", "F1");
+  adapter.selectedAccount = "F1";
+  adapter.atmPreset = "funded";
+  adapter.calls.length = 0;
+
+  await worker.enterPrepared(
+    "evals",
+    evalAccount,
+    { action: "buy", symbol: "MNQ", quantity: 3 },
+    { skipFundedWindow: true },
+  );
+
+  assert.deepEqual(adapter.calls, [
+    "arm:E1",
+    "equity",
+    "atm:25",
+    "qty:3:force",
+    "order:buy:E1",
+  ]);
+});
+
+test("failed unplanned ATM preparation reports the error and never clicks an order", async () => {
+  const adapter = new FakeAdapter();
+  adapter.failPreset = true;
+  const worker = new LoginWorker(login("one"), adapter);
+  const presetErrors: string[] = [];
+  const balances: Array<[string, number]> = [];
+
+  await assert.rejects(
+    worker.enterPrepared(
+      "evals",
+      account("E1", "evals", "one"),
+      { action: "buy", symbol: "MNQ", quantity: 2 },
+      {
+        skipFundedWindow: true,
+        prepareIfNeeded: {
+          onBalance: (label, equity) => balances.push([label, equity]),
+          onPresetError: (error) => presetErrors.push(error.message),
+        },
+      },
+    ),
+    /preset missing/i,
+  );
+
+  assert.deepEqual(balances, [["E1", 50_000]]);
+  assert.deepEqual(presetErrors, ["preset missing"]);
+  assert.equal(adapter.calls.some((call) => call.startsWith("order:")), false);
 });
 
 test("failed automatic ticket repair blocks the order", async () => {

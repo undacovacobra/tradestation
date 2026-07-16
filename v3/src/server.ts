@@ -245,7 +245,16 @@ async function executeEntry(
   const account = store.find(label);
   if (!account) throw new Error(`Account ${label} is no longer configured.`);
   const worker = workerForAccount(account);
-  const timing = await worker.enterPrepared(group, account, order, options);
+  const timing = await worker.enterPrepared(group, account, order, {
+    ...options,
+    prepareIfNeeded: {
+      onBalance: (accountLabel, equity) => balanceLog.set(accountLabel, equity),
+      onPresetError: (error) => {
+        pushEvent("warn", `Couldn't select ${account.name}'s ATM preset "${account.atmPreset}": ${error.message}`, group);
+        notifyActionNeeded(`Couldn't pick ${account.name}'s ATM preset "${account.atmPreset}" on Tradovate - no order was placed. (${error.message})`);
+      },
+    },
+  });
   pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${sizeLabel}${order.symbol} on ${name} (${label}) via ${worker.definition.name}.`, group);
   return timing;
 }
@@ -378,6 +387,14 @@ async function handleEntry(
   lane = primaryLane(group),
   options: { skipFundedWindow?: boolean } = {},
 ): Promise<WebhookHandleResult> {
+  // A startup-restored trade deliberately blocks background ticket switching.
+  // After account-specific flattening, that can leave the other lane without a
+  // preparation plan. Re-arm it here whenever this login is flat. The common
+  // case is an in-memory readiness check only; the worker still performs final
+  // live DOM verification and repairs manual account/ATM/quantity drift.
+  if (store.mode === "live" && !hasOpenTradeForLogin(lane.credentialId)) {
+    await prepareLane(lane);
+  }
   const rotation = ensureLaneRotation(lane);
   const laneAccounts = accountsForLane(lane);
   const choice = rotation.selectAccountForEntry(laneAccounts);

@@ -268,7 +268,7 @@ export class CredentialWorker {
     group: Group,
     account: StoredAccount,
     order: OrderRequest,
-    options: { skipFundedWindow?: boolean } = {},
+    options: { skipFundedWindow?: boolean; prepareIfNeeded?: ArmingCallbacks } = {},
   ): Promise<EntryTiming> {
     const generation = this.entryGeneration.get(group) ?? 0;
     await this.ensureCapabilities();
@@ -280,12 +280,6 @@ export class CredentialWorker {
     if (!initialStatus.connected || !initialStatus.loggedIn) {
       throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
     }
-    const plan = this.desired.get(group);
-    if (!plan
-      || plan.signature.accountLabel !== account.tradovateLabel
-      || plan.signature.atmPreset !== account.atmPreset) {
-      throw new Error(`${account.name} is not ready on ${this.definition.name}. Prepare its exact account and ATM before sending a live signal.`);
-    }
     const kind: CredentialTaskKind = group === "funded" ? "funded-entry" : "eval-entry";
     return this.enqueue(kind, async () => {
       if ((this.entryGeneration.get(group) ?? 0) !== generation) {
@@ -295,6 +289,39 @@ export class CredentialWorker {
       const queuedStatus = this.adapter.status();
       if (!queuedStatus.connected || !queuedStatus.loggedIn) {
         throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
+      }
+
+      let plan = this.desired.get(group);
+      if (!plan
+        || plan.signature.accountLabel !== account.tradovateLabel
+        || plan.signature.atmPreset !== account.atmPreset) {
+        // A restored trade intentionally prevents startup from switching tickets.
+        // Once that trade is manually flattened, another lane can therefore have
+        // no idle plan. Repair it inside the live-entry queue (rather than through
+        // background preparation) so funded priority is preserved and an eval can
+        // still enter while a different funded account legitimately remains open.
+        const callbacks = options.prepareIfNeeded ?? {
+          onBalance: () => {},
+          onPresetError: () => {},
+        };
+        if (this.openTrades.size > 0 && this.executionMode === "sequential" && !this.adapter.verifyActiveAccount) {
+          throw new Error(`${this.definition.name} cannot safely switch away from an open position in sequential mode.`);
+        }
+        await this.preparePhysical(group, account, callbacks);
+        plan = {
+          account,
+          callbacks,
+          signature: {
+            group,
+            accountLabel: account.tradovateLabel,
+            atmPreset: account.atmPreset,
+            preparedAt: new Date().toISOString(),
+          },
+        };
+        this.desired.set(group, plan);
+        if ((this.entryGeneration.get(group) ?? 0) !== generation) {
+          throw new Error(`Pending ${group} entry cancelled because a close signal arrived first.`);
+        }
       }
       if (!this.isReady(group, account)) {
         if (this.executionMode === "dual-ticket") throw new Error(`${account.name} is not physically ready on ${this.definition.name}.`);
