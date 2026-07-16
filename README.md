@@ -1,5 +1,25 @@
 # Tradovate Account-Cycler Bot (non-API)
 
+> **Current supported build: ATLAS v3.** The older root implementation remains
+> in this repository for history, but normal operation should start `v3`.
+
+## Start ATLAS on Windows
+
+After extracting the complete GitHub ZIP, double-click **`Start ATLAS.cmd`** in
+the outer folder. It starts the current v3 build, installs missing dependencies,
+preserves existing v3 configuration/state when upgrading, and opens
+`http://localhost:3400/`.
+
+From PowerShell, use this policy-safe command:
+
+```powershell
+npm.cmd --prefix v3 start
+```
+
+Use `npm.cmd`, not plain `npm`, on machines where PowerShell blocks `npm.ps1`.
+The launcher does this automatically and does not weaken Windows execution-policy
+security.
+
 Receives **TradingView webhook alerts** from your existing strategy and routes each
 trade to a different **Tradovate prop account**, cycling through them one round-trip
 at a time. Because your firm blocks API access, live orders are placed via
