@@ -31,15 +31,32 @@ if not exist "%ATLAS_DIR%\.env" (
   echo Created v3\.env from the safe template. Review its secrets before LIVE mode.
 )
 
-if not exist "%ATLAS_DIR%\node_modules\.bin\tsx.cmd" (
+set "ATLAS_INSTALL_REQUIRED="
+if not exist "%ATLAS_DIR%\node_modules\.bin\tsx.cmd" set "ATLAS_INSTALL_REQUIRED=1"
+pushd "%ATLAS_DIR%"
+node.exe -e "import('@ngrok/ngrok')" >nul 2>nul
+if errorlevel 1 set "ATLAS_INSTALL_REQUIRED=1"
+popd
+
+if defined ATLAS_INSTALL_REQUIRED (
   echo Installing ATLAS v3 dependencies...
-  call npm.cmd --prefix "%ATLAS_DIR%" install
+  call npm.cmd --prefix "%ATLAS_DIR%" install --include=optional
   if errorlevel 1 (
     echo Dependency installation failed. Check the internet connection and try again.
     pause
     exit /b 1
   )
 )
+
+pushd "%ATLAS_DIR%"
+node.exe -e "import('@ngrok/ngrok')" >nul 2>nul
+if errorlevel 1 (
+  popd
+  echo The remote-access module still cannot load. Close this window and run Start ATLAS.cmd again.
+  pause
+  exit /b 1
+)
+popd
 
 :loop
 call npm.cmd --prefix "%ATLAS_DIR%" start

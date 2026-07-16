@@ -59,3 +59,15 @@ test("README gives the exact command for a PowerShell prompt already inside v3",
 
   assert.match(readme, /\.\\Start-ATLAS\.cmd/i);
 });
+
+test("both launch paths verify and install the optional remote-access module", () => {
+  const watchdogs = [
+    readFileSync(join(repositoryRoot, "run-atlas.cmd"), "utf8"),
+    readFileSync(join(repositoryRoot, "v3", "run-atlas-local.cmd"), "utf8"),
+  ];
+
+  for (const watchdog of watchdogs) {
+    assert.match(watchdog, /import\(['"]@ngrok\/ngrok['"]\)/i);
+    assert.match(watchdog, /npm\.cmd(?:\s+--prefix\s+"%ATLAS_DIR%")?\s+install\s+--include=optional/i);
+  }
+});
