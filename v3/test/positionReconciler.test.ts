@@ -47,18 +47,21 @@ test("a new trade fingerprint cannot inherit prior flat or completed state", () 
   assert.equal(reconciler.observe("primary:evals", "trade-2", open(1)).kind, "open");
 });
 
-test("unknown alerts have deterministic threshold and repeat cadence", () => {
+test("unknown alerts fire once per continuous failure episode", () => {
   const reconciler = new PositionReconciler({ unknownAlertAfter: 3, unknownAlertEvery: 4 });
   const alerts: number[] = [];
   for (let count = 1; count <= 11; count++) {
     const result = reconciler.observe("primary:evals", "trade", unknown());
     if (result.kind === "unknown" && result.shouldAlert) alerts.push(count);
   }
-  assert.deepEqual(alerts, [3, 7, 11]);
+  assert.deepEqual(alerts, [3]);
 
   const recovered = reconciler.observe("primary:evals", "trade", open(1));
   assert.equal(recovered.unknownReads, 0);
-  const nextUnknown = reconciler.observe("primary:evals", "trade", unknown());
-  assert.equal(nextUnknown.kind, "unknown");
-  if (nextUnknown.kind === "unknown") assert.equal(nextUnknown.shouldAlert, false);
+  const nextAlerts: number[] = [];
+  for (let count = 1; count <= 6; count++) {
+    const result = reconciler.observe("primary:evals", "trade", unknown());
+    if (result.kind === "unknown" && result.shouldAlert) nextAlerts.push(count);
+  }
+  assert.deepEqual(nextAlerts, [3]);
 });

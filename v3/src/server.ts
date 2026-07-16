@@ -27,6 +27,7 @@ import { connectedLoginNextStep, restorePersistedTradeLeases } from "./startupPo
 import { flattenPositions, type FlattenTarget } from "./flattenPositions.js";
 import { registerFlattenRoutes } from "./flattenRoutes.js";
 import { runLoginPositionCycles } from "./loginPositionCycle.js";
+import { CloseWebhookFallback } from "./closeWebhookFallback.js";
 
 const store = new SettingsStore(config.settingsPath);
 const sessions = new LoginManager(
@@ -42,6 +43,7 @@ const balanceLog = new BalanceLog(config.balancesPath);
 const tradingDay = (at?: Date) => tradingDayKey(at ?? new Date(), config.tradingDayTz, config.tradingDayResetHour);
 const laneRotations = new Map<LaneKey, GroupRotation>();
 const positionReconciler = new PositionReconciler({ unknownAlertAfter: 3, unknownAlertEvery: 10 });
+const closeWebhookFallback = new CloseWebhookFallback({ graceMs: 5_000, minUnknownReads: 2 });
 interface BrokerLaneStatus {
   state: string;
   checkedAt?: string;
@@ -331,6 +333,7 @@ async function completeRecordedTrade(
     });
     worker?.clearOpenTrade(closed.tradovateLabel);
     pendingBrokerClose.delete(lane.key);
+    closeWebhookFallback.clear(lane.key);
     brokerLaneStatus.set(lane.key, {
       state: "FLAT",
       checkedAt: new Date().toISOString(),
@@ -397,6 +400,7 @@ async function handleEntry(
   rotation.recordOpen(acct, order, known ?? undefined);
   positionReconciler.clear(lane.key);
   pendingBrokerClose.delete(lane.key);
+  closeWebhookFallback.clear(lane.key);
   brokerLaneStatus.set(lane.key, {
     state: store.mode === "practice" ? "SIMULATED" : "AWAITING BROKER",
     flatReads: 0,
@@ -423,6 +427,7 @@ async function handleClose(group: Group, symbol: string, lane = primaryLane(grou
   const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId ?? lane.credentialId;
   const worker = sessions.get(loginId);
   if (!worker) throw new Error(`The open trade on ${open.accountName} references a missing login.`);
+  closeWebhookFallback.record(lane.key, fingerprint);
 
   const position = await worker.readLanePosition(group, open.tradovateLabel).catch((error) => ({
     status: "unknown" as const,
@@ -430,6 +435,7 @@ async function handleClose(group: Group, symbol: string, lane = primaryLane(grou
     checkedAt: new Date().toISOString(),
   }));
   const observation = observeBrokerPosition(lane, open, position);
+  closeWebhookFallback.observe(lane.key, fingerprint, position, observation.unknownReads);
   if (observation.kind === "confirmed-flat") {
     return (await completeRecordedTrade(lane, fingerprint, { source: "broker was already flat when the close webhook arrived" }))
       ?? "The broker-flat trade was already reconciled.";
@@ -439,7 +445,7 @@ async function handleClose(group: Group, symbol: string, lane = primaryLane(grou
   if (action === "already-requested") return `Exit was already requested on ${open.accountName}; waiting for broker POSITION 0.`;
   if (action === "wait-for-confirmation") {
     return position.status === "unknown"
-      ? `Close received, but ${open.accountName}'s broker position is UNKNOWN. No flat state was assumed; ATLAS will retry.`
+      ? `Close received, but ${open.accountName}'s broker position is UNKNOWN. ATLAS will retry the broker reader, then use this close webhook as the bounded fallback.`
       : `Close received and broker shows POSITION 0 once on ${open.accountName}; confirming once more before rotating.`;
   }
 
@@ -451,6 +457,7 @@ async function handleClose(group: Group, symbol: string, lane = primaryLane(grou
     await executeClose(open.tradovateLabel, open.accountName, symbol, group, lane);
   } catch (error) {
     pendingBrokerClose.delete(lane.key);
+    closeWebhookFallback.clear(lane.key);
     throw error;
   }
   return `Exit requested on ${open.accountName}; waiting for broker POSITION 0 before completing and rotating.`;
@@ -522,6 +529,18 @@ async function monitorTick(): Promise<void> {
       };
     });
     const observation = observeBrokerPosition(lane, open, snapshot.position);
+    const fallbackDecision = closeWebhookFallback.observe(
+      lane.key,
+      target.fingerprint,
+      snapshot.position,
+      observation.unknownReads,
+    );
+    if (fallbackDecision === "eligible") {
+      await completeRecordedTrade(lane, target.fingerprint, {
+        source: "close webhook fallback after broker position remained unavailable",
+      });
+      return;
+    }
     if (observation.kind === "confirmed-flat") {
       const pending = pendingBrokerClose.get(lane.key);
       await completeRecordedTrade(lane, target.fingerprint, {
@@ -529,6 +548,23 @@ async function monitorTick(): Promise<void> {
         won: pending?.won,
         retire: pending?.retire,
       });
+      return;
+    }
+    if (fallbackDecision === "vetoed" && !pendingBrokerClose.has(lane.key)) {
+      pendingBrokerClose.set(lane.key, {
+        requestedAt: new Date().toISOString(),
+        reason: "close webhook requested exit after broker confirmed the position was still open",
+      });
+      try {
+        await worker.close(group, open.tradovateLabel);
+        pushEvent("trade", `LIVE — requested CLOSE on ${open.accountName} after the broker confirmed it was still open.`, group);
+      } catch (error) {
+        pendingBrokerClose.delete(lane.key);
+        closeWebhookFallback.clear(lane.key);
+        const message = `ATLAS could not request Exit on ${open.accountName}: ${error instanceof Error ? error.message : String(error)}`;
+        pushEvent("error", message, group);
+        notifyActionNeeded(message);
+      }
       return;
     }
     if (snapshot.position.status !== "open" || snapshot.equity == null) return;
@@ -1064,6 +1100,7 @@ api.post("/reset-trade", (req, res) => {
   }
   positionReconciler.clear(lane.key);
   pendingBrokerClose.delete(lane.key);
+  closeWebhookFallback.clear(lane.key);
   brokerLaneStatus.set(lane.key, { state: "MANUALLY RESET", flatReads: 0, unknownReads: 0 });
   const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
   pushEvent(
