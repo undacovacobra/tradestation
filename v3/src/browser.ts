@@ -1,10 +1,22 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 import type { Config } from "./config.js";
 import { extractEquity } from "./balanceParse.js";
+import {
+  classifyBrokerPosition,
+  classifyTopPositionSummary,
+  combineBrokerPositionSources,
+  type BrokerPosition,
+} from "./brokerPosition.js";
 import { notifyActionNeeded } from "./notify.js";
 import { log } from "./logger.js";
+import type { Group } from "./types.js";
+import {
+  inspectTicketCapabilities as probeTicketCapabilities,
+  type DualTicketController,
+  type TicketCapabilities,
+} from "./ticketCapabilities.js";
 
 /**
  * Visible text labels from the live Tradovate web trader, confirmed on the
@@ -23,7 +35,9 @@ const TXT = {
   exit: "Exit at Mkt", // "Exit at Mkt & Cxl" — flatten position + cancel orders
   confirm: /Place Order|Confirm|OK/i, // confirmation modal button, if one appears
   loginButton: "Login",
-  simButton: /Start Simulated Trading/i,
+  clockWarning: /Your clock is out of sync!/i,
+  clockContinue: "Continue",
+  simulationButton: /^(?:Access Simulation|Start Simulated Trading)$/i,
   equity: /EQUITY/i, // top bar: "EQUITY  50,320.00 USD" for the SELECTED account
 };
 
@@ -49,6 +63,7 @@ export class TradovateBrowser {
   private lastQty: number | null = null;
   /** The ATM preset we last selected, to skip re-selecting the same one. */
   private lastPreset: string | null = null;
+  private ticketCapabilities: TicketCapabilities | undefined;
   private readonly shotDir: string;
 
   constructor(private readonly config: Config) {
@@ -100,6 +115,7 @@ export class TradovateBrowser {
         this.currentAccount = null;
         this.lastQty = null;
         this.lastPreset = null;
+        this.ticketCapabilities = undefined;
       });
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
       await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" });
@@ -128,6 +144,7 @@ export class TradovateBrowser {
     this.currentAccount = null;
     this.lastQty = null;
     this.lastPreset = null;
+    this.ticketCapabilities = undefined;
     await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
     await this.refreshLoginState(6_000);
     if (!this.loggedIn) {
@@ -138,6 +155,137 @@ export class TradovateBrowser {
     return this.status();
   }
 
+  /**
+   * Re-enter an already-visible Tradovate login flow without navigating or
+   * reloading. This is safe to attempt while a recorded trade is open because
+   * it only clicks the bounded Login / clock Continue / Simulation controls and
+   * preserves the selected account, ATM, and quantity bookkeeping.
+   */
+  async resumeExistingLogin(): Promise<BrowserStatus> {
+    if (!this.page) return this.status();
+    await this.refreshLoginState(1_000);
+    if (!this.loggedIn) {
+      await this.tryAutoLogin();
+      await this.refreshLoginState(6_000);
+    }
+    if (this.loggedIn) await this.dismissPopups().catch(() => false);
+    return this.status();
+  }
+
+  async inspectCapabilities(): Promise<TicketCapabilities> {
+    if (!this.page) {
+      return { mode: "sequential", reason: "Tradovate is not connected, so ticket isolation cannot be proved." };
+    }
+    if (!this.ticketCapabilities) this.ticketCapabilities = await probeTicketCapabilities(this.page);
+    return this.ticketCapabilities;
+  }
+
+  private async dualTicketController(): Promise<DualTicketController> {
+    const capability = await this.inspectCapabilities();
+    if (capability.mode !== "dual-ticket" || !capability.controller) {
+      throw new Error(`Dual-ticket operations are unavailable: ${capability.reason}`);
+    }
+    return capability.controller;
+  }
+
+  async armForLane(group: Group, label: string): Promise<void> {
+    const controller = await this.dualTicketController();
+    const current = await controller.read(group);
+    await controller.prepare(group, { ...current, account: label });
+  }
+
+  async readLaneEquity(_group: Group): Promise<number | null> {
+    // The live top-bar equity is global, not proven ticket-scoped. Returning
+    // null prevents one lane from attributing another lane's balance.
+    return null;
+  }
+
+  async selectLaneAtmPreset(group: Group, name: string): Promise<void> {
+    const controller = await this.dualTicketController();
+    const current = await controller.read(group);
+    await controller.prepare(group, { ...current, atmPreset: name });
+  }
+
+  async setLaneQuantity(group: Group, quantity: number): Promise<void> {
+    const controller = await this.dualTicketController();
+    const current = await controller.read(group);
+    await controller.prepare(group, { ...current, quantity });
+  }
+
+  async clickLaneOrder(group: Group, action: "buy" | "sell", _label: string): Promise<void> {
+    await (await this.dualTicketController()).clickOrder(group, action);
+  }
+
+  async clickLaneExit(group: Group, _label: string): Promise<void> {
+    await (await this.dualTicketController()).clickExit(group);
+  }
+
+  async verifyLaneAccount(group: Group, label: string): Promise<boolean> {
+    return (await (await this.dualTicketController()).read(group)).account === label;
+  }
+
+  /** Read the visible ticket size from the DOM, never from the cached value. */
+  private async displayedQuantity(): Promise<number | null> {
+    if (!this.page) return null;
+    return this.page.evaluate(() => {
+      const stack: (Document | ShadowRoot)[] = [document];
+      let numeric: HTMLInputElement | null = null;
+      let formControl: HTMLInputElement | null = null;
+      while (stack.length) {
+        const root = stack.pop()!;
+        const marked = root.querySelector("[data-bot-qty]") as HTMLInputElement | null;
+        if (marked && marked.offsetWidth > 0 && marked.offsetHeight > 0) return Number(marked.value);
+        const all = root.querySelectorAll("*");
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLElement;
+          if (el.shadowRoot) stack.push(el.shadowRoot);
+          if (!(el instanceof HTMLInputElement)) continue;
+          const style = getComputedStyle(el);
+          if (el.offsetWidth <= 0 || el.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          const hint = `${el.getAttribute("aria-label") || ""} ${el.name || ""} ${el.placeholder || ""}`.toLowerCase();
+          const cls = (el.className || "").toString().toLowerCase();
+          if (/qty|quantity|size|contract/.test(hint)) return Number(el.value);
+          if (!numeric && el.type === "number") numeric = el;
+          if (!formControl && cls.includes("form-control") && /^\s*\d+\s*$/.test(el.value)) formControl = el;
+        }
+      }
+      return numeric ? Number(numeric.value) : formControl ? Number(formControl.value) : null;
+    }).catch(() => null);
+  }
+
+  async verifySequentialPreparedOrderState(label: string, atmPreset: string, quantity?: number): Promise<boolean> {
+    if (!await this.verifyActiveAccount(label)) return false;
+    if (atmPreset.trim() && !await this.atmPresetShown(atmPreset)) return false;
+    const displayed = await this.displayedQuantity();
+    if (!Number.isInteger(displayed) || displayed! < 1) return false;
+    return quantity == null || displayed === Math.floor(quantity);
+  }
+
+  async verifySequentialExitState(label: string): Promise<boolean> {
+    return this.verifyActiveAccount(label);
+  }
+
+  /** Fail-closed final read immediately before a Buy/Sell click. */
+  async verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<boolean> {
+    const capability = await this.inspectCapabilities();
+    if (capability.mode === "dual-ticket" && capability.controller) {
+      const state = await capability.controller.read(group);
+      return state.account === label
+        && (!atmPreset.trim() || state.atmPreset === atmPreset.trim())
+        && (quantity == null || state.quantity === Math.floor(quantity));
+    }
+    return this.verifySequentialPreparedOrderState(label, atmPreset, quantity);
+  }
+
+  /** Fail-closed final account read immediately before an Exit click. */
+  async verifyExitState(group: Group, label: string): Promise<boolean> {
+    const capability = await this.inspectCapabilities();
+    if (capability.mode === "dual-ticket" && capability.controller) {
+      return (await capability.controller.read(group)).account === label;
+    }
+    return this.verifySequentialExitState(label);
+  }
+
   /** Re-check whether the trader screen is actually loaded and logged in. */
   async refreshLoginState(timeout = 3_000): Promise<boolean> {
     if (!this.page) return false;
@@ -146,30 +294,54 @@ export class TradovateBrowser {
     return this.loggedIn;
   }
 
-  /** Best-effort automatic login: click Login, then the Simulated button. */
+  /**
+   * Bounded, click-only session recovery. This deliberately never inspects or
+   * fills credentials and never touches an order control. The persistent
+   * browser profile must already hold any username/password needed by Login.
+   */
   private async tryAutoLogin(): Promise<void> {
     await this.snapshot("autologin-1-loginpage");
-    const loginCandidates = [
-      this.p.getByText(TXT.loginButton, { exact: true }),
-      this.p.getByRole("button", { name: TXT.loginButton }),
-      this.p.locator('button:has-text("Login"), [role="button"]:has-text("Login")'),
-    ];
-    for (const cand of loginCandidates) {
-      const el = cand.first();
-      if (await el.isVisible({ timeout: 4_000 }).catch(() => false)) {
-        await el.click({ timeout: 5_000 }).catch((e) => log.warn(`Login click error: ${e.message}`));
-        break;
-      }
-    }
-    await this.p.waitForTimeout(2_500).catch(() => {});
-    await this.snapshot("autologin-2-after-login");
+    let clickedApprovedControl = false;
+    let unknownPolls = 0;
+    for (let step = 0; step < 80; step++) {
+      if (await this.refreshLoginState(250)) return;
 
-    const simBtn = this.p.getByText(TXT.simButton).first();
-    if (await simBtn.isVisible({ timeout: 15_000 }).catch(() => false)) {
-      await simBtn.click({ timeout: 5_000 }).catch((e) => log.warn(`Sim click error: ${e.message}`));
+      const clockHeading = this.p.getByText(TXT.clockWarning).first();
+      const continueButton = this.p.getByRole("button", { name: TXT.clockContinue, exact: true }).first();
+      const loginButton = this.p.getByRole("button", { name: TXT.loginButton, exact: true }).first();
+      const simulationButton = this.p.getByRole("button", { name: TXT.simulationButton }).first();
+
+      let action: { kind: "clock" | "login" | "simulation"; locator: Locator } | null = null;
+      if (
+        await clockHeading.isVisible().catch(() => false)
+        && await continueButton.isVisible().catch(() => false)
+      ) {
+        action = { kind: "clock", locator: continueButton };
+      } else if (await loginButton.isVisible().catch(() => false)) {
+        action = { kind: "login", locator: loginButton };
+      } else if (await simulationButton.isVisible().catch(() => false)) {
+        action = { kind: "simulation", locator: simulationButton };
+      }
+
+      if (!action) {
+        unknownPolls++;
+        const limit = clickedApprovedControl ? 40 : 4;
+        if (unknownPolls >= limit) return;
+        await this.p.waitForTimeout(250).catch(() => {});
+        continue;
+      }
+
+      if (action.kind === "clock") {
+        log.warn("Tradovate displayed its clock warning; continuing without changing Windows time.");
+      }
+      await action.locator.click({ timeout: 5_000 }).catch((error: Error) => {
+        log.warn(`Tradovate ${action!.kind} recovery click error: ${error.message}`);
+      });
+      clickedApprovedControl = true;
+      unknownPolls = 0;
+      await this.snapshot(`autologin-${step + 2}-after-${action.kind}`);
+      await this.p.waitForTimeout(500).catch(() => {});
     }
-    await this.p.waitForTimeout(2_000).catch(() => {});
-    await this.snapshot("autologin-3-after-sim");
   }
 
   /**
@@ -239,6 +411,21 @@ export class TradovateBrowser {
     await this.dismissPopups().catch(() => false);
     await this.switchAccount(label);
     log.info(`Armed: ${label} selected and ready.`);
+  }
+
+  /** Cheap safety read used only while closing/monitoring an open trade. */
+  async verifyActiveAccount(label: string): Promise<boolean> {
+    await this.requireLoggedIn();
+    const current = await this.p
+      .getByText(TXT.accountIdPattern)
+      .first()
+      .textContent({ timeout: 2_000 })
+      .catch(() => null);
+    const normalized = (current ?? "").replace(/\s+/g, " ").trim();
+    const tokens = normalized.split(/[^A-Za-z0-9_-]+/).filter(Boolean);
+    const matches = normalized === label || tokens.includes(label);
+    if (!matches) this.currentAccount = null;
+    return matches;
   }
 
   /**
@@ -372,6 +559,99 @@ export class TradovateBrowser {
     return extractEquity(raw);
   }
 
+  /** Read the selected account's position from the order ticket and top
+   * `Positions: + N/- N` summary in one page pass. The ticket is primary and
+   * the top summary is corroborating/fallback evidence. Hidden, malformed,
+   * duplicate, or conflicting evidence always fails safe. */
+  async readSelectedPosition(): Promise<BrokerPosition> {
+    const checkedAt = new Date().toISOString();
+    if (!this.page || !this.loggedIn) {
+      return { status: "unknown", reason: "Tradovate is not connected and logged in.", checkedAt };
+    }
+    const evidence = await this.page.evaluate(() => {
+      const roots: (Document | ShadowRoot)[] = [document];
+      const labels: HTMLElement[] = [];
+      const summaryCandidates: string[] = [];
+      while (roots.length) {
+        const root = roots.pop()!;
+        const all = root.querySelectorAll("*");
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLElement;
+          if (el.shadowRoot) roots.push(el.shadowRoot);
+          const style = getComputedStyle(el);
+          if (el.offsetWidth <= 0 || el.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (text.toUpperCase() === "POSITION") labels.push(el);
+
+          if (/^Positions:\s*\+\s*\d+\s*\/\s*-\s*\d+$/i.test(text)) {
+            let hasMatchingDescendant = false;
+            const descendants = el.querySelectorAll("*");
+            for (let j = 0; j < descendants.length; j++) {
+              const child = descendants[j] as HTMLElement;
+              const childStyle = getComputedStyle(child);
+              if (child.offsetWidth <= 0 || child.offsetHeight <= 0 || childStyle.display === "none" || childStyle.visibility === "hidden") continue;
+              const childText = (child.textContent || "").replace(/\s+/g, " ").trim();
+              if (/^Positions:\s*\+\s*\d+\s*\/\s*-\s*\d+$/i.test(childText)) {
+                hasMatchingDescendant = true;
+                break;
+              }
+            }
+            if (!hasMatchingDescendant) summaryCandidates.push(text);
+          }
+        }
+      }
+
+      const found: string[] = [];
+      for (let i = 0; i < labels.length; i++) {
+        const label = labels[i]!;
+        let ticket: HTMLElement | null = label.parentElement;
+        while (ticket && ticket.tagName !== "BODY" && ticket.tagName !== "HTML") {
+          let hasBuy = false;
+          let hasSell = false;
+          const descendants = ticket.querySelectorAll("*");
+          for (let j = 0; j < descendants.length; j++) {
+            const node = descendants[j] as HTMLElement;
+            const style = getComputedStyle(node);
+            if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+            const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+            if (text === "Buy Mkt") hasBuy = true;
+            if (text === "Sell Mkt") hasSell = true;
+          }
+          if (hasBuy && hasSell) break;
+          ticket = ticket.parentElement;
+        }
+        if (!ticket || ticket.tagName === "BODY" || ticket.tagName === "HTML") continue;
+
+        let scope: HTMLElement | null = label.parentElement;
+        let candidate: string | null = null;
+        while (scope) {
+          const numeric: string[] = [];
+          const descendants = scope.querySelectorAll("*");
+          for (let j = 0; j < descendants.length; j++) {
+            const node = descendants[j] as HTMLElement;
+            if (node.childElementCount > 0) continue;
+            const style = getComputedStyle(node);
+            if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+            const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) numeric.push(text);
+          }
+          if (numeric.length === 1) {
+            candidate = numeric[0]!;
+            break;
+          }
+          if (scope === ticket) break;
+          scope = scope.parentElement;
+        }
+        if (candidate != null) found.push(candidate);
+      }
+      return { ticketCandidates: found, summaryCandidates };
+    }).catch(() => ({ ticketCandidates: [] as string[], summaryCandidates: [] as string[] }));
+
+    const ticket = classifyBrokerPosition(evidence.ticketCandidates, checkedAt);
+    const summary = classifyTopPositionSummary(evidence.summaryCandidates, checkedAt);
+    return combineBrokerPositionSources(ticket, summary);
+  }
+
   /** Read the balance after a short settle delay (for a just-closed trade). */
   async readSettledEquity(): Promise<number | null> {
     await this.p.waitForTimeout(1_200).catch(() => {});
@@ -495,36 +775,32 @@ export class TradovateBrowser {
       return;
     }
 
-    // Open the ATM strategy dropdown (a dropdown/combobox by the "ATM" label).
-    const openers = [
-      p.locator('[role="combobox"]:near(:text("ATM"))'),
-      p.locator('[class*="dropdown" i]:near(:text("ATM"))'),
-      p.locator('[class*="select" i]:near(:text("ATM"))'),
-      p.locator("select:near(:text(\"ATM\"))"),
-    ];
-    let opened = false;
-    for (const o of openers) {
-      const el = o.first();
-      if (await el.isVisible({ timeout: 1_000 }).catch(() => false)) {
-        await el.click({ timeout: 2_500 }).catch(() => {});
-        if (await this.atmOptionVisible(want)) {
-          opened = true;
-          break;
-        }
-        await p.keyboard.press("Escape").catch(() => {});
-        await p.waitForTimeout(120).catch(() => {});
-      }
-    }
-    if (!opened) {
-      await this.snapshot("atm-dropdown-not-open", true);
-      throw new Error(`Couldn't open the ATM dropdown to pick preset "${want}".`);
-    }
+    // Normalize any previous open-menu state, then remember exact-text matches
+    // that are already visible. Only a NEW match revealed by clicking the ATM
+    // control can be an ATM option; this prevents a numeric preset such as 25
+    // from ever matching quantity, ladder, or other order-ticket UI.
+    await p.keyboard.press("Escape").catch(() => {});
+    await p.waitForTimeout(100).catch(() => {});
+    await this.markAtmVisibleBaseline();
 
-    if (!(await this.clickAtmOption(want))) {
+    // Tradovate has several nearby controls (quantity, ATM, DAY/GTC). Anchor
+    // to the exact visible ATM label and accept only a preset-bearing select /
+    // combobox / dropdown control on that same row, never a generic icon.
+    const control = await this.findAtmPresetControl();
+    if (!control) {
+      await this.snapshot("atm-dropdown-not-found", true);
+      throw new Error(`Couldn't find the ATM dropdown to pick preset "${want}".`);
+    }
+    await control.click({ timeout: 2_500 });
+    const option = await this.waitForNewVisibleAtmOption(want, 1_200);
+
+    if (!option) {
       await p.keyboard.press("Escape").catch(() => {});
-      await this.snapshot("atm-preset-not-found", true);
+      await this.snapshot("atm-preset-not-in-dropdown", true);
       throw new Error(`ATM preset "${want}" wasn't in the dropdown — check the name matches exactly.`);
     }
+
+    await option.click({ timeout: 2_500 });
     await p.waitForTimeout(200).catch(() => {});
     if (!(await this.atmPresetShown(want))) {
       await this.snapshot("atm-preset-not-applied", true);
@@ -537,29 +813,185 @@ export class TradovateBrowser {
 
   /** Is `name` the currently-selected ATM preset shown in the panel? */
   private async atmPresetShown(name: string): Promise<boolean> {
-    if (!this.page) return false;
-    const exact = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
-    const box = this.page
-      .locator('[role="combobox"], select, [class*="dropdown" i], [class*="select" i]')
-      .filter({ hasText: exact });
-    return await box.first().isVisible({ timeout: 800 }).catch(() => false);
+    const control = await this.findAtmPresetControl();
+    if (!control) return false;
+    const shown = await control
+      .evaluate((el) =>
+        el instanceof HTMLSelectElement
+          ? (el.selectedOptions[0]?.textContent ?? el.value)
+          : (el.textContent ?? ""),
+      )
+      .catch(() => "");
+    return shown.trim() === name.trim();
   }
 
-  private atmOption(name: string) {
-    return this.p
-      .getByRole("option", { name, exact: true })
-      .or(this.p.locator('[role="listbox"], [role="menu"], [class*="menu" i], [class*="dropdown" i]').getByText(name, { exact: true }));
+  /** Locate the actual ATM preset control, not the quantity or DAY/GTC controls. */
+  private async findAtmPresetControl(): Promise<Locator | null> {
+    if (!this.page) return null;
+    const marked = await this.page
+      .evaluate(() => {
+        const old = document.querySelectorAll("[data-bot-atm-preset-control]");
+        for (let i = 0; i < old.length; i++) old[i]!.removeAttribute("data-bot-atm-preset-control");
+
+        const all = document.querySelectorAll("*");
+        let label: HTMLElement | null = null;
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLElement;
+          if ((el.textContent || "").trim() !== "ATM") continue;
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          if (r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden") {
+            label = el;
+            break;
+          }
+        }
+        if (!label) return false;
+
+        const lr = label.getBoundingClientRect();
+        const labelY = lr.top + lr.height / 2;
+        const candidates = document.querySelectorAll(
+          '[role="combobox"], select, button[aria-haspopup], [class*="dropdown" i], [class*="select" i]',
+        );
+        let best: HTMLElement | null = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < candidates.length; i++) {
+          const el = candidates[i] as HTMLElement;
+          if (el === label || el.contains(label)) continue;
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          if (r.width <= 0 || r.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (/Buy Mkt|Sell Mkt|Buy Bid|Sell Ask|Exit at Mkt/i.test(text)) continue;
+          if (!(el instanceof HTMLSelectElement) && !/[A-Za-z0-9]/.test(text)) continue;
+          const sameRow = Math.abs(r.top + r.height / 2 - labelY) <= Math.max(10, lr.height * 0.6);
+          const distance = r.left - lr.right;
+          if (!sameRow || distance < -8 || distance > 300) continue;
+          if (distance < bestDistance) {
+            best = el;
+            bestDistance = distance;
+          }
+        }
+        if (!best) return false;
+        best.setAttribute("data-bot-atm-preset-control", "1");
+        return true;
+      })
+      .catch(() => false);
+    return marked ? this.page.locator("[data-bot-atm-preset-control]") : null;
   }
 
-  private async atmOptionVisible(name: string): Promise<boolean> {
-    return await this.atmOption(name).first().isVisible({ timeout: 1_200 }).catch(() => false);
+  /** Mark every visible element before the ATM popup opens. */
+  private async markAtmVisibleBaseline(): Promise<void> {
+    if (!this.page) return;
+    await this.page.evaluate(() => {
+      const all = document.querySelectorAll("body *");
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i] as HTMLElement;
+        el.removeAttribute("data-bot-atm-visible-before");
+        el.removeAttribute("data-bot-atm-option");
+        el.removeAttribute("data-bot-atm-popup-surface");
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden") {
+          el.setAttribute("data-bot-atm-visible-before", "1");
+        }
+      }
+    });
   }
 
-  private async clickAtmOption(name: string): Promise<boolean> {
-    const el = this.atmOption(name).first();
-    if (!(await el.isVisible({ timeout: 1_000 }).catch(() => false))) return false;
-    await el.click({ timeout: 2_500 }).catch(() => {});
-    return true;
+  /** Find an exact match that became visible only after the ATM control click. */
+  private async findNewVisibleAtmOption(name: string): Promise<Locator | null> {
+    if (!this.page) return null;
+    const marked = await this.page
+      .evaluate((want) => {
+        document.querySelectorAll("[data-bot-atm-option]").forEach((el) =>
+          el.removeAttribute("data-bot-atm-option"),
+        );
+        document.querySelectorAll("[data-bot-atm-popup-surface]").forEach((el) =>
+          el.removeAttribute("data-bot-atm-popup-surface"),
+        );
+        const control = document.querySelector("[data-bot-atm-preset-control]") as HTMLElement | null;
+        if (!control) return false;
+        const cr = control.getBoundingClientRect();
+        const matches: HTMLElement[] = [];
+        const all = document.querySelectorAll("body *");
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLElement;
+          if (el.hasAttribute("data-bot-atm-visible-before")) continue;
+          if (el.closest("[data-bot-atm-preset-control]")) continue;
+          if ((el.textContent || "").replace(/\s+/g, " ").trim() !== want) continue;
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          if (r.width <= 0 || r.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          matches.push(el);
+        }
+        // Prefer the deepest exact-text node so a click targets the item (or a
+        // child that bubbles to it), not an enclosing popup surface.
+        const leaves = matches.filter((el) => !matches.some((other) => other !== el && el.contains(other)));
+        for (const leaf of leaves) {
+          const r = leaf.getBoundingClientRect();
+          const horizontallyAssociated =
+            Math.abs(r.left + r.width / 2 - (cr.left + cr.width / 2)) <= Math.max(400, cr.width * 3);
+          const verticallyAssociated = r.top >= cr.top - 30 && r.top <= cr.bottom + 600;
+          if (!horizontallyAssociated || !verticallyAssociated) continue;
+
+          // A legitimate role-less dropdown item sits inside a popup subtree
+          // that was hidden (or absent) before the opener click. A changing
+          // ladder/quantity cell remains inside a previously-visible parent.
+          const firstSurface = leaf.parentElement;
+          if (!firstSurface || firstSurface === document.body || firstSurface.hasAttribute("data-bot-atm-visible-before")) {
+            continue;
+          }
+          let surface: HTMLElement = firstSurface;
+          while (surface.parentElement && surface.parentElement !== document.body) {
+            const parent: HTMLElement = surface.parentElement;
+            const pr = parent.getBoundingClientRect();
+            const ps = getComputedStyle(parent);
+            if (
+              parent.hasAttribute("data-bot-atm-visible-before") ||
+              parent.contains(control) ||
+              pr.width <= 0 ||
+              pr.height <= 0 ||
+              ps.display === "none" ||
+              ps.visibility === "hidden"
+            ) break;
+            surface = parent;
+          }
+
+          const itemTexts = new Set<string>();
+          const descendants = surface.querySelectorAll("*");
+          for (let i = 0; i < descendants.length; i++) {
+            const item = descendants[i] as HTMLElement;
+            const text = (item.textContent || "").replace(/\s+/g, " ").trim();
+            if (!text || text.length > 80) continue;
+            const ir = item.getBoundingClientRect();
+            const is = getComputedStyle(item);
+            if (ir.width <= 0 || ir.height <= 0 || is.display === "none" || is.visibility === "hidden") continue;
+            const hasTextChild = Array.from(item.children).some(
+              (child) => (child.textContent || "").replace(/\s+/g, " ").trim().length > 0,
+            );
+            if (!hasTextChild) itemTexts.add(text);
+          }
+          if (itemTexts.size < 2) continue;
+
+          surface.setAttribute("data-bot-atm-popup-surface", "1");
+          leaf.setAttribute("data-bot-atm-option", "1");
+          return true;
+        }
+        return false;
+      }, name)
+      .catch(() => false);
+    return marked ? this.page.locator("[data-bot-atm-option]") : null;
+  }
+
+  private async waitForNewVisibleAtmOption(name: string, timeoutMs: number): Promise<Locator | null> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const option = await this.findNewVisibleAtmOption(name);
+      if (option) return option;
+      if (Date.now() >= deadline) return null;
+      await this.p.waitForTimeout(75).catch(() => {});
+    } while (Date.now() < deadline);
+    return null;
   }
 
   /**
@@ -676,5 +1108,6 @@ export class TradovateBrowser {
     this.page = null;
     this.loggedIn = false;
     this.currentAccount = null;
+    this.ticketCapabilities = undefined;
   }
 }

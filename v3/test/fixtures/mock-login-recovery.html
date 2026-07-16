@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Tradovate recovery fixture</title>
+</head>
+<body>
+  <main id="screen"></main>
+  <script>
+    const initial = new URLSearchParams(location.search).get("state") || "full";
+    window.__recoveryClicks = [];
+
+    function button(label, next) {
+      const el = document.createElement("button");
+      el.textContent = label;
+      el.addEventListener("click", () => {
+        window.__recoveryClicks.push(label);
+        render(next);
+      });
+      return el;
+    }
+
+    function render(state) {
+      const screen = document.getElementById("screen");
+      screen.replaceChildren();
+      if (state === "full") {
+        screen.append("Welcome back!", button("Login", "clock"));
+      } else if (state === "clock") {
+        screen.append("Your clock is out of sync!", button("Continue", "mode"));
+      } else if (state === "mode") {
+        screen.append("Select a Trading Mode", button("Access Simulation", "trader"));
+      } else if (state === "legacy") {
+        screen.append("Select mode", button("Start Simulated Trading", "trader"));
+      } else if (state === "trader") {
+        const buy = document.createElement("span");
+        buy.textContent = "Buy Mkt";
+        screen.append("POSITION 0", buy);
+      } else {
+        screen.textContent = "Two-factor authentication is required.";
+      }
+    }
+
+    render(initial);
+  </script>
+</body>
+</html>

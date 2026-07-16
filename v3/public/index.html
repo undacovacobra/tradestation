@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Trading Bot V3 (test)</title>
+  <title>ATLAS</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header>
     <div class="brand">
-      <span class="logo">🧪</span>
-      <h1>Trading Bot V3</h1>
+      <span class="logo">🧭</span>
+      <h1>ATLAS</h1>
     </div>
     <div class="pills">
       <span id="pill-running" class="pill gray"><span class="dot"></span><span class="pill-text">…</span></span>
@@ -24,8 +24,8 @@
     <section class="controls card">
       <button id="btn-running" class="btn big">…</button>
       <button id="btn-mode" class="btn big">…</button>
+      <button id="btn-flatten-all" class="btn big danger">⛔ Flatten all positions</button>
       <button id="btn-browser" class="btn">Connect browser</button>
-      <button id="btn-scan" class="btn">Scan Tradovate accounts</button>
       <button id="btn-testqty" class="btn">🔢 Test size</button>
       <button id="btn-testbracket" class="btn">🎯 Test ATM preset</button>
       <button id="btn-tunnel" class="btn">Remote access</button>
@@ -33,40 +33,34 @@
 
     <div id="banner" class="banner" hidden></div>
 
-    <section class="groups">
-      <div class="card group" id="group-evals" data-group="evals">
-        <h2>🎓 Evaluation accounts <small>(LFE…)</small></h2>
-        <div class="webhook-row">
-          <span class="webhook-label">Webhook for TradingView:</span>
-          <code class="webhook-url"></code>
-          <button class="btn small copy-webhook">Copy</button>
-          <button class="btn small speed-test">⏱ Speed test</button>
+    <section class="card login-card" id="login-sessions">
+      <div class="section-heading">
+        <div>
+          <h2>Tradovate accounts</h2>
+          <small>Each username uses one sign-in for both lanes. Evaluation accounts stay on the left, Funded accounts stay on the right, and Funded work is prioritized when alerts arrive together.</small>
         </div>
-        <div class="next-row"></div>
-        <ul class="account-list"></ul>
-        <form class="add-form">
-          <input name="label" placeholder="Account id (e.g. LFE0507…)" required />
-          <input name="name" placeholder="Nickname (optional)" />
-          <button class="btn small" type="submit">Add</button>
-        </form>
       </div>
-
-      <div class="card group" id="group-funded" data-group="funded">
-        <h2>💰 Funded accounts <small>(LFF…)</small></h2>
-        <div class="webhook-row">
-          <span class="webhook-label">Webhook for TradingView:</span>
-          <code class="webhook-url"></code>
-          <button class="btn small copy-webhook">Copy</button>
-          <button class="btn small speed-test">⏱ Speed test</button>
+      <div class="credential-tools">
+        <div>
+          <strong>Add or import Tradovate accounts</strong>
+          <small>Connect the username once, then scan its accounts and assign each one to Evaluations or Funded.</small>
         </div>
-        <div class="next-row"></div>
-        <ul class="account-list"></ul>
-        <form class="add-form">
-          <input name="label" placeholder="Account id (e.g. LFF0507…)" required />
-          <input name="name" placeholder="Nickname (optional)" />
-          <button class="btn small" type="submit">Add</button>
-        </form>
+        <button id="btn-add-login" class="btn small primary">+ Add Tradovate login</button>
+        <button id="btn-scan-assign" class="btn small">Scan &amp; assign accounts</button>
       </div>
+      <div class="webhook-grid" aria-label="TradingView webhook URLs">
+        <div class="webhook-row webhook-card eval-webhook">
+          <span class="webhook-label">Evaluations webhook (all evaluation lanes)</span>
+          <code id="global-evals-webhook-url"></code>
+          <button class="btn small copy-global" data-copy-target="global-evals-webhook-url">Copy</button>
+        </div>
+        <div class="webhook-row webhook-card funded-webhook">
+          <span class="webhook-label">Funded webhook (all funded lanes)</span>
+          <code id="global-funded-webhook-url"></code>
+          <button class="btn small copy-global" data-copy-target="global-funded-webhook-url">Copy</button>
+        </div>
+      </div>
+      <div id="login-list" class="login-list"></div>
     </section>
 
     <section class="card" id="passed-card" hidden>

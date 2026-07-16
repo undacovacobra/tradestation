@@ -161,8 +161,18 @@ on:
 
 ## Part 8 — Add your accounts
 
-1. On the dashboard click **"Scan Tradovate accounts."** It reads your account
-   list from Tradovate automatically.
+Before scanning, use the **Tradovate logins** card to add each saved session.
+Give it a friendly name and prop-firm name, click Connect, and complete login/2FA
+once. Accounts under one prop-firm username can share a saved login; different
+prop-firm usernames need different saved logins.
+
+For evaluation and funded alerts to execute at the same instant, create two
+saved sessions and assign evals to one and funded to the other. The two sessions
+may use the same Tradovate username. One browser window can keep only one
+account and ATM prepared at a time.
+
+1. In the Tradovate logins card, click **Scan accounts** beside the login you
+   want to scan. It reads that login's accounts automatically.
 2. Tick which accounts are **Evals** (ids starting LFE) and which are **Funded**
    (LFF) — it pre-guesses — then add them.
 3. Use the arrows to set the order they're traded in. The one marked **NEXT**
@@ -178,8 +188,9 @@ on:
    https://your-words-here.ngrok-free.dev/webhook/evals
    ```
 
-   (`/webhook/evals` trades your eval accounts; `/webhook/funded` trades your
-   funded ones. Make one alert per lane you use.)
+   (`/webhook/evals` trades evals; `/webhook/funded` trades funded. Use one per
+   lane when quantities differ. Use `/webhook` to send the same signal and
+   quantity to both lanes concurrently.)
 3. Paste this in the alert **Message** box, replacing the secret with YOUR
    secret:
 

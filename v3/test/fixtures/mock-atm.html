@@ -1,31 +1,47 @@
 <!doctype html>
 <html>
 <head><meta charset="utf-8" /><title>Mock ATM dropdown</title>
-<style>[role="listbox"]{display:none}</style>
+<style>#atmlist{display:none}.atm-row{display:flex;align-items:center;gap:8px}</style>
 </head>
 <body>
   <!-- "Buy Mkt" is the logged-in marker the bot checks for. -->
   <button>Buy Mkt</button>
   <button>Sell Mkt</button>
 
-  <!-- The ATM strategy dropdown: a combobox next to the "ATM" label showing the
-       current preset name. Clicking it reveals a listbox of preset options. -->
-  <div>
+  <!-- The ATM strategy dropdown: the opener is a combobox, but the floating
+       menu and its items intentionally have no listbox/option roles and no
+       menu/dropdown class names. This matches the live Tradovate markup seen
+       in the failure screenshot: the menu is visibly open even though the old
+       role/class-based option locator cannot see its items. -->
+  <div class="atm-row">
     <span>ATM</span>
+    <button id="atmgear" aria-label="ATM settings" onclick="document.body.dataset.gearClicked='yes'">⚙</button>
     <div id="atmbox" role="combobox" class="atm-select"
-         onclick="document.getElementById('atmlist').style.display='block'">jj eval</div>
+         onclick="toggleAtm()">jj eval</div>
   </div>
-  <div id="atmlist" role="listbox">
-    <div role="option" onclick="pick('25')">25</div>
-    <div role="option" onclick="pick('50')">50</div>
-    <div role="option" onclick="pick('funded')">funded</div>
+  <!-- An unrelated, always-visible exact numeric match. The bot must never
+       treat it as an ATM option while the popup is closed. -->
+  <button id="unrelated25" onclick="document.body.dataset.unrelatedClicked='yes'">25</button>
+  <button id="changing-number" onclick="document.body.dataset.changingClicked='yes'">24</button>
+  <div id="atmlist" class="popup-surface">
+    <div class="dropdown-item" onclick="pick('25')">25</div>
+    <div class="dropdown-item" onclick="pick('50')">50</div>
+    <div class="dropdown-item" onclick="pick('funded')">funded</div>
   </div>
 
   <script>
+    function toggleAtm(){
+      const list = document.getElementById('atmlist');
+      list.style.display = list.style.display === 'block' ? 'none' : 'block';
+      if (list.style.display === 'block') document.getElementById('changing-number').textContent = '25';
+    }
     function pick(name){
       document.getElementById('atmbox').textContent = name;
       document.getElementById('atmlist').style.display = 'none';
     }
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') document.getElementById('atmlist').style.display = 'none';
+    });
   </script>
 </body>
 </html>

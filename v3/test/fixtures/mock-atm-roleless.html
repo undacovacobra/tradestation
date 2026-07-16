@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>Mock role-less ATM dropdown</title>
+<style>#atmlist{display:none}.atm-row{display:flex;align-items:center;gap:8px}</style>
+</head>
+<body>
+  <button>Buy Mkt</button>
+  <button>Sell Mkt</button>
+
+  <!-- A nearby combobox that appears earlier in the DOM, like Tradovate's
+       quantity control. A generic :near("ATM") lookup must not click this. -->
+  <div class="atm-row">
+    <span>Qty</span>
+    <div id="qtybox" role="combobox" class="qty-select">20</div>
+  </div>
+
+  <div class="atm-row">
+    <span>ATM</span>
+    <button id="atmgear" aria-label="ATM settings" onclick="document.body.dataset.gearClicked='yes'">⚙</button>
+    <div id="atmbox" role="combobox" class="atm-select"
+         onclick="toggleAtm()">jj eval</div>
+  </div>
+  <button id="unrelated25" onclick="document.body.dataset.unrelatedClicked='yes'">25</button>
+  <button id="changing-number" onclick="document.body.dataset.changingClicked='yes'">24</button>
+  <div id="atmlist" class="popup-surface">
+    <div class="popup-item" onclick="pick('25')">25</div>
+    <div class="popup-item" onclick="pick('50')">50</div>
+    <div class="popup-item" onclick="pick('funded')">funded</div>
+  </div>
+
+  <script>
+    function toggleAtm(){
+      const list = document.getElementById('atmlist');
+      list.style.display = list.style.display === 'block' ? 'none' : 'block';
+      if (list.style.display === 'block') document.getElementById('changing-number').textContent = '25';
+    }
+    function pick(name){
+      document.getElementById('atmbox').textContent = name;
+      document.getElementById('atmlist').style.display = 'none';
+    }
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') document.getElementById('atmlist').style.display = 'none';
+    });
+  </script>
+</body>
+</html>

@@ -65,6 +65,7 @@ test("armed switchAccount does NOT open the menu; entry is just the click", asyn
     await b2.switchAccount("LFE05079261220006");
     assert.equal(await page.evaluate(() => window.__menuOpened), false, "already-on account adopted without menu");
     assert.equal(b2.currentAccount, "LFE05079261220006");
+    assert.equal(await b2.verifyActiveAccount("LFE0507926122000"), false, "account matching must not accept a prefix");
 
     // Need a different account: the menu DOES open and the row is picked.
     await page.goto(fixture);

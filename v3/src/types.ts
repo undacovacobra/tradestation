@@ -3,9 +3,22 @@ import { z } from "zod";
 /** The two independent rotation lanes. */
 export const GROUPS = ["evals", "funded"] as const;
 export type Group = (typeof GROUPS)[number];
+/** Credential-scoped name for a rotation group. */
+export type Stage = Group;
 
 export function isGroup(v: string): v is Group {
   return (GROUPS as readonly string[]).includes(v);
+}
+
+/** One isolated persistent browser execution session. */
+export interface SavedLogin {
+  id: string;
+  name: string;
+  firm: string;
+  platform: "tradovate";
+  sessionDir: string;
+  enabled: boolean;
+  autoConnect: boolean;
 }
 
 /**
@@ -67,6 +80,10 @@ export interface StoredAccount {
   status: "active" | "passed";
   /** Saved Tradovate ATM preset name to select at arm time ("" = leave ticket's). */
   atmPreset: string;
+  /** Saved execution session that owns this broker account. */
+  loginId: string;
+  /** Prop-firm label copied from the saved login for quick dashboard display. */
+  firm: string;
 }
 
 /** A normalized order the executor knows how to act on. */

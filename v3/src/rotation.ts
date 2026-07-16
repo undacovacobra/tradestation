@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Group, OrderRequest, StoredAccount } from "./types.js";
+import type { LaneKey } from "./lanes.js";
 import { tradingDayKey } from "./tradingDay.js";
 
 export interface OpenTrade {
@@ -14,6 +15,9 @@ export interface OpenTrade {
   openedAt: string;
   /** Account balance read at arm time (before entry), to judge win/loss. */
   entryBalance?: number;
+  /** Execution session captured at entry so later reassignment cannot redirect close. */
+  loginId?: string;
+  firm?: string;
 }
 
 export interface TradeRecord {
@@ -27,6 +31,8 @@ export interface TradeRecord {
   won?: boolean;
   pnl?: number;
   exitBalance?: number;
+  loginId?: string;
+  firm?: string;
 }
 
 export interface GroupState {
@@ -38,6 +44,22 @@ export interface GroupState {
 }
 
 const emptyState = (): GroupState => ({ nextLabel: null, openTrade: null, lastWonDay: {}, history: [] });
+
+export function laneStatePath(dataDir: string, key: LaneKey | string): string {
+  const safeKey = key.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!safeKey) throw new Error("Lane key must contain at least one letter or number.");
+  return join(dataDir, `state-${safeKey}.json`);
+}
+
+/** Copy legacy group state into its credential lane exactly once. */
+export function migrateLegacyLaneState(legacyPath: string, targetPath: string): boolean {
+  if (!existsSync(legacyPath) || existsSync(targetPath)) return false;
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const temp = `${targetPath}.tmp`;
+  writeFileSync(temp, readFileSync(legacyPath));
+  renameSync(temp, targetPath);
+  return true;
+}
 
 /**
  * Account-cycling for ONE group: one round-trip at a time, advance to the next.
@@ -139,6 +161,8 @@ export class GroupRotation {
       quantity: order.quantity,
       openedAt: new Date().toISOString(),
       entryBalance,
+      loginId: account.loginId,
+      firm: account.firm,
     };
     this.state.openTrade = open;
     this.state.nextLabel = account.tradovateLabel;
@@ -176,6 +200,8 @@ export class GroupRotation {
       won,
       pnl,
       exitBalance: opts.exitBalance,
+      loginId: closed.loginId,
+      firm: closed.firm,
     });
     if (this.state.history.length > 500) this.state.history.splice(0, this.state.history.length - 500);
     if (won) this.state.lastWonDay[closed.tradovateLabel] = this.today();
