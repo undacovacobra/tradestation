@@ -414,6 +414,20 @@ export class TradovateBrowser {
     log.info(`Armed: ${label} selected and ready.`);
   }
 
+  /**
+   * Rebuild the sequential ticket from the real Tradovate screen after manual
+   * account / ATM / quantity drift. Clearing the three caches is deliberate:
+   * every operation below must observe or write live UI state.
+   */
+  async repairSequentialPreparedOrderState(label: string, atmPreset: string, quantity?: number): Promise<void> {
+    this.currentAccount = null;
+    this.lastPreset = null;
+    this.lastQty = null;
+    await this.armFor(label);
+    if (atmPreset.trim()) await this.selectAtmPreset(atmPreset, true);
+    if (quantity != null) await this.setQuantity(quantity, true);
+  }
+
   /** Cheap safety read used only while closing/monitoring an open trade. */
   async verifyActiveAccount(label: string): Promise<boolean> {
     await this.requireLoggedIn();

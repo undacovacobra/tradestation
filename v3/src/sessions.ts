@@ -26,7 +26,7 @@ export interface TradingSessionAdapter {
   readSelectedEquity(): Promise<number | null>;
   readSelectedPosition(): Promise<BrokerPosition>;
   selectAtmPreset(name: string): Promise<void>;
-  setQuantity(quantity: number): Promise<void>;
+  setQuantity(quantity: number, force?: boolean): Promise<void>;
   clickOrder(action: "buy" | "sell", label: string): Promise<void>;
   clickExit(label: string): Promise<void>;
   readSettledEquity(): Promise<number | null>;
@@ -45,6 +45,8 @@ export interface TradingSessionAdapter {
   verifyLaneAccount?(group: Group, label: string): Promise<boolean>;
   /** Fresh broker-DOM verification performed immediately before an entry. */
   verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<boolean>;
+  /** Rebuild the live ticket after a person or the broker changes prepared state. */
+  repairPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<void>;
   /** Fresh broker-DOM account verification performed immediately before Exit. */
   verifyExitState(group: Group, label: string): Promise<boolean>;
 }
@@ -303,12 +305,31 @@ export class CredentialWorker {
       }
       const executionStarted = Date.now();
       try {
+        // A person can change the selected account or ATM after idle arming.
+        // Verify the real ticket before touching quantity so a funded signal
+        // never writes its size into an evaluation ticket (or vice versa).
+        if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset)) {
+          await this.adapter.repairPreparedOrderState(group, account.tradovateLabel, account.atmPreset);
+        }
         if (order.quantity != null) {
           if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, order.quantity);
-          else await this.adapter.setQuantity(order.quantity);
+          // The webhook is authoritative. Force the write even when ATLAS's
+          // cache says this value was set earlier: a person may have changed
+          // the visible Tradovate quantity since then.
+          else await this.adapter.setQuantity(order.quantity, true);
         }
         if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset, order.quantity)) {
-          throw new Error(`Final broker verification failed for ${account.name}: account, ATM, or quantity changed. No order was placed.`);
+          // One bounded self-heal covers a UI race between preflight and the
+          // final read. The second live verification remains fail-closed.
+          await this.adapter.repairPreparedOrderState(
+            group,
+            account.tradovateLabel,
+            account.atmPreset,
+            order.quantity,
+          );
+          if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset, order.quantity)) {
+            throw new Error(`Final broker verification failed for ${account.name} after automatic repair. No order was placed.`);
+          }
         }
         if (this.executionMode === "dual-ticket") {
           await this.adapter.clickLaneOrder!(group, order.action, account.tradovateLabel);
@@ -356,7 +377,7 @@ export class CredentialWorker {
       if (!this.isReady(group, account)) throw new Error(`${account.name} is not ready on ${this.definition.name}.`);
       const executionStarted = Date.now();
       if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, quantity);
-      else await this.adapter.setQuantity(quantity);
+      else await this.adapter.setQuantity(quantity, true);
       return { queueWaitMs, executionMs: Date.now() - executionStarted, totalMs: Date.now() - requestedAt };
     });
   }
@@ -384,7 +405,7 @@ export class CredentialWorker {
   disconnect(): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.disconnect()); }
   discoverAccounts(): Promise<string[]> { return this.enqueue("diagnostic", () => this.adapter.discoverAccounts()); }
   testAtmPreset(name: string): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.selectAtmPreset(name)); }
-  testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity)); }
+  testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity, true)); }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.enqueue("diagnostic", () => this.adapter.inspectFields?.() ?? Promise.resolve([])); }
   async close(group: Group, label: string): Promise<void> {
     await this.enqueue("close", async () => {
@@ -516,7 +537,7 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   readSelectedEquity() { return this.browser.readSelectedEquity(); }
   readSelectedPosition() { return this.browser.readSelectedPosition(); }
   selectAtmPreset(name: string) { return this.browser.selectAtmPreset(name); }
-  setQuantity(quantity: number) { return this.browser.setQuantity(quantity); }
+  setQuantity(quantity: number, force = false) { return this.browser.setQuantity(quantity, force); }
   clickOrder(action: "buy" | "sell", label: string) { return this.browser.clickOrder(action, label); }
   clickExit(label: string) { return this.browser.clickExit(label); }
   readSettledEquity() { return this.browser.readSettledEquity(); }
@@ -545,6 +566,12 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number) {
     if (this.independentTicketsBlocked) return Promise.resolve(false);
     return this.browser.verifySequentialPreparedOrderState(label, atmPreset, quantity);
+  }
+  repairPreparedOrderState(_group: Group, label: string, atmPreset: string, quantity?: number) {
+    if (this.independentTicketsBlocked) {
+      return Promise.reject(new Error("Automatic ticket repair is blocked because two independent tickets are open."));
+    }
+    return this.browser.repairSequentialPreparedOrderState(label, atmPreset, quantity);
   }
   verifyExitState(_group: Group, label: string) {
     if (this.independentTicketsBlocked) return Promise.resolve(false);

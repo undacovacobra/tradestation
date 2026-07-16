@@ -18,6 +18,9 @@ class FakeAdapter implements TradingSessionAdapter {
   atmPreset = "";
   quantity: number | undefined;
   verificationAllowed = true;
+  repairSucceeds = true;
+  visibleAccount: string | undefined;
+  visibleAtmPreset: string | undefined;
   activeVerificationAllowed = true;
   activeVerificationResults: boolean[] = [];
   position: BrokerPosition = { status: "flat", checkedAt: "now" };
@@ -36,7 +39,19 @@ class FakeAdapter implements TradingSessionAdapter {
     if (this.failPreset) throw new Error("preset missing");
     this.atmPreset = name;
   }
-  async setQuantity(quantity: number) { this.calls.push(`qty:${quantity}`); this.quantity = quantity; }
+  async setQuantity(quantity: number, force = false) {
+    this.calls.push(`qty:${quantity}${force ? ":force" : ""}`);
+    this.quantity = quantity;
+  }
+  async repairPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number) {
+    this.calls.push(`repair:${group}:${label}:${atmPreset}${quantity == null ? "" : `:${quantity}`}`);
+    if (!this.repairSucceeds) return;
+    this.selectedAccount = label;
+    this.atmPreset = atmPreset;
+    this.visibleAccount = label;
+    this.visibleAtmPreset = atmPreset;
+    if (quantity != null) this.quantity = quantity;
+  }
   async clickOrder(action: "buy" | "sell", label: string) {
     this.calls.push(`order:${action}:${label}`);
     if (this.orderDelayMs) await new Promise((resolve) => setTimeout(resolve, this.orderDelayMs));
@@ -53,7 +68,10 @@ class FakeAdapter implements TradingSessionAdapter {
     return allowed;
   }
   async verifyPreparedOrderState(_group: Group, label: string, atmPreset: string, quantity?: number) {
-    return this.verificationAllowed && this.selectedAccount === label && this.atmPreset === atmPreset && (quantity == null || this.quantity === quantity);
+    return this.verificationAllowed
+      && (this.visibleAccount ?? this.selectedAccount) === label
+      && (this.visibleAtmPreset ?? this.atmPreset) === atmPreset
+      && (quantity == null || this.quantity === quantity);
   }
   async verifyExitState(_group: Group, label: string) { return this.verificationAllowed && this.selectedAccount === label; }
   async work(name: string) {
@@ -182,7 +200,7 @@ test("live entry is rejected when unplanned but queues safely behind credential 
   const maintenance = worker.runMaintenance(() => adapter.work("maintenance"));
   const entry = worker.enterPrepared("evals", acct, order, { skipFundedWindow: true });
   await Promise.all([maintenance, entry]);
-  assert.deepEqual(adapter.calls, ["start:maintenance", "end:maintenance", "qty:2", "order:buy:E1"]);
+  assert.deepEqual(adapter.calls, ["start:maintenance", "end:maintenance", "qty:2:force", "order:buy:E1"]);
 });
 
 test("prepared entry only sets quantity and clicks, then consumes readiness", async () => {
@@ -192,7 +210,7 @@ test("prepared entry only sets quantity and clicks, then consumes readiness", as
   await worker.prepare("evals", acct, callbacks);
   adapter.calls.length = 0;
   const timing = await worker.enterPrepared("evals", acct, { action: "sell", symbol: "MNQ", quantity: 3 });
-  assert.deepEqual(adapter.calls, ["qty:3", "order:sell:E1"]);
+  assert.deepEqual(adapter.calls, ["qty:3:force", "order:sell:E1"]);
   assert.equal(worker.status().ready, undefined);
   assert.ok(timing.totalMs >= 0);
 });
@@ -253,8 +271,18 @@ test("safe quantity test never clicks an order and preserves readiness", async (
   await worker.prepare("evals", acct, callbacks);
   adapter.calls.length = 0;
   await worker.testPreparedQuantity("evals", acct, 4);
-  assert.deepEqual(adapter.calls, ["qty:4"]);
+  assert.deepEqual(adapter.calls, ["qty:4:force"]);
   assert.equal(worker.isReady("evals", acct), true);
+});
+
+test("dashboard quantity diagnostic also forces the visible value", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+
+  await worker.testQuantity(6);
+
+  assert.deepEqual(adapter.calls, ["qty:6:force"]);
+  assert.equal(adapter.calls.some((call) => call.startsWith("order:")), false);
 });
 
 test("open-trade safety can verify the broker still shows the expected account", async () => {
@@ -293,6 +321,56 @@ test("a sequential position read switches read-only, verifies the exact account,
 
   assert.deepEqual(result, { status: "open", netPosition: -2, checkedAt: "now" });
   assert.deepEqual(adapter.calls, ["arm:E1", "position"]);
+});
+
+test("webhook quantity is authoritative even when the ticket was already prepared", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const acct = account("E1", "evals", "one");
+  await worker.prepare("evals", acct, callbacks);
+  adapter.quantity = 3;
+  adapter.calls.length = 0;
+
+  await worker.enterPrepared("evals", acct, { action: "buy", symbol: "MNQ", quantity: 3 });
+
+  assert.equal(adapter.calls.includes("qty:3:force"), true);
+  assert.equal(adapter.calls.at(-1), "order:buy:E1");
+});
+
+test("entry repairs manual account and ATM drift before placing", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const acct = account("F1", "funded", "one");
+  await worker.prepare("funded", acct, callbacks);
+  adapter.visibleAccount = "E1";
+  adapter.visibleAtmPreset = "25";
+  adapter.calls.length = 0;
+
+  await worker.enterPrepared("funded", acct, { action: "sell", symbol: "MNQ", quantity: 4 });
+
+  assert.deepEqual(adapter.calls, [
+    "repair:funded:F1:funded",
+    "qty:4:force",
+    "order:sell:F1",
+  ]);
+});
+
+test("failed automatic ticket repair blocks the order", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const acct = account("F1", "funded", "one");
+  await worker.prepare("funded", acct, callbacks);
+  adapter.visibleAccount = "E1";
+  adapter.visibleAtmPreset = "25";
+  adapter.repairSucceeds = false;
+  adapter.calls.length = 0;
+
+  await assert.rejects(
+    () => worker.enterPrepared("funded", acct, { action: "buy", symbol: "MNQ", quantity: 2 }),
+    /verification failed|repair/i,
+  );
+  assert.equal(adapter.calls.some((call) => call.startsWith("repair:funded:F1:funded")), true);
+  assert.equal(adapter.calls.some((call) => call.startsWith("order:")), false);
 });
 
 test("a lane snapshot force-reselects stale cached account state and reads position plus equity once", async () => {
@@ -375,7 +453,7 @@ test("sequential fallback prepares a remembered nonphysical lane on its executio
   adapter.calls.length = 0;
 
   await worker.enterPrepared("evals", evalAccount, { action: "buy", symbol: "MNQ", quantity: 3 }, { skipFundedWindow: true });
-  assert.deepEqual(adapter.calls, ["arm:E1", "equity", "atm:25", "qty:3", "order:buy:E1"]);
+  assert.deepEqual(adapter.calls, ["arm:E1", "equity", "atm:25", "qty:3:force", "order:buy:E1"]);
 });
 
 test("close work overtakes pending funded and eval maintenance on one credential", async () => {
