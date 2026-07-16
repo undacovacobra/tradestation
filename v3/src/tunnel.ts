@@ -1,7 +1,6 @@
 import { config } from "./config.js";
 import { pushEvent } from "./events.js";
 import { log } from "./logger.js";
-import { createRetryableModuleLoader } from "./retryableModule.js";
 
 /**
  * Manages the ngrok tunnel from inside the app, so the dashboard has a
@@ -29,10 +28,20 @@ let publicUrl: string | null = null;
 let lastError: string | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let listener: any = null;
-const loadNgrok = createRetryableModuleLoader(async () => {
-  const mod: any = await import("@ngrok/ngrok");
-  return mod.default ?? mod;
-});
+// undefined = not yet tried to load; null = tried and unavailable.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let ngrokMod: any = undefined;
+
+async function loadNgrok(): Promise<any> {
+  if (ngrokMod !== undefined) return ngrokMod;
+  try {
+    const mod: any = await import("@ngrok/ngrok");
+    ngrokMod = mod.default ?? mod;
+  } catch {
+    ngrokMod = null;
+  }
+  return ngrokMod;
+}
 
 export function tunnelStatus(): TunnelStatus {
   return { state, url: publicUrl, error: lastError, configured: Boolean(config.ngrokAuthtoken) };
@@ -50,7 +59,7 @@ export async function connectTunnel(): Promise<TunnelStatus> {
   const ngrok = await loadNgrok();
   if (!ngrok) {
     state = "error";
-    lastError = "Remote-access module couldn't load. ATLAS will retry it on the next attempt. If this continues, run npm.cmd install --include=optional.";
+    lastError = "Remote-access module isn't installed. Run npm install, then try again.";
     return tunnelStatus();
   }
 

@@ -18,19 +18,11 @@
     const value = state === "open-long" ? "+2" : state === "open-short" ? "-3" : state === "malformed" ? "0.00 USD" : "0";
     const positionLabel = state === "live-case" ? "Position" : "POSITION";
     const summaryOnly = state.startsWith("summary-");
-    const separateOnly = state.startsWith("separate-");
 
     function topSummary(text, { hidden = false } = {}) {
       const root = document.createElement("section");
       root.className = hidden ? "hidden" : "";
       root.innerHTML = `<span class="positions-summary">${text}</span>`;
-      document.body.append(root);
-    }
-
-    function separateTopPosition(value, { hidden = false } = {}) {
-      const root = document.createElement("section");
-      root.className = `top-position-card${hidden ? " hidden" : ""}`;
-      root.innerHTML = `<span>Positions</span><span class="positions-value">${value}</span>`;
       document.body.append(root);
     }
 
@@ -48,19 +40,6 @@
       document.body.append(root);
     }
 
-    function liveInfoColumn(value) {
-      const root = document.createElement("section");
-      root.className = "gm-scroll-view";
-      root.innerHTML = `
-        <div class="info-column">
-          <small class="text-muted">Position</small>
-          <div class="position-number">${value}<small>-.-- USD</small></div>
-        </div>
-        <div class="actions"><button>Buy Mkt</button><button>Sell Mkt</button></div>
-      `;
-      document.body.append(root);
-    }
-
     if (state === "summary-flat") topSummary("Positions: + 0/- 0");
     else if (state === "summary-long") topSummary("Positions: + 2/- 0");
     else if (state === "summary-short") topSummary("Positions: + 0/- 3");
@@ -74,27 +53,11 @@
       topSummary("Positions: + 0/- 0");
     }
 
-    if (state === "separate-flat") separateTopPosition("0");
-    else if (state === "separate-long") separateTopPosition("+2");
-    else if (state === "separate-short") separateTopPosition("-3");
-    else if (state === "separate-malformed") separateTopPosition("0.00 USD");
-    else if (state === "separate-hidden") separateTopPosition("0", { hidden: true });
-    else if (state === "separate-duplicate") {
-      separateTopPosition("0");
-      separateTopPosition("0");
-    }
-
-    if (state === "live-column-flat") liveInfoColumn("0");
-    else if (state === "live-column-long") liveInfoColumn("2");
-    else if (state === "live-column-short") liveInfoColumn("-3");
-    else if (state === "hidden") ticket({ hidden: true });
+    if (state === "hidden") ticket({ hidden: true });
     else if (summaryOnly) {
       if (state === "summary-conflict") {
         // The conflicting ticket was created above.
       }
-    }
-    else if (separateOnly) {
-      // The top counter is the only position evidence in these states.
     }
     else {
       ticket();

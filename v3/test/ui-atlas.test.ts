@@ -29,9 +29,9 @@ test("dashboard renders one credential surface with evaluation left and funded r
   assert.match(app, /data-stage="\$\{esc\(lane\.stage\)\}"/);
   assert.match(app, /credential-account-list/);
   assert.match(app, /credential-account-row/);
-  assert.match(app, /evalLane\?\.webhookPath/);
-  assert.match(app, /credential-webhooks/);
-  assert.match(app, /Webhook URLs for this login/);
+  assert.doesNotMatch(app, /lane\.webhookPath/);
+  assert.doesNotMatch(app, /credential\.webhookPath/);
+  assert.doesNotMatch(app, /credential-webhook/);
   assert.match(app, /queue/);
   assert.match(app, /credential-account-action/);
   assert.doesNotMatch(`${app}\n${css}`, /lane-card|lane-grid|lane-accounts/);
@@ -70,8 +70,7 @@ test("legacy duplicate account groups and their controls are removed", () => {
 test("credential lane actions carry the credential id", () => {
   assert.match(app, /credentialId/);
   assert.match(app, /\/next/);
-  assert.doesNotMatch(app, /Mark closed \/ reset|credential-reset/);
-  assert.match(app, /broker-flat confirmation/);
+  assert.match(app, /\/reset-trade/);
 });
 
 test("credential management is visible before the long lane list", () => {
@@ -103,19 +102,4 @@ test("dashboard exposes a confirmed global flatten control that does not pause A
   assert.match(app, /even in Practice/i);
   assert.match(app, /does not pause ATLAS/i);
   assert.match(app, /flatten-results/);
-});
-
-test("evaluation rows expose visible won-today rest and undo controls", () => {
-  assert.match(app, /restingToday/);
-  assert.match(app, /WON TODAY/);
-  assert.match(app, /Mark won \/ rest today/);
-  assert.match(app, /Put back in rotation/);
-  assert.match(app, /\/accounts\/rest/);
-  assert.match(app, /credentialId|loginId/);
-});
-
-test("unresolved broker incidents are visible without flooding the activity feed", () => {
-  assert.match(html, /id="incident-banner"/);
-  assert.match(app, /status\.incidents/);
-  assert.match(css, /\.banner\.incident/);
 });

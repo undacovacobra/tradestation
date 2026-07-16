@@ -166,10 +166,10 @@ Give it a friendly name and prop-firm name, click Connect, and complete login/2F
 once. Accounts under one prop-firm username can share a saved login; different
 prop-firm usernames need different saved logins.
 
-Use one saved session for all Evaluation and Funded accounts under the same
-Tradovate username. Add another saved login only for a different username or
-prop firm. One Tradovate window safely switches between its assigned accounts;
-Funded work is prioritized whenever Funded and Evaluation work arrive together.
+For evaluation and funded alerts to execute at the same instant, create two
+saved sessions and assign evals to one and funded to the other. The two sessions
+may use the same Tradovate username. One browser window can keep only one
+account and ATM prepared at a time.
 
 1. In the Tradovate logins card, click **Scan accounts** beside the login you
    want to scan. It reads that login's accounts automatically.
@@ -215,12 +215,10 @@ Funded work is prioritized whenever Funded and Evaluation work arrive together.
 3. Watch the **Activity** feed at the bottom of the dashboard. You should see a
    line like *"PRACTICE — would BUY 2x … No real order placed."* That proves the
    whole chain works: TradingView → internet → your bot.
-4. Click **Test position reader**. Watch Tradovate switch to Funded first and
-   then Evaluation. The result must show the verified account and `FLAT (0)` or
-   `OPEN (+/-N)`. This test never clicks Buy, Sell, Exit, or the ATM control.
-5. Try **Test size** and **Test ATM preset** too. They change only the tested
-   control and do not place an order.
-6. Only when practice looks right, click **"Switch to LIVE"** — and start with
+4. Try the **⏱ Speed test** and **🔢 Test size** buttons too (Test size needs
+   the Tradovate order ticket visible; it sets the size box without placing an
+   order).
+5. Only when practice looks right, click **"Switch to LIVE"** — and start with
    the smallest size.
 
 ## Daily use

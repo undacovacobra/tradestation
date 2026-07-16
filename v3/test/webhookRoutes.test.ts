@@ -132,16 +132,6 @@ test("invalid webhook secrets never dispatch", async () => {
   } finally { await f.close(); }
 });
 
-test("unsupported limit alerts are rejected before dispatch", async () => {
-  let calls = 0;
-  const f = await fixture(async () => { calls++; return { message: "unexpected" }; });
-  try {
-    const response = await f.post("/webhook/apex/evals", { ...alert, orderType: "limit", price: 20_000 });
-    assert.equal(response.status, 400);
-    assert.equal(calls, 0);
-  } finally { await f.close(); }
-});
-
 test("credential-specific stage and combined webhooks target only that credential", async () => {
   const calls: string[] = [];
   const f = await fixture(async (lane) => { calls.push(lane.key); return { message: "ok" }; });

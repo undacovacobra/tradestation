@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractEquity } from "../src/balanceParse.js";
@@ -43,19 +43,6 @@ test("BalanceLog stores, reads instantly, and persists", () => {
     const reloaded = new BalanceLog(path); // "restart"
     assert.equal(reloaded.get("A"), 50_250);
     assert.ok((reloaded.snapshot().A?.history.length ?? 0) >= 1);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("BalanceLog persists through atomic replacement", () => {
-  const dir = mkdtempSync(join(tmpdir(), "balance-atomic-"));
-  try {
-    const path = join(dir, "balances.json");
-    const log = new BalanceLog(path);
-    log.set("A", 50_123.45);
-    assert.equal(existsSync(`${path}.tmp`), false);
-    assert.equal(JSON.parse(readFileSync(path, "utf8")).A.balance, 50_123.45);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

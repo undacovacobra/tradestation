@@ -98,7 +98,6 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
   font-weight: 600;
 }
 .banner.red { background: var(--red-soft); color: var(--red); border: 1px solid #f3c2c6; }
-.banner.incident { background: var(--amber-soft); color: #7c5208; border: 1px solid #ecd39d; }
 
 .webhook-row {
   display: flex;
@@ -130,10 +129,6 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .credential-tools small { color: var(--muted); }
 .login-list { display: grid; gap: 8px; margin-bottom: 12px; }
 .credential-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fbfcff; }
-.credential-webhooks { margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
-.credential-webhooks summary { cursor: pointer; font-weight: 600; color: var(--text); }
-.credential-webhooks > div { display: grid; grid-template-columns: 80px minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 7px; }
-.credential-webhooks code { min-width: 0; overflow-wrap: anywhere; color: var(--blue); }
 .credential-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .credential-stage-grid {
   display: grid;
@@ -217,9 +212,6 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .flatten-result.closed, .flatten-result.already-flat { border-color: #b7dfc8; background: var(--green-soft); }
 .flatten-result.failed { border-color: #f3c2c6; background: var(--red-soft); color: var(--red); }
 .flatten-result span, .modal-note { color: var(--muted); font-size: 13px; }
-.won-today-tag { color: #116530; background: #dff5e7; border: 1px solid #9bd5af; border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 800; letter-spacing: .03em; }
-.resting-account-note { color: #116530; font-weight: 650; }
-.open-account-note { color: var(--muted); font-size: 12px; }
 .account-broker-position { color: var(--red); font-size: 12px; font-weight: 700; }
 .webhook-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
 .webhook-card { display: grid; grid-template-columns: 1fr auto; align-items: center; margin: 0; padding: 9px 11px; }

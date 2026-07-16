@@ -22,18 +22,10 @@ import { resolveReadinessCredentialIds, runSimultaneousReadinessTest } from "./s
 import { CredentialLaneRegistry, laneKey, type CredentialLane, type LaneKey } from "./lanes.js";
 import type { BrokerPosition } from "./brokerPosition.js";
 import { PositionReconciler, type PositionObservation } from "./positionReconciler.js";
-import { brokerStatusLabel, closeIdentityError, decideCloseAction, tradeFingerprint } from "./brokerTradePolicy.js";
+import { brokerStatusLabel, decideCloseAction, tradeFingerprint } from "./brokerTradePolicy.js";
 import { connectedLoginNextStep, restorePersistedTradeLeases } from "./startupPositionRecovery.js";
 import { flattenPositions, type FlattenTarget } from "./flattenPositions.js";
 import { registerFlattenRoutes } from "./flattenRoutes.js";
-import { runLoginPositionCycles } from "./loginPositionCycle.js";
-import { CloseWebhookFallback } from "./closeWebhookFallback.js";
-import { registerPositionTestRoutes, type PositionTestTarget } from "./positionTestRoutes.js";
-import { assertSafeBrowserDisconnect, assertSafeModeTransition } from "./safetyPolicy.js";
-import { registerRestRoutes } from "./restRoutes.js";
-import { TradingDayRollover } from "./tradingDayRollover.js";
-import { IncidentRegistry } from "./incidents.js";
-import { SignalLedger } from "./signalLedger.js";
 
 const store = new SettingsStore(config.settingsPath);
 const sessions = new LoginManager(
@@ -47,12 +39,8 @@ const dispatcher = new GroupDispatcher<string>();
 const balanceLog = new BalanceLog(config.balancesPath);
 /** Trading-day label (6pm ET reset by default) shared by both rotations. */
 const tradingDay = (at?: Date) => tradingDayKey(at ?? new Date(), config.tradingDayTz, config.tradingDayResetHour);
-const tradingDayRollover = new TradingDayRollover(() => tradingDay());
 const laneRotations = new Map<LaneKey, GroupRotation>();
 const positionReconciler = new PositionReconciler({ unknownAlertAfter: 3, unknownAlertEvery: 10 });
-const closeWebhookFallback = new CloseWebhookFallback({ graceMs: 5_000, minUnknownReads: 2 });
-const incidents = new IncidentRegistry({ healthyReadsToResolve: 2 });
-const signalLedger = new SignalLedger(resolve(config.dataDir, "signal-ledger.json"));
 interface BrokerLaneStatus {
   state: string;
   checkedAt?: string;
@@ -71,16 +59,6 @@ interface PendingBrokerClose {
 }
 const pendingBrokerClose = new Map<LaneKey, PendingBrokerClose>();
 const completingTrades = new Map<LaneKey, Promise<string | undefined>>();
-
-function reportIncident(key: string, message: string, group?: Group): void {
-  if (!incidents.raise(key, message)) return;
-  pushEvent("error", message, group);
-  notifyActionNeeded(message);
-}
-
-function reportHealthy(key: string, message?: string, group?: Group): void {
-  if (incidents.healthy(key) && message) pushEvent("info", message, group);
-}
 
 function brokerAccountKey(loginId: string, label: string): string {
   return `${loginId}:${label}`;
@@ -102,12 +80,7 @@ function ensureLaneRotation(lane: CredentialLane): GroupRotation {
   if (lane.credentialId === PRIMARY_LOGIN_ID) {
     migrateLegacyLaneState(resolve(config.dataDir, `state-${lane.stage}.json`), target);
   }
-  const rotation = new GroupRotation(
-    lane.stage,
-    target,
-    lane.stage === "evals" && config.benchWinnersForDay,
-    tradingDay,
-  );
+  const rotation = new GroupRotation(lane.stage, target, config.benchWinnersForDay, tradingDay);
   laneRotations.set(lane.key, rotation);
   return rotation;
 }
@@ -173,11 +146,6 @@ function hasOpenTradeForLogin(loginId: string): boolean {
 
 function hasOpenTradeForAccount(label: string): boolean {
   return currentLanes().some((lane) => ensureLaneRotation(lane).getState().openTrade?.tradovateLabel === label);
-}
-
-function hasActiveWorkForLogin(loginId: string): boolean {
-  const status = sessions.get(loginId)?.status();
-  return Boolean(status && (status.busy || status.pending > 0));
 }
 
 /**
@@ -263,31 +231,17 @@ async function executeEntry(
   name: string,
   order: OrderRequest,
   group: Group,
-  options: {
-    skipFundedWindow?: boolean;
-    live?: boolean;
-    beforeClick?: () => Promise<void> | void;
-    afterClick?: () => Promise<void> | void;
-  } = {},
+  options: { skipFundedWindow?: boolean } = {},
 ): Promise<EntryTiming | undefined> {
   const sizeLabel = order.quantity != null ? `${order.quantity}x ` : "";
-  if (!(options.live ?? store.mode === "live")) {
+  if (store.mode === "practice") {
     pushEvent("trade", `PRACTICE — would ${order.action.toUpperCase()} ${sizeLabel}${order.symbol} on ${name} (${label}). No real order placed.`, group);
     return undefined;
   }
   const account = store.find(label);
   if (!account) throw new Error(`Account ${label} is no longer configured.`);
   const worker = workerForAccount(account);
-  const timing = await worker.enterPrepared(group, account, order, {
-    ...options,
-    prepareIfNeeded: {
-      onBalance: (accountLabel, equity) => balanceLog.set(accountLabel, equity),
-      onPresetError: (error) => {
-        pushEvent("warn", `Couldn't select ${account.name}'s ATM preset "${account.atmPreset}": ${error.message}`, group);
-        notifyActionNeeded(`Couldn't pick ${account.name}'s ATM preset "${account.atmPreset}" on Tradovate - no order was placed. (${error.message})`);
-      },
-    },
-  });
+  const timing = await worker.enterPrepared(group, account, order, options);
   pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${sizeLabel}${order.symbol} on ${name} (${label}) via ${worker.definition.name}.`, group);
   return timing;
 }
@@ -313,9 +267,7 @@ function observeBrokerPosition(
 ): PositionObservation {
   const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId ?? lane.credentialId;
   rememberBrokerPosition(loginId, open.tradovateLabel, position);
-  const fingerprint = tradeFingerprint(open);
-  const observation = positionReconciler.observe(lane.key, fingerprint, position);
-  const incidentKey = `position:${lane.key}:${fingerprint}`;
+  const observation = positionReconciler.observe(lane.key, tradeFingerprint(open), position);
   const prior = brokerLaneStatus.get(lane.key);
   const state = brokerStatusLabel(position, observation.flatReads);
   brokerLaneStatus.set(lane.key, {
@@ -337,14 +289,10 @@ function observeBrokerPosition(
     pushEvent("warn", `Broker position is temporarily UNKNOWN for ${open.accountName}: ${position.reason}`, lane.stage);
   }
   if (observation.kind === "unknown" && position.status === "unknown" && observation.shouldAlert) {
-    reportIncident(
-      incidentKey,
+    notifyActionNeeded(
       `ATLAS cannot verify the broker POSITION for ${open.accountName} after ${observation.unknownReads} checks. `
       + `The trade is still recorded and no flat state was assumed. (${position.reason})`,
-      lane.stage,
     );
-  } else if (position.status !== "unknown") {
-    reportHealthy(incidentKey, `Broker POSITION verification recovered for ${open.accountName}.`, lane.stage);
   }
   return observation;
 }
@@ -367,7 +315,7 @@ async function completeRecordedTrade(
     const worker = sessions.get(loginId);
     let exitBalance: number | undefined;
     if (store.mode === "live" && worker?.status().loggedIn) {
-      exitBalance = (await worker.readSettledLaneEquity(group, open.tradovateLabel).catch(() => null)) ?? undefined;
+      exitBalance = (await worker.readSettledEquity().catch(() => null)) ?? undefined;
       if (exitBalance != null) balanceLog.set(open.tradovateLabel, exitBalance);
     }
 
@@ -381,10 +329,7 @@ async function completeRecordedTrade(
       exitBalance,
     });
     worker?.clearOpenTrade(closed.tradovateLabel);
-    incidents.clear(`position:${lane.key}:${expectedFingerprint}`);
-    incidents.clear(`monitor-target:${lane.key}`);
     pendingBrokerClose.delete(lane.key);
-    closeWebhookFallback.clear(lane.key);
     brokerLaneStatus.set(lane.key, {
       state: "FLAT",
       checkedAt: new Date().toISOString(),
@@ -428,14 +373,6 @@ async function handleEntry(
   lane = primaryLane(group),
   options: { skipFundedWindow?: boolean } = {},
 ): Promise<WebhookHandleResult> {
-  // A startup-restored trade deliberately blocks background ticket switching.
-  // After account-specific flattening, that can leave the other lane without a
-  // preparation plan. Re-arm it here whenever this login is flat. The common
-  // case is an in-memory readiness check only; the worker still performs final
-  // live DOM verification and repairs manual account/ATM/quantity drift.
-  if (store.mode === "live" && !hasOpenTradeForLogin(lane.credentialId)) {
-    await prepareLane(lane);
-  }
   const rotation = ensureLaneRotation(lane);
   const laneAccounts = accountsForLane(lane);
   const choice = rotation.selectAccountForEntry(laneAccounts);
@@ -455,44 +392,10 @@ async function handleEntry(
     return handleEntry(group, order, lane, options); // that account is now excluded; pick the next
   }
 
-  const liveEntry = store.mode === "live";
-  let durableIntent: OpenTrade | undefined;
-  let timingMs: EntryTiming | undefined;
-  try {
-    timingMs = await executeEntry(acct.tradovateLabel, acct.name, order, group, {
-      ...options,
-      live: liveEntry,
-      beforeClick: liveEntry ? () => {
-        // Capture the latest arming balance (prepare may have refreshed it)
-        // and persist the exact exposure before any broker click.
-        durableIntent = rotation.recordOpen(
-          acct,
-          order,
-          balanceLog.get(acct.tradovateLabel) ?? known ?? undefined,
-          "intent",
-        );
-      } : undefined,
-      afterClick: liveEntry ? () => {
-        if (!durableIntent || !rotation.markEntryClicked(durableIntent.openedAt)) {
-          throw new Error(`Could not mark the durable entry state for ${acct.name} after the broker click.`);
-        }
-      } : undefined,
-    });
-    if (!liveEntry) {
-      durableIntent = rotation.recordOpen(acct, order, known ?? undefined, "clicked");
-    } else if (!durableIntent) {
-      throw new Error(`The live entry for ${acct.name} returned without a durable broker intent.`);
-    }
-  } catch (error) {
-    // Once an intent exists, retain the session lease even when the click path
-    // is ambiguous. Broker POSITION reconciliation—not another webhook—will
-    // decide whether exposure exists and clear it only after confirmed flat.
-    if (durableIntent) workerForAccount(acct).restoreOpenTrade(group, acct.tradovateLabel);
-    throw error;
-  }
+  const timingMs = await executeEntry(acct.tradovateLabel, acct.name, order, group, options);
+  rotation.recordOpen(acct, order, known ?? undefined);
   positionReconciler.clear(lane.key);
   pendingBrokerClose.delete(lane.key);
-  closeWebhookFallback.clear(lane.key);
   brokerLaneStatus.set(lane.key, {
     state: store.mode === "practice" ? "SIMULATED" : "AWAITING BROKER",
     flatReads: 0,
@@ -501,19 +404,17 @@ async function handleEntry(
   return { message: `Opened ${order.action} ${order.symbol} on ${acct.name}`, ...(timingMs ? { timingMs } : {}) };
 }
 
-async function handleClose(group: Group, alert: Alert, lane = primaryLane(group)): Promise<string> {
+async function handleClose(group: Group, symbol: string, lane = primaryLane(group)): Promise<string> {
   const rotation = ensureLaneRotation(lane);
   if (rotation.isFlat) {
     pushEvent("warn", "A close alert arrived but no trade is open — ignoring it.", group);
     return "No open trade to close.";
   }
   const open = rotation.getState().openTrade!;
-  const identityError = closeIdentityError(open, alert);
-  if (identityError) throw new Error(`Ignored stale close webhook: ${identityError}`);
   const fingerprint = tradeFingerprint(open);
 
   if (store.mode === "practice") {
-    await executeClose(open.tradovateLabel, open.accountName, alert.symbol, group, lane);
+    await executeClose(open.tradovateLabel, open.accountName, symbol, group, lane);
     return (await completeRecordedTrade(lane, fingerprint, { source: "practice close webhook" }))
       ?? "The simulated trade was already completed.";
   }
@@ -521,7 +422,6 @@ async function handleClose(group: Group, alert: Alert, lane = primaryLane(group)
   const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId ?? lane.credentialId;
   const worker = sessions.get(loginId);
   if (!worker) throw new Error(`The open trade on ${open.accountName} references a missing login.`);
-  closeWebhookFallback.record(lane.key, fingerprint);
 
   const position = await worker.readLanePosition(group, open.tradovateLabel).catch((error) => ({
     status: "unknown" as const,
@@ -529,7 +429,6 @@ async function handleClose(group: Group, alert: Alert, lane = primaryLane(group)
     checkedAt: new Date().toISOString(),
   }));
   const observation = observeBrokerPosition(lane, open, position);
-  closeWebhookFallback.observe(lane.key, fingerprint, position, observation.unknownReads);
   if (observation.kind === "confirmed-flat") {
     return (await completeRecordedTrade(lane, fingerprint, { source: "broker was already flat when the close webhook arrived" }))
       ?? "The broker-flat trade was already reconciled.";
@@ -539,7 +438,7 @@ async function handleClose(group: Group, alert: Alert, lane = primaryLane(group)
   if (action === "already-requested") return `Exit was already requested on ${open.accountName}; waiting for broker POSITION 0.`;
   if (action === "wait-for-confirmation") {
     return position.status === "unknown"
-      ? `Close received, but ${open.accountName}'s broker position is UNKNOWN. ATLAS will retry the broker reader, then use this close webhook as the bounded fallback.`
+      ? `Close received, but ${open.accountName}'s broker position is UNKNOWN. No flat state was assumed; ATLAS will retry.`
       : `Close received and broker shows POSITION 0 once on ${open.accountName}; confirming once more before rotating.`;
   }
 
@@ -548,10 +447,9 @@ async function handleClose(group: Group, alert: Alert, lane = primaryLane(group)
     reason: "close webhook requested exit",
   });
   try {
-    await executeClose(open.tradovateLabel, open.accountName, alert.symbol, group, lane);
+    await executeClose(open.tradovateLabel, open.accountName, symbol, group, lane);
   } catch (error) {
     pendingBrokerClose.delete(lane.key);
-    closeWebhookFallback.clear(lane.key);
     throw error;
   }
   return `Exit requested on ${open.accountName}; waiting for broker POSITION 0 before completing and rotating.`;
@@ -559,8 +457,9 @@ async function handleClose(group: Group, alert: Alert, lane = primaryLane(group)
 
 /**
  * Cut an open trade WITHOUT a webhook (the profit-target auto-close) and retire
- * the account. The credential worker switches to and verifies the owning
- * account immediately before Exit; all of it stays in the priority queue.
+ * the account. Assumes the trade's account is already the selected one (the
+ * monitor only calls this for the selected account), so the exit is a pure
+ * click. Must be called from inside `enqueue`.
  */
 async function forceClose(group: Group, reason: string, lane = primaryLane(group)): Promise<void> {
   const rotation = ensureLaneRotation(lane);
@@ -585,109 +484,54 @@ async function forceClose(group: Group, reason: string, lane = primaryLane(group
   }
 }
 
-/** Per active tick, reconcile every open trade against its verified Tradovate
- * account. A shared login is inspected serially (Funded first), visibly
- * switching accounts when needed; independent logins may overlap. */
+/**
+ * The monitor's per-tick work: read ONLY the selected account's balance (the
+ * open trade's account is the selected one), log it, and cut at the target.
+ * Never switches accounts. No-op unless live + logged in + a trade is open on
+ * the currently-selected account.
+ */
 async function monitorTick(): Promise<void> {
   if (store.mode !== "live") return;
-  const targets = currentLanes().flatMap((lane) => {
-    const open = ensureLaneRotation(lane).getState().openTrade;
-    if (!open) return [];
-    const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId ?? lane.credentialId;
-    const worker = sessions.get(loginId);
-    if (!worker) return [];
-    return [{ loginId, stage: lane.stage, lane, fingerprint: tradeFingerprint(open), worker }];
-  });
-
-  await runLoginPositionCycles(targets, async (target) => {
-    if (!target.worker.status().loggedIn) await healthCheck(target.worker);
-    if (!target.worker.status().loggedIn) return;
-    return dispatcher.enqueue(target.lane.key, async () => {
-    const { lane, worker } = target;
+  await Promise.allSettled(currentLanes().map((lane) => dispatcher.enqueue(lane.key, async () => {
     const group = lane.stage;
     const open = ensureLaneRotation(lane).getState().openTrade;
-    if (!open || tradeFingerprint(open) !== target.fingerprint) return;
+    if (!open) return;
+    const loginId = open.loginId ?? store.find(open.tradovateLabel)?.loginId;
+    const worker = loginId ? sessions.get(loginId) : undefined;
+    if (!worker?.status().loggedIn) return;
 
-    const snapshot = await worker.readLaneSnapshot(group, open.tradovateLabel).catch((error) => {
-      const checkedAt = new Date().toISOString();
-      return {
-        verifiedAccount: false,
-        position: {
-          status: "unknown" as const,
-          reason: error instanceof Error ? error.message : String(error),
-          checkedAt,
-        },
-        equity: null,
-        checkedAt,
-      };
-    });
-    const observation = observeBrokerPosition(lane, open, snapshot.position);
-    if (snapshot.position.status !== "unknown") {
-      reportHealthy(`monitor-target:${lane.key}`, `Broker monitoring recovered for ${open.accountName}.`, group);
-    }
-    const fallbackDecision = closeWebhookFallback.observe(
-      lane.key,
-      target.fingerprint,
-      snapshot.position,
-      observation.unknownReads,
-    );
-    if (fallbackDecision === "eligible") {
-      await completeRecordedTrade(lane, target.fingerprint, {
-        source: "close webhook fallback after broker position remained unavailable",
-      });
-      return;
-    }
+    const position = await worker.readLanePosition(group, open.tradovateLabel).catch((error) => ({
+      status: "unknown" as const,
+      reason: error instanceof Error ? error.message : String(error),
+      checkedAt: new Date().toISOString(),
+    }));
+    const observation = observeBrokerPosition(lane, open, position);
     if (observation.kind === "confirmed-flat") {
       const pending = pendingBrokerClose.get(lane.key);
-      await completeRecordedTrade(lane, target.fingerprint, {
+      await completeRecordedTrade(lane, tradeFingerprint(open), {
         source: pending?.reason ?? "ATM, liquidation, or external broker exit detected",
         won: pending?.won,
         retire: pending?.retire,
       });
       return;
     }
-    if (fallbackDecision === "vetoed" && !pendingBrokerClose.has(lane.key)) {
-      pendingBrokerClose.set(lane.key, {
-        requestedAt: new Date().toISOString(),
-        reason: "close webhook requested exit after broker confirmed the position was still open",
-      });
-      try {
-        await worker.close(group, open.tradovateLabel);
-        pushEvent("trade", `LIVE — requested CLOSE on ${open.accountName} after the broker confirmed it was still open.`, group);
-      } catch (error) {
-        pendingBrokerClose.delete(lane.key);
-        closeWebhookFallback.clear(lane.key);
-        const message = `ATLAS could not request Exit on ${open.accountName}: ${error instanceof Error ? error.message : String(error)}`;
-        pushEvent("error", message, group);
-        notifyActionNeeded(message);
-      }
-      return;
-    }
-    if (snapshot.position.status !== "open" || snapshot.equity == null) return;
+    if (position.status !== "open") return;
 
-    balanceLog.set(open.tradovateLabel, snapshot.equity);
-    if (usesEvaluationTarget(group) && snapshot.equity >= store.evalTarget) {
-      await forceClose(group, `balance reached ${money(snapshot.equity)}`, lane);
-    }
-    }).catch((error) => {
-      const open = ensureLaneRotation(target.lane).getState().openTrade;
-      reportIncident(
-        `monitor-target:${target.lane.key}`,
-        `ATLAS broker monitoring failed for ${open?.accountName ?? target.lane.key}: ${error instanceof Error ? error.message : String(error)}`,
-        target.stage,
-      );
+    const equity = await worker.readLaneEquity(group, open.tradovateLabel).catch((error) => {
+      pushEvent("error", `${open.accountName} could not be verified for balance monitoring: ${(error as Error).message}`, group);
+      return null;
     });
-  });
-  reportHealthy("monitor-loop", "ATLAS broker monitor loop recovered.");
+    if (equity == null) return;
+    balanceLog.set(open.tradovateLabel, equity);
+    if (usesEvaluationTarget(group) && equity >= store.evalTarget) {
+      await forceClose(group, `balance reached ${money(equity)}`, lane);
+    }
+  })));
 }
 
 const monitor = new Monitor(monitorTick, {
   activeMs: config.monitorActiveSeconds * 1_000,
   isActive: () => currentLanes().some((lane) => !ensureLaneRotation(lane).isFlat),
-  onError: (error) => reportIncident(
-    "monitor-loop",
-    `ATLAS broker monitor loop failed: ${error instanceof Error ? error.message : String(error)}`,
-  ),
 });
 
 /**
@@ -700,53 +544,22 @@ const monitor = new Monitor(monitorTick, {
  * order. Recovery (a page reload) only runs while FLAT, never mid-trade.
  */
 let healthTimer: ReturnType<typeof setInterval> | null = null;
-let tradingDayTimer: ReturnType<typeof setInterval> | null = null;
-
-function startTradingDayWatch(): void {
-  if (tradingDayTimer) return;
-  tradingDayTimer = setInterval(() => {
-    if (!tradingDayRollover.check()) return;
-    pushEvent("info", `A new futures trading day (${tradingDayRollover.current}) started. Evaluation winners are back in rotation.`);
-    for (const lane of currentLanes().filter((candidate) => candidate.stage === "evals")) {
-      sessions.get(lane.credentialId)?.invalidateReady("evals");
-      armLane(lane, { force: true });
-    }
-  }, 1_000);
-}
-
 function startHealthWatch(): void {
   if (healthTimer) return;
   healthTimer = setInterval(() => {
     for (const worker of sessions.values()) {
-      void healthCheck(worker).catch((error) => reportIncident(
-        `session:${worker.definition.id}`,
-        `${worker.definition.name} health check failed: ${error instanceof Error ? error.message : String(error)}`,
-      ));
+      if (!worker.status().connected) continue;
+      void healthCheck(worker).catch(() => {});
     }
   }, 45_000);
 }
 
 async function healthCheck(worker: LoginWorker): Promise<void> {
-  const incidentKey = `session:${worker.definition.id}`;
-  if (!worker.status().connected) {
-    const status = await worker.connect().catch(() => null);
-    if (status?.loggedIn) {
-      reportHealthy(incidentKey, `${worker.definition.name} browser connection recovered.`);
-      if (hasOpenTradeForLogin(worker.definition.id)) void monitorTick();
-      else await armLogin(worker.definition.id);
-      return;
-    }
-    reportIncident(
-      incidentKey,
-      `${worker.definition.name} browser disconnected and ATLAS could not reconnect it automatically.`,
-    );
-    return;
-  }
+  if (!worker.status().connected) return;
   // Is the trading screen actually there? (Buy/Sell only exist when logged in.)
   const onTrader = await worker.refreshLoginState(4_000);
   if (onTrader) {
     await worker.dismissPopups().catch(() => {});
-    reportHealthy(incidentKey, `${worker.definition.name} login recovered.`);
     return;
   }
   // The trading screen is gone — logged out, timed out, or navigated away.
@@ -758,14 +571,11 @@ async function healthCheck(worker: LoginWorker): Promise<void> {
     const status = await worker.resumeExistingLogin().catch(() => null);
     if (status?.loggedIn) {
       pushEvent("info", "Recovered the Tradovate login during the open trade; resuming broker POSITION checks.");
-      reportHealthy(incidentKey, `${worker.definition.name} login recovered.`);
       void monitorTick();
       return;
     }
-    reportIncident(
-      incidentKey,
-      `${worker.definition.name} logged out / left the trading screen WHILE A TRADE IS OPEN and ATLAS could not complete the safe click-only login. Check the bot computer and Tradovate right away.`,
-    );
+    pushEvent("error", "Tradovate could not be recovered automatically while the trade is open.");
+    notifyActionNeeded("Tradovate logged out / left the trading screen WHILE A TRADE IS OPEN and ATLAS could not complete the safe click-only login. Check the bot computer and Tradovate right away.");
     return;
   }
   // Flat — safe to try fixing it ourselves.
@@ -773,13 +583,10 @@ async function healthCheck(worker: LoginWorker): Promise<void> {
   const status = await worker.recover().catch(() => null);
   if (status?.loggedIn) {
     pushEvent("info", "Recovered — Tradovate is logged back in.");
-    reportHealthy(incidentKey, `${worker.definition.name} login recovered.`);
     await armLogin(worker.definition.id);
   } else {
-    reportIncident(
-      incidentKey,
-      `${worker.definition.name} logged out and ATLAS could not sign back in automatically. Trades will stay blocked until the saved login recovers.`,
-    );
+    pushEvent("error", "Couldn't log back into Tradovate automatically.");
+    notifyActionNeeded("Tradovate logged out and I couldn't sign back in by myself. Please log in on the bot computer — trades won't fire until you do.");
   }
 }
 
@@ -845,7 +652,7 @@ async function handleWebhookLane(
   lastAlertGroup = group;
   const received = Date.now();
   const result = isCloseAlert(alert)
-    ? { message: await handleClose(group, alert, lane) }
+    ? { message: await handleClose(group, alert.symbol, lane) }
     : await handleEntry(group, {
       action: alert.action === "sell" ? "sell" : "buy",
       symbol: alert.symbol,
@@ -867,7 +674,6 @@ registerWebhookRoutes(app, {
   cancelPendingLane: (lane) => sessions.get(lane.credentialId)?.cancelPendingEntry(lane.stage),
   pushEvent,
   notifyActionNeeded,
-  signalLedger,
 });
 
 // ---------------------------------------------------------------------------
@@ -968,7 +774,6 @@ api.get("/status", (_req, res) => {
     broadcastWebhookPath: "/webhook",
     globalWebhookPaths: { all: "/webhook", evals: "/webhook/evals", funded: "/webhook/funded" },
     publicWebhookBaseUrl: config.publicWebhookBaseUrl,
-    incidents: incidents.snapshot(),
     tunnel: tunnelStatus(),
     groups,
     credentials,
@@ -992,18 +797,6 @@ api.post("/mode", (req, res) => {
   if (mode === "live" && req.body?.confirm !== true) {
     return res.status(400).json({ ok: false, error: "Switching to LIVE requires confirmation." });
   }
-  if (mode !== store.mode && sessions.values().some((worker) => hasActiveWorkForLogin(worker.definition.id))) {
-    return res.status(409).json({ ok: false, error: "ATLAS is handling broker work. Change mode again after the current operation finishes." });
-  }
-  try {
-    assertSafeModeTransition(
-      store.mode,
-      mode,
-      store.mode === "live" && currentLanes().some((lane) => !ensureLaneRotation(lane).isFlat),
-    );
-  } catch (error) {
-    return res.status(409).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
-  }
   store.setMode(mode);
   pushEvent(
     mode === "live" ? "warn" : "info",
@@ -1016,19 +809,12 @@ api.post("/mode", (req, res) => {
   return res.json({ ok: true, mode });
 });
 
-registerAccountMutationRoutes(api, {
-  store,
-  hasOpenTradeForAccount,
-  hasActiveWorkForLogin,
-  armNext: armStageAll,
-  pushEvent,
-});
+registerAccountMutationRoutes(api, { store, hasOpenTradeForAccount, armNext: armStageAll, pushEvent });
 registerLoginRoutes(api, {
   store,
   manager: sessions,
   hasOpenTradeForLogin,
   hasOpenTradeForAccount,
-  hasActiveWorkForLogin,
   armLogin,
   reconcileLogin: async () => { await monitorTick(); },
   armNext: armStageAll,
@@ -1127,23 +913,6 @@ registerFlattenRoutes(api, {
   },
 });
 
-registerPositionTestRoutes(api, {
-  isLoginReady: (loginId) => Boolean(sessions.get(loginId)?.status().loggedIn),
-  targets: (loginId) => currentLanes().flatMap((lane): PositionTestTarget[] => {
-    if (lane.credentialId !== loginId) return [];
-    const rotation = ensureLaneRotation(lane);
-    const open = rotation.getState().openTrade;
-    const next = rotation.peekNext(accountsForLane(lane));
-    const label = open?.tradovateLabel || next?.tradovateLabel;
-    return label ? [{ loginId, stage: lane.stage, label }] : [];
-  }),
-  inspect: async (target) => {
-    const worker = sessions.get(target.loginId);
-    if (!worker?.status().loggedIn) throw new Error("Tradovate disconnected during the position reader test.");
-    return worker.readLaneSnapshot(target.stage, target.label);
-  },
-});
-
 function requestedWorker(loginId: unknown): LoginWorker | undefined {
   if (typeof loginId === "string" && loginId.trim()) return sessions.get(loginId.trim());
   return sessions.values()[0];
@@ -1197,10 +966,6 @@ api.post("/accounts/atm-preset", (req, res) => {
   if (hasOpenTradeForAccount(label)) {
     return res.status(409).json({ ok: false, error: "This account has an open trade. Its ATM preset cannot change until the trade is closed." });
   }
-  const owningLoginId = store.find(label)?.loginId;
-  if (owningLoginId && hasActiveWorkForLogin(owningLoginId)) {
-    return res.status(409).json({ ok: false, error: "This Tradovate login is handling broker work. Change the ATM preset after it finishes." });
-  }
   const ok = store.setAtmPreset(label, preset);
   if (ok) {
     const acct = store.find(label);
@@ -1235,17 +1000,20 @@ api.post("/test-preset", async (req, res) => {
   }
 });
 
-registerRestRoutes(api, {
-  findAccount: (label) => store.find(label),
-  hasOpenTrade: hasOpenTradeForAccount,
-  hasActiveWork: hasActiveWorkForLogin,
-  markRest: (loginId, group, label) => ensureLaneRotation(laneFor(loginId, group)).markRest(label),
-  clearRest: (loginId, group, label) => ensureLaneRotation(laneFor(loginId, group)).clearRest(label),
-  rearm: (loginId, group) => {
-    sessions.get(loginId)?.invalidateReady(group);
-    armLane(laneFor(loginId, group), { force: true });
-  },
-  pushEvent,
+api.post("/accounts/unrest", (req, res) => {
+  const group = req.body?.group;
+  const label = typeof req.body?.label === "string" ? req.body.label : "";
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
+  }
+  const credentialId = typeof req.body?.credentialId === "string" ? req.body.credentialId : PRIMARY_LOGIN_ID;
+  const lane = laneFor(credentialId, group);
+  const ok = ensureLaneRotation(lane).clearRest(label);
+  if (ok) {
+    pushEvent("info", `${store.find(label)?.name ?? label} taken off rest — it can trade again today.`, group);
+    armLane(lane);
+  }
+  res.json({ ok });
 });
 
 api.post("/next", (req, res) => {
@@ -1256,9 +1024,6 @@ api.post("/next", (req, res) => {
   }
   const credentialId = typeof req.body?.credentialId === "string" ? req.body.credentialId : PRIMARY_LOGIN_ID;
   const lane = laneFor(credentialId, group);
-  if (hasActiveWorkForLogin(credentialId)) {
-    return res.status(409).json({ ok: false, error: "This Tradovate login is handling broker work. Change Next after it finishes." });
-  }
   const rotation = ensureLaneRotation(lane);
   if (!rotation.isFlat) {
     return res.status(400).json({ ok: false, error: "There's an open trade — the next account is chosen automatically when it closes." });
@@ -1271,9 +1036,9 @@ api.post("/next", (req, res) => {
   res.json({ ok });
 });
 
-/** Safe replacement for the old memory-only reset. The normal broker reader
- * must confirm flat twice; this route never erases exposure by hand. */
-api.post("/reset-trade", async (req, res) => {
+/** Manually clear a stuck open trade (no order placed) and advance to the next
+ *  account. Only fixes the bot's memory — it does NOT close any real position. */
+api.post("/reset-trade", (req, res) => {
   const group = req.body?.group;
   if (typeof group !== "string" || !isGroup(group)) {
     return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
@@ -1281,24 +1046,22 @@ api.post("/reset-trade", async (req, res) => {
   const credentialId = typeof req.body?.credentialId === "string" ? req.body.credentialId : PRIMARY_LOGIN_ID;
   const lane = laneFor(credentialId, group);
   const rotation = ensureLaneRotation(lane);
-  const before = rotation.getState().openTrade;
-  if (!before) return res.json({ ok: true, reconciled: true, message: "This lane is already flat." });
-  if (store.mode !== "live") {
-    return res.status(409).json({ ok: false, error: "Use the normal practice close alert; memory-only trade resets are disabled." });
+  const { was, next } = rotation.resetOpenTrade(accountsForLane(lane));
+  if (was) {
+    const worker = sessions.get(was.loginId ?? store.find(was.tradovateLabel)?.loginId ?? "");
+    worker?.clearOpenTrade(was.tradovateLabel);
   }
-  await monitorTick();
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  await monitorTick();
-  if (rotation.getState().openTrade) {
-    const broker = brokerLaneStatus.get(lane.key);
-    return res.status(409).json({
-      ok: false,
-      error: broker?.state === "UNKNOWN"
-        ? `ATLAS cannot verify broker-flat: ${broker.reason ?? "position evidence is unavailable"}`
-        : `The trade is still recorded because the broker reports ${broker?.state ?? "an unconfirmed position"}. Use Flatten position if it is open.`,
-    });
-  }
-  return res.json({ ok: true, reconciled: true, message: `${before.accountName} was cleared only after broker-flat confirmation.` });
+  positionReconciler.clear(lane.key);
+  pendingBrokerClose.delete(lane.key);
+  brokerLaneStatus.set(lane.key, { state: "MANUALLY RESET", flatReads: 0, unknownReads: 0 });
+  const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
+  pushEvent(
+    "warn",
+    `Manually reset — marked ${was ? was.accountName : "this lane"} as closed (no order placed). ${nextMsg}`,
+    group,
+  );
+  armLane(lane); // sit on the next account, ready to click
+  res.json({ ok: true, next: next?.name ?? null });
 });
 
 /** Speed test: fire a real buy-then-close at our own webhook and time each leg. */
@@ -1432,14 +1195,6 @@ api.post("/browser/connect", async (req, res) => {
 api.post("/browser/disconnect", async (req, res) => {
   const worker = requestedWorker(req.body?.loginId);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown login" });
-  if (hasActiveWorkForLogin(worker.definition.id)) {
-    return res.status(409).json({ ok: false, error: "This browser is handling broker work and cannot disconnect yet." });
-  }
-  try {
-    assertSafeBrowserDisconnect(store.mode === "live" && hasOpenTradeForLogin(worker.definition.id));
-  } catch (error) {
-    return res.status(409).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
-  }
   await worker.disconnect();
   pushEvent("info", "Tradovate browser closed.");
   res.json({ ok: true });
@@ -1482,7 +1237,6 @@ async function main() {
     autoStartTunnel();
     monitor.start(); // watches the broker POSITION and balance for every recorded open trade
     startHealthWatch(); // clears popups + catches/recovers a lost Tradovate login
-    startTradingDayWatch(); // 6pm ET futures-day winner reset (not midnight)
 
     // Restore persisted trade intent, then let the broker POSITION decide. A
     // restart is not itself an action-needed alert and never requires a reset.
@@ -1532,7 +1286,6 @@ const shutdown = async () => {
   log.info("Shutting down…");
   monitor.stop();
   if (healthTimer) clearInterval(healthTimer);
-  if (tradingDayTimer) clearInterval(tradingDayTimer);
   await disconnectTunnel().catch(() => {});
   await sessions.disconnectAll();
   process.exit(0);

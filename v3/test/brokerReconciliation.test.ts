@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   brokerStatusLabel,
-  closeIdentityError,
   decideCloseAction,
   tradeFingerprint,
 } from "../src/brokerTradePolicy.js";
@@ -33,19 +32,4 @@ test("broker status labels expose signed positions without guessing unknown stat
   assert.equal(brokerStatusLabel({ status: "flat", checkedAt: "now" }, 1), "FLAT CHECK 1/2");
   assert.equal(brokerStatusLabel({ status: "flat", checkedAt: "now" }, 2), "FLAT");
   assert.equal(brokerStatusLabel({ status: "unknown", reason: "missing", checkedAt: "now" }), "UNKNOWN");
-});
-
-test("close identity rejects stale trade ids and different symbols", () => {
-  const open = {
-    tradovateLabel: "E1",
-    accountName: "Eval 1",
-    symbol: "MNQ1!",
-    action: "buy" as const,
-    tradeId: "trade-7",
-    openedAt: "2026-07-15T13:00:00.000Z",
-  };
-  assert.equal(closeIdentityError(open, { symbol: " mnq1! ", tradeId: "trade-7" }), null);
-  assert.match(closeIdentityError(open, { symbol: "MES1!", tradeId: "trade-7" }) ?? "", /symbol/i);
-  assert.match(closeIdentityError(open, { symbol: "MNQ1!", tradeId: "older" }) ?? "", /trade id/i);
-  assert.equal(closeIdentityError(open, { symbol: "MNQ1!" }), null, "legacy alerts without a trade id remain compatible");
 });

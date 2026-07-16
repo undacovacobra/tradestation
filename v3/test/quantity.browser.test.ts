@@ -80,29 +80,6 @@ test("setQuantity sets the shadow-DOM qty box and verifies it", async (t) => {
   }
 });
 
-test("forced webhook quantity replaces a manual visible change despite a matching cache", async (t) => {
-  const browser = await launch();
-  if (!browser) return t.skip("no Chromium available");
-  try {
-    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
-    await page.goto(fixture);
-    const b = fake(page);
-    b.lastQty = 3;
-    await page.evaluate(() => {
-      const input = document.querySelector("order-ticket")!.shadowRoot!
-        .querySelector('input[aria-label="Order Qty"]') as HTMLInputElement;
-      input.value = "9";
-    });
-
-    await b.setQuantity(3, true);
-
-    assert.equal(await qtyValue(page), "3");
-    assert.equal(b.lastQty, 3);
-  } finally {
-    await browser.close();
-  }
-});
-
 test("setQuantity finds Tradovate's 'Select value' form-control box, not the search box", async (t) => {
   const browser = await launch();
   if (!browser) return t.skip("no Chromium available");
@@ -136,27 +113,6 @@ test("setQuantity rejects a bad size before touching the page", async (t) => {
     const b = fake(page);
     await assert.rejects(() => b.setQuantity(0), /1 or more/i);
     await assert.rejects(() => b.setQuantity(-3), /1 or more/i);
-  } finally {
-    await browser.close();
-  }
-});
-
-test("setQuantity clears stale hidden bot markers before writing the visible ticket", async (t) => {
-  const browser = await launch();
-  if (!browser) return t.skip("no Chromium available");
-  try {
-    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
-    await page.setContent(`
-      <input id="old" data-bot-qty="1" value="8" style="display:none" />
-      <input id="visible" aria-label="Order Qty" value="9" />
-      <button>Buy Mkt</button><button>Sell Mkt</button>
-    `);
-    const b = fake(page);
-
-    await b.setQuantity(3, true);
-
-    assert.equal(await page.locator("#visible").inputValue(), "3");
-    assert.equal(await page.locator("#old").getAttribute("data-bot-qty"), null);
   } finally {
     await browser.close();
   }

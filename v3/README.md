@@ -54,29 +54,19 @@ Example strategy alert:
   "action": "{{strategy.order.action}}",
   "symbol": "{{ticker}}",
   "quantity": 1,
-  "tradeId": "{{strategy.order.id}}",
   "marketPosition": "{{strategy.market_position}}"
 }
 ```
 
 `marketPosition: "flat"` is treated as a close. `long` or `short` is an entry.
-Each targeted lane enforces one recorded open trade at a time. Include a stable
-`tradeId` whenever possible: completed ids are retained for seven days so a
-TradingView retry remains idempotent even after an ATLAS restart. Browser
-execution supports market alerts only; a limit alert is rejected rather than
-silently changed into a market order.
+Each targeted lane enforces one recorded open trade at a time.
 
 ## Broker-authoritative trade completion
 
 - Webhooks request entries and exits, but they do not prove that the broker
   opened or closed the position.
-- While a live trade is recorded, ATLAS reads the verified account's actual
-  Tradovate position value every active monitor tick. It understands both the
-  order-ticket `Position` field and Tradovate's separate top `Positions`
-  counter.
-- If Evaluation and Funded trades are open under one login, ATLAS visibly
-  switches between the exact accounts, verifies each selection, and reads one
-  position/equity snapshot at a time. Funded is always checked first.
+- While a live trade is recorded, ATLAS reads the verified account's dedicated
+  Tradovate `POSITION` field every active monitor tick.
 - A nonzero signed value means the broker position is open. Two consecutive
   explicit zero readings are required before ATLAS records the close, clears
   the account lease, and rotates.
@@ -84,14 +74,9 @@ silently changed into a market order.
   completes automatically even when no close webhook arrives.
 - Missing, hidden, malformed, ambiguous, disconnected, or wrong-account
   evidence is `UNKNOWN`; it is never treated as flat by timeout or absence.
-- The first unknown reading is logged. An unresolved position/session/monitor
-  incident sends one action-needed notification, stays visible on the
-  dashboard, retries automatically, and cannot alert again until two healthy
-  checks resolve it. It never pauses ATLAS.
-- A matching close webhook is retained as a bounded backup. Broker evidence
-  remains primary, but after at least two unknown reads and a five-second
-  grace period the close webhook may complete that exact lane/trade. Any
-  explicit nonzero broker position vetoes the fallback and requests Exit.
+- The first unknown reading is logged. Repeated unknown evidence is
+  rate-limited before an action-needed notification is sent, and it does not
+  pause every credential.
 - An Exit click keeps the open-trade safety lease until the broker confirms
   flat. Duplicate close webhooks cannot rotate the trade twice.
 - After a restart, ATLAS restores the lease, reconnects the saved session, and
@@ -100,10 +85,9 @@ silently changed into a market order.
   zero position to erase a simulated trade.
 
 The dashboard shows `OPEN +N`, `OPEN -N`, `FLAT CHECK 1/2`, `FLAT`,
-`UNKNOWN`, or `SIMULATED` per lane. **Test position reader** performs the same
-read-only, account-verified cycle for a login—Funded first, then Evaluation—and
-reports the account, position, equity, and timing. It never clicks Buy, Sell,
-Exit, or the ATM control.
+`UNKNOWN`, or `SIMULATED` per lane. `Check broker position (no order)` performs
+the same read-only, account-verified diagnostic without placing or exiting a
+trade.
 
 ## ATM defaults and preparation
 
@@ -113,24 +97,8 @@ Exit, or the ATM control.
   edited from the dashboard.
 - When an account becomes Next, ATLAS prepares its account and ATM while idle.
   A live entry is blocked unless the exact account and ATM can be verified.
-- Webhook quantity is authoritative: it is force-written and re-read on the
-  visible ticket immediately before every entry, even if a person changed it.
-- Immediately before Buy/Sell, ATLAS atomically persists the exact credential,
-  lane, account, symbol, side, quantity, and entry balance. It marks the click
-  afterward; either state remains broker-reconciled exposure after a crash.
 - Account additions, moves, reactivation, ATM edits, and rotation changes
   invalidate and re-arm the affected lane.
-
-## Evaluation winners and the futures day
-
-- Evaluation accounts that close with positive settled P/L are marked
-  **WON TODAY** and rest for the remainder of the futures trading day.
-- The reset is 6:00 PM US/Eastern by default, not midnight. At rollover ATLAS
-  automatically returns rested evaluations to rotation and re-arms the lane.
-- The account row also has **Mark won / rest today** and **Put back in
-  rotation** controls. Funded accounts are never benched by this policy.
-- The $53,000 evaluation target remains separate: reaching it requests an
-  account-verified flatten and retires the evaluation after broker-flat proof.
 
 ## Setup and operation
 
@@ -142,10 +110,6 @@ Exit, or the ATM control.
    connect it, and complete login or 2FA in the opened browser once.
 6. Keep ATLAS in Practice, scan or add accounts, verify each Next account and
    ATM, then test the exact webhook URLs shown on the dashboard.
-
-Scan recognizes account ids from different Tradovate prop-firm prefixes; it is
-not limited to LFE/LFF labels. The dashboard keeps global Evaluation and Funded
-webhook URLs visible and puts per-login URLs inside each credential card.
 
 The browser session folders, `.env`, account settings, rotations, balances,
 and open-trade records are local. Do not copy them into source control.

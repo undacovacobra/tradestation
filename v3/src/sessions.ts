@@ -26,7 +26,7 @@ export interface TradingSessionAdapter {
   readSelectedEquity(): Promise<number | null>;
   readSelectedPosition(): Promise<BrokerPosition>;
   selectAtmPreset(name: string): Promise<void>;
-  setQuantity(quantity: number, force?: boolean): Promise<void>;
+  setQuantity(quantity: number): Promise<void>;
   clickOrder(action: "buy" | "sell", label: string): Promise<void>;
   clickExit(label: string): Promise<void>;
   readSettledEquity(): Promise<number | null>;
@@ -45,8 +45,6 @@ export interface TradingSessionAdapter {
   verifyLaneAccount?(group: Group, label: string): Promise<boolean>;
   /** Fresh broker-DOM verification performed immediately before an entry. */
   verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<boolean>;
-  /** Rebuild the live ticket after a person or the broker changes prepared state. */
-  repairPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<void>;
   /** Fresh broker-DOM account verification performed immediately before Exit. */
   verifyExitState(group: Group, label: string): Promise<boolean>;
 }
@@ -74,13 +72,6 @@ export interface EntryTiming {
   queueWaitMs: number;
   executionMs: number;
   totalMs: number;
-}
-
-export interface LaneSnapshot {
-  verifiedAccount: boolean;
-  position: BrokerPosition;
-  equity: number | null;
-  checkedAt: string;
 }
 
 interface PlannedLane {
@@ -268,14 +259,7 @@ export class CredentialWorker {
     group: Group,
     account: StoredAccount,
     order: OrderRequest,
-    options: {
-      skipFundedWindow?: boolean;
-      prepareIfNeeded?: ArmingCallbacks;
-      /** Persist the exact account/order intent immediately before any live click. */
-      beforeClick?: () => Promise<void> | void;
-      /** Persist that the broker click returned before the queue can switch accounts. */
-      afterClick?: () => Promise<void> | void;
-    } = {},
+    options: { skipFundedWindow?: boolean } = {},
   ): Promise<EntryTiming> {
     const generation = this.entryGeneration.get(group) ?? 0;
     await this.ensureCapabilities();
@@ -287,6 +271,12 @@ export class CredentialWorker {
     if (!initialStatus.connected || !initialStatus.loggedIn) {
       throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
     }
+    const plan = this.desired.get(group);
+    if (!plan
+      || plan.signature.accountLabel !== account.tradovateLabel
+      || plan.signature.atmPreset !== account.atmPreset) {
+      throw new Error(`${account.name} is not ready on ${this.definition.name}. Prepare its exact account and ATM before sending a live signal.`);
+    }
     const kind: CredentialTaskKind = group === "funded" ? "funded-entry" : "eval-entry";
     return this.enqueue(kind, async () => {
       if ((this.entryGeneration.get(group) ?? 0) !== generation) {
@@ -297,39 +287,6 @@ export class CredentialWorker {
       if (!queuedStatus.connected || !queuedStatus.loggedIn) {
         throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
       }
-
-      let plan = this.desired.get(group);
-      if (!plan
-        || plan.signature.accountLabel !== account.tradovateLabel
-        || plan.signature.atmPreset !== account.atmPreset) {
-        // A restored trade intentionally prevents startup from switching tickets.
-        // Once that trade is manually flattened, another lane can therefore have
-        // no idle plan. Repair it inside the live-entry queue (rather than through
-        // background preparation) so funded priority is preserved and an eval can
-        // still enter while a different funded account legitimately remains open.
-        const callbacks = options.prepareIfNeeded ?? {
-          onBalance: () => {},
-          onPresetError: () => {},
-        };
-        if (this.openTrades.size > 0 && this.executionMode === "sequential" && !this.adapter.verifyActiveAccount) {
-          throw new Error(`${this.definition.name} cannot safely switch away from an open position in sequential mode.`);
-        }
-        await this.preparePhysical(group, account, callbacks);
-        plan = {
-          account,
-          callbacks,
-          signature: {
-            group,
-            accountLabel: account.tradovateLabel,
-            atmPreset: account.atmPreset,
-            preparedAt: new Date().toISOString(),
-          },
-        };
-        this.desired.set(group, plan);
-        if ((this.entryGeneration.get(group) ?? 0) !== generation) {
-          throw new Error(`Pending ${group} entry cancelled because a close signal arrived first.`);
-        }
-      }
       if (!this.isReady(group, account)) {
         if (this.executionMode === "dual-ticket") throw new Error(`${account.name} is not physically ready on ${this.definition.name}.`);
         if (this.openTrades.size > 0 && !this.adapter.verifyActiveAccount) {
@@ -339,36 +296,13 @@ export class CredentialWorker {
       }
       const executionStarted = Date.now();
       try {
-        // A person can change the selected account or ATM after idle arming.
-        // Verify the real ticket before touching quantity so a funded signal
-        // never writes its size into an evaluation ticket (or vice versa).
-        if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset)) {
-          await this.adapter.repairPreparedOrderState(group, account.tradovateLabel, account.atmPreset);
-        }
         if (order.quantity != null) {
           if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, order.quantity);
-          // The webhook is authoritative. Force the write even when ATLAS's
-          // cache says this value was set earlier: a person may have changed
-          // the visible Tradovate quantity since then.
-          else await this.adapter.setQuantity(order.quantity, true);
+          else await this.adapter.setQuantity(order.quantity);
         }
         if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset, order.quantity)) {
-          // One bounded self-heal covers a UI race between preflight and the
-          // final read. The second live verification remains fail-closed.
-          await this.adapter.repairPreparedOrderState(
-            group,
-            account.tradovateLabel,
-            account.atmPreset,
-            order.quantity,
-          );
-          if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset, order.quantity)) {
-            throw new Error(`Final broker verification failed for ${account.name} after automatic repair. No order was placed.`);
-          }
+          throw new Error(`Final broker verification failed for ${account.name}: account, ATM, or quantity changed. No order was placed.`);
         }
-        // Fail closed if the durable intent cannot be written. Once this hook
-        // succeeds, a crash or ambiguous click can be reconciled from disk
-        // instead of allowing a duplicate entry after restart.
-        await options.beforeClick?.();
         if (this.executionMode === "dual-ticket") {
           await this.adapter.clickLaneOrder!(group, order.action, account.tradovateLabel);
         } else {
@@ -377,7 +311,6 @@ export class CredentialWorker {
         // Acquire the open-trade lease before releasing this session queue. A
         // prepare already waiting behind entry must never switch the account.
         this.openTrades.set(group, account.tradovateLabel);
-        await options.afterClick?.();
       } finally {
         this.ready.delete(group);
         this.desired.delete(group);
@@ -416,7 +349,7 @@ export class CredentialWorker {
       if (!this.isReady(group, account)) throw new Error(`${account.name} is not ready on ${this.definition.name}.`);
       const executionStarted = Date.now();
       if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, quantity);
-      else await this.adapter.setQuantity(quantity, true);
+      else await this.adapter.setQuantity(quantity);
       return { queueWaitMs, executionMs: Date.now() - executionStarted, totalMs: Date.now() - requestedAt };
     });
   }
@@ -444,7 +377,7 @@ export class CredentialWorker {
   disconnect(): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.disconnect()); }
   discoverAccounts(): Promise<string[]> { return this.enqueue("diagnostic", () => this.adapter.discoverAccounts()); }
   testAtmPreset(name: string): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.selectAtmPreset(name)); }
-  testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity, true)); }
+  testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity)); }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.enqueue("diagnostic", () => this.adapter.inspectFields?.() ?? Promise.resolve([])); }
   async close(group: Group, label: string): Promise<void> {
     await this.enqueue("close", async () => {
@@ -472,13 +405,6 @@ export class CredentialWorker {
     return this.close(group, label);
   }
   readSelectedEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSelectedEquity()); }
-  private async verifyOrSelectSequentialAccount(label: string): Promise<boolean> {
-    const verify = () => this.adapter.verifyActiveAccount?.(label)
-      ?? Promise.resolve(this.adapter.selectedAccount === label);
-    if (await verify()) return true;
-    await this.adapter.armFor(label);
-    return verify();
-  }
   readLaneEquity(group: Group, label: string): Promise<number | null> {
     const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
     return this.enqueue(kind, async () => {
@@ -488,7 +414,8 @@ export class CredentialWorker {
         }
         return this.adapter.readLaneEquity!(group);
       }
-      const verified = await this.verifyOrSelectSequentialAccount(label);
+      if (this.adapter.selectedAccount !== label) await this.adapter.armFor(label);
+      const verified = await (this.adapter.verifyActiveAccount?.(label) ?? Promise.resolve(this.adapter.selectedAccount === label));
       if (!verified) throw new Error(`Could not verify ${label} before reading its balance.`);
       return this.adapter.readSelectedEquity();
     });
@@ -503,62 +430,15 @@ export class CredentialWorker {
         }
         return this.adapter.readLanePosition!(group);
       }
-      const verified = await this.verifyOrSelectSequentialAccount(label);
+      if (this.adapter.selectedAccount !== label) await this.adapter.armFor(label);
+      const verified = await (this.adapter.verifyActiveAccount?.(label) ?? Promise.resolve(this.adapter.selectedAccount === label));
       if (!verified) {
         return { status: "unknown", reason: `Could not verify ${label} before reading its broker position.`, checkedAt };
       }
       return this.adapter.readSelectedPosition();
     });
   }
-  readLaneSnapshot(group: Group, label: string): Promise<LaneSnapshot> {
-    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
-    return this.enqueue(kind, async () => {
-      const checkedAt = new Date().toISOString();
-      if (this.executionMode === "dual-ticket") {
-        if (!await this.adapter.verifyLaneAccount!(group, label)) {
-          return {
-            verifiedAccount: false,
-            position: { status: "unknown", reason: `Could not verify ${label} before reading its broker position.`, checkedAt },
-            equity: null,
-            checkedAt,
-          };
-        }
-        const position = await this.adapter.readLanePosition!(group);
-        const equity = await this.adapter.readLaneEquity!(group);
-        return { verifiedAccount: true, position, equity, checkedAt: position.checkedAt };
-      }
-
-      if (!await this.verifyOrSelectSequentialAccount(label)) {
-        return {
-          verifiedAccount: false,
-          position: { status: "unknown", reason: `Could not verify ${label} before reading its broker position.`, checkedAt },
-          equity: null,
-          checkedAt,
-        };
-      }
-      const position = await this.adapter.readSelectedPosition();
-      const equity = await this.adapter.readSelectedEquity();
-      return { verifiedAccount: true, position, equity, checkedAt: position.checkedAt };
-    });
-  }
   readSettledEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSettledEquity()); }
-  /** Read the post-exit balance only after proving the exact owning account.
-   * This runs at close priority and holds the credential queue through the
-   * broker's settlement delay, so another lane cannot switch underneath it. */
-  readSettledLaneEquity(group: Group, label: string): Promise<number | null> {
-    return this.enqueue("close", async () => {
-      if (this.executionMode === "dual-ticket") {
-        if (!await this.adapter.verifyLaneAccount!(group, label)) {
-          throw new Error(`Could not verify ${label} before reading its settled balance.`);
-        }
-        return this.adapter.readLaneEquity!(group);
-      }
-      if (!await this.verifyOrSelectSequentialAccount(label)) {
-        throw new Error(`Could not verify ${label} before reading its settled balance.`);
-      }
-      return this.adapter.readSettledEquity();
-    });
-  }
   dismissPopups(): Promise<boolean> { return this.enqueue("diagnostic", () => this.adapter.dismissPopups()); }
   refreshLoginState(timeout?: number): Promise<boolean> { return this.enqueue("diagnostic", () => this.adapter.refreshLoginState(timeout)); }
   verifyActiveAccount(label: string): Promise<boolean> {
@@ -593,7 +473,7 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   readSelectedEquity() { return this.browser.readSelectedEquity(); }
   readSelectedPosition() { return this.browser.readSelectedPosition(); }
   selectAtmPreset(name: string) { return this.browser.selectAtmPreset(name); }
-  setQuantity(quantity: number, force = false) { return this.browser.setQuantity(quantity, force); }
+  setQuantity(quantity: number) { return this.browser.setQuantity(quantity); }
   clickOrder(action: "buy" | "sell", label: string) { return this.browser.clickOrder(action, label); }
   clickExit(label: string) { return this.browser.clickExit(label); }
   readSettledEquity() { return this.browser.readSettledEquity(); }
@@ -622,12 +502,6 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number) {
     if (this.independentTicketsBlocked) return Promise.resolve(false);
     return this.browser.verifySequentialPreparedOrderState(label, atmPreset, quantity);
-  }
-  repairPreparedOrderState(_group: Group, label: string, atmPreset: string, quantity?: number) {
-    if (this.independentTicketsBlocked) {
-      return Promise.reject(new Error("Automatic ticket repair is blocked because two independent tickets are open."));
-    }
-    return this.browser.repairSequentialPreparedOrderState(label, atmPreset, quantity);
   }
   verifyExitState(_group: Group, label: string) {
     if (this.independentTicketsBlocked) return Promise.resolve(false);

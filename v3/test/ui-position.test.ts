@@ -11,10 +11,6 @@ test("dashboard exposes broker position state and a no-order position check", ()
   assert.match(app, /Broker:/);
   assert.match(app, /credential-position-check/);
   assert.match(app, /\/browser\/position/);
-  const index = readFileSync(resolve("public", "index.html"), "utf8");
-  assert.match(index, /btn-test-position-reader/);
-  assert.match(app, /\/test-position-reader/);
-  assert.match(app, /No order is placed/);
 });
 
 test("status and diagnostic route expose read-only broker position evidence", () => {

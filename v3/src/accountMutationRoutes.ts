@@ -14,23 +14,17 @@ interface AccountMutationStore {
 interface AccountMutationRouteDependencies {
   store: AccountMutationStore;
   hasOpenTradeForAccount(label: string): boolean;
-  hasActiveWorkForLogin?(loginId: string): boolean;
   armNext(group: Group, options?: { force?: boolean }): void;
   pushEvent(kind: EventKind, message: string, group?: Group): unknown;
 }
 
 export function registerAccountMutationRoutes(
   api: Router,
-  { store, hasOpenTradeForAccount, hasActiveWorkForLogin, armNext, pushEvent }: AccountMutationRouteDependencies,
+  { store, hasOpenTradeForAccount, armNext, pushEvent }: AccountMutationRouteDependencies,
 ): void {
   const blockOpenTradeMutation = (label: string, res: Response): boolean => {
     if (!store.find(label) || !hasOpenTradeForAccount(label)) return false;
     res.status(409).json({ ok: false, error: "This account has an open trade and cannot be changed." });
-    return true;
-  };
-  const blockActiveWork = (loginId: string | undefined, res: Response): boolean => {
-    if (!loginId || !hasActiveWorkForLogin?.(loginId)) return false;
-    res.status(409).json({ ok: false, error: "This Tradovate login is handling broker work. Try the account change again after it finishes." });
     return true;
   };
 
@@ -44,7 +38,6 @@ export function registerAccountMutationRoutes(
       return res.status(400).json({ ok: false, error: "group must be 'evals' or 'funded'" });
     }
     if (blockOpenTradeMutation(label, res)) return;
-    if (blockActiveWork(loginId || store.find(label)?.loginId, res)) return;
     try {
       const acct = store.upsertAccount(label, group, name || undefined, loginId || undefined);
       pushEvent("info", `Account ${acct.name} (${label}) added to ${group}.`, group);
@@ -60,7 +53,6 @@ export function registerAccountMutationRoutes(
   api.post("/accounts/remove", (req, res) => {
     const label = typeof req.body?.label === "string" ? req.body.label : "";
     if (blockOpenTradeMutation(label, res)) return;
-    if (blockActiveWork(store.find(label)?.loginId, res)) return;
     const group = store.find(label)?.group;
     const removed = store.removeAccount(label);
     if (removed) {
@@ -73,7 +65,6 @@ export function registerAccountMutationRoutes(
   api.post("/accounts/toggle", (req, res) => {
     const label = typeof req.body?.label === "string" ? req.body.label : "";
     if (blockOpenTradeMutation(label, res)) return;
-    if (blockActiveWork(store.find(label)?.loginId, res)) return;
     const group = store.find(label)?.group;
     const ok = store.toggleAccount(label);
     if (ok && group) armNext(group);
@@ -83,7 +74,6 @@ export function registerAccountMutationRoutes(
   api.post("/accounts/move", (req, res) => {
     const label = typeof req.body?.label === "string" ? req.body.label : "";
     if (blockOpenTradeMutation(label, res)) return;
-    if (blockActiveWork(store.find(label)?.loginId, res)) return;
     const direction = req.body?.direction === "up" ? "up" : "down";
     const group = store.find(label)?.group;
     const ok = store.moveAccount(label, direction);
@@ -94,7 +84,6 @@ export function registerAccountMutationRoutes(
   api.post("/accounts/reactivate", (req, res) => {
     const label = typeof req.body?.label === "string" ? req.body.label : "";
     if (blockOpenTradeMutation(label, res)) return;
-    if (blockActiveWork(store.find(label)?.loginId, res)) return;
     const group = store.find(label)?.group;
     const ok = store.reactivate(label);
     if (ok) {
