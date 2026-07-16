@@ -68,6 +68,9 @@ test("setQuantity sets the shadow-DOM qty box and verifies it", async (t) => {
 
     await b.setQuantity(12);
     assert.equal(await qtyValue(page), "12", "qty box should update to 12");
+    b.verifyActiveAccount = async () => true;
+    assert.equal(await b.verifySequentialPreparedOrderState("LFE05079261220006", "", 12), true);
+    assert.equal(await b.verifySequentialPreparedOrderState("LFE05079261220006", ""), true, "omitted alert size still verifies a positive visible ticket size");
 
     // Same size again = cached no-op; the box stays put.
     await b.setQuantity(12);

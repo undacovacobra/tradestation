@@ -1,81 +1,52 @@
-# Trading Bot V3 — Self-Healing Test Copy (port 3400)
+# ATLAS
 
-**V3 is a test copy of V2 with reliability upgrades. V2 (port 3300) is
-untouched and stays the live bot until V3 proves itself.** What V3 adds:
+ATLAS is a local Tradovate execution manager. It preserves the V3 dashboard
+and account rotation workflow while supporting multiple prop-firm credentials
+without consuming multiple Tradovate sessions for the same username.
 
-- **Auto-connect on boot** — after a restart the bot opens and logs the browser
-  back in by itself (`AUTO_CONNECT`, default on). No human click needed.
-- **Popup-killer** — if a Tradovate dialog covers the screen, the bot clears it
-  (safe dismiss-only buttons / Escape) and retries the blocked click, instead
-  of stranding a trade.
-- **Phone notifications — action-oriented, not noisy.** Your phone only buzzes
-  when you're actually **needed** (a trade didn't go through, a popup is stuck, a
-  login is required, or a restart left a trade open) or with **good news** (you
-  won a trade / passed an account). Routine trades, self-healed popups, and
-  clean restarts stay silent — everything still shows in the dashboard feed.
-  Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`.
-- **Proactive popup sweep** — every ~45s the bot clears any Tradovate dialog on
-  its own, so one that pops up between trades is gone before the next entry.
-- **Connection health check** — the same ~45s watch verifies the trading screen
-  is still there; if Tradovate logged out or wandered off (and no trade is
-  open), it reloads and logs back in by itself, only buzzing you if it can't.
-- **Crash watchdog** — `run-bot.cmd` relaunches the bot in 5s if it ever dies;
-  `Start Trading Bot.cmd` uses it automatically.
-- **Startup self-check** — after a restart, if the bot's notes say a trade was
-  open, it warns you to verify instead of guessing.
+## Execution model
 
-Everything below is the same as V2 (with port 3400 wherever you see 3300).
+- One persistent browser context is used per saved Tradovate credential.
+- Every credential has an Evaluation lane and a Funded lane, each with its own
+  rotation state, Next account, ATM preset, open-trade record, and webhook.
+- Accounts using the same username/password share that credential and its one
+  browser context. Accounts from another prop firm or username use another
+  saved credential and context.
+- A credential has one priority queue. Close work is first, then Funded entry,
+  Evaluation entry, Funded maintenance, Evaluation maintenance, and diagnostics.
+- An Evaluation-only alert waits 75 ms by default so a nearly simultaneous
+  Funded alert can take priority. Set `FUNDED_PRIORITY_WINDOW_MS` to change it.
+- ATLAS contains a no-order two-ticket independence probe, but current
+  Tradovate equity is global rather than ticket-scoped. Credentials therefore
+  remain honestly labeled `SEQUENTIAL` until lane-safe balance ownership can
+  also be proved. If two independent ticket modules are actually open, live
+  clicks fail closed; use one ticket module for that credential. With one
+  ticket, ATLAS switches and verifies the account immediately before each
+  action. Distinct credentials still execute concurrently.
+- Tradovate is the only platform implemented. The session-adapter boundary is
+  intentionally ready for a future TopstepX adapter.
 
----
+ATLAS starts in Practice mode after installation. Practice mode evaluates and
+logs webhook behavior but never clicks Buy, Sell, or Exit.
 
-V2 of the account-cycler bot. Everything is controlled from a **web dashboard**
-(no terminal needed once it's running):
+## Webhooks
 
-- Start / pause button, Practice ↔ LIVE switch (with a big warning), status lights.
-- **Two independent lanes** with their own webhooks:
-  - Evaluation accounts → `POST /webhook/evals`
-  - Funded accounts → `POST /webhook/funded`
-- Accounts are added / removed / reordered **on screen** (or found automatically
-  with "Scan Tradovate accounts"). No files to edit by hand.
-- Live activity feed with plain-English messages and errors.
+The dashboard prints the exact URL beside every credential lane.
 
-Trades are still placed by **browser automation** (Playwright driving the
-Tradovate web trader) — no API is used anywhere. The bot never sets symbol or
-quantity; you set those on the Tradovate screen, the bot only switches account
-and clicks Buy / Sell / Exit.
+| Scope | Path | Behavior |
+| --- | --- | --- |
+| One Evaluation lane | `/webhook/:credentialId/evals` | Dispatch only that credential's evaluations |
+| One Funded lane | `/webhook/:credentialId/funded` | Dispatch only that credential's funded accounts |
+| Both lanes for one credential | `/webhook/:credentialId` | Funded is submitted first, then evaluations |
+| All Evaluation lanes | `/webhook/evals` | Dispatch evaluations for every enabled credential |
+| All Funded lanes | `/webhook/funded` | Dispatch funded for every enabled credential |
+| Every lane | `/webhook` | Dispatch funded first, then evaluations, across all credentials |
 
-V1 (in the repo root) is untouched and still works. V2 uses port **3300** so
-both can even run at the same time.
+Unknown credentials return 404. If some targeted lanes succeed and others
+fail, ATLAS returns 207 with a result for every lane. If all fail it returns
+409. The incoming webhook secret is required by every route.
 
-## Setup on the Windows PC (one time)
-
-1. Install Node.js 22 if you haven't (nodejs.org → LTS).
-2. Open a terminal in this `v2` folder and run:
-   ```
-   npm install
-   npx playwright install chromium
-   ```
-3. Copy `.env.example` to `.env` and set:
-   - `WEBHOOK_SECRET` — a long random string (also goes in your TradingView alerts)
-   - `DASHBOARD_PASSWORD` — the password you'll use to open the dashboard
-4. Double-click **`Start Trading Bot.cmd`** (or run `npm start`).
-   Your browser opens the dashboard at `http://localhost:3300`.
-
-First-time steps on the dashboard:
-1. Click **Connect browser** — a Chrome window opens Tradovate. If auto-login
-   doesn't finish, log in there once (the session is remembered).
-2. Click **Scan Tradovate accounts** — tick which accounts are Evals / Funded.
-3. Stay in **Practice mode** and send a test alert (`npm run testhook`) — you
-   should see "PRACTICE — would BUY…" appear in the Activity feed.
-
-## The two webhooks
-
-Each group card on the dashboard shows its own webhook address with a Copy
-button. Point your eval strategy's TradingView alerts at the **evals** URL and
-your funded strategy at the **funded** URL.
-
-**One alert per strategy handles both opening and closing.** Create a single
-TradingView alert on the strategy (fires on every order) with this message:
+Example strategy alert:
 
 ```json
 {
@@ -87,130 +58,87 @@ TradingView alert on the strategy (fires on every order) with this message:
 }
 ```
 
-How it decides open vs close: TradingView says "buy"/"sell" for every order, so
-the bot reads `marketPosition`. When it becomes **`flat`**, the order closed the
-trade → the bot flattens and rotates to the next account. Any other value
-(`long`/`short`) is treated as a new entry.
+`marketPosition: "flat"` is treated as a close. `long` or `short` is an entry.
+Each targeted lane enforces one recorded open trade at a time.
 
-> This requires a **strategy** alert (so the `{{strategy.*}}` placeholders fill
-> in). The older two-alert style still works too — just send
-> `"action": "close"` for the exit.
+## Broker-authoritative trade completion
 
-Each lane keeps its own rotation and its own one-open-trade-at-a-time rule.
-The browser still only ever does one thing at a time.
+- Webhooks request entries and exits, but they do not prove that the broker
+  opened or closed the position.
+- While a live trade is recorded, ATLAS reads the verified account's dedicated
+  Tradovate `POSITION` field every active monitor tick.
+- A nonzero signed value means the broker position is open. Two consecutive
+  explicit zero readings are required before ATLAS records the close, clears
+  the account lease, and rotates.
+- An ATM exit, max-drawdown liquidation, or other broker-side exit therefore
+  completes automatically even when no close webhook arrives.
+- Missing, hidden, malformed, ambiguous, disconnected, or wrong-account
+  evidence is `UNKNOWN`; it is never treated as flat by timeout or absence.
+- The first unknown reading is logged. Repeated unknown evidence is
+  rate-limited before an action-needed notification is sent, and it does not
+  pause every credential.
+- An Exit click keeps the open-trade safety lease until the broker confirms
+  flat. Duplicate close webhooks cannot rotate the trade twice.
+- After a restart, ATLAS restores the lease, reconnects the saved session, and
+  reconciles the real broker position instead of requiring a manual reset.
+- Practice mode is explicitly `SIMULATED` and does not read a live account's
+  zero position to erase a simulated trade.
 
-### The daily win rule
+The dashboard shows `OPEN +N`, `OPEN -N`, `FLAT CHECK 1/2`, `FLAT`,
+`UNKNOWN`, or `SIMULATED` per lane. `Check broker position (no order)` performs
+the same read-only, account-verified diagnostic without placing or exiting a
+trade.
 
-Accounts cycle one round-trip at a time and loop back to the first. When
-`ONCE_PER_DAY=true` (default), an account that closes a **winning** trade is
-benched for the rest of the day (shown as "😴 WON TODAY" and skipped in the
-rotation); an account that **loses or breaks even stays in the cycle** and gets
-traded again when its turn comes back around. Win/loss is measured from the
-account's balance (EQUITY) read just before the entry vs. just after the close,
-so this only takes effect in **LIVE** mode — in Practice no real money moves, so
-nothing counts as a win and every account keeps cycling. If a balance can't be
-read, the trade is treated as "not a win" (the account stays in the cycle).
+## ATM defaults and preparation
 
-The "day" follows the **futures session**, not the calendar: it rolls over at
-**6pm US/Eastern** by default (the CME session reopen), so a winner from the
-afternoon is benched until the next session starts that evening. Change it with
-`TRADING_DAY_TZ` (e.g. `America/Chicago`) and `TRADING_DAY_RESET_HOUR`.
+- New Evaluation accounts default to ATM preset `25`.
+- New Funded accounts default to ATM preset `funded`.
+- A custom per-account ATM value is preserved during migration and can be
+  edited from the dashboard.
+- When an account becomes Next, ATLAS prepares its account and ATM while idle.
+  A live entry is blocked unless the exact account and ATM can be verified.
+- Account additions, moves, reactivation, ATM edits, and rotation changes
+  invalidate and re-arm the affected lane.
 
-## Balances, the $53,000 eval target, and the Passed column
+## Setup and operation
 
-While the Tradovate browser is connected and logged in, the bot re-reads the
-account menu on an interval. That cadence is **adaptive**: `MONITOR_SECONDS`
-(default 60s) when nothing is open, and the faster `MONITOR_ACTIVE_SECONDS`
-(default 5s) whenever a trade is open — so the profit-target stop reacts
-quickly on the live account. One read powers three things:
+1. Install Node.js 22 and run `npm install`.
+2. Copy `.env.example` to `.env` and set at least `WEBHOOK_SECRET`.
+3. Run `npm start` or double-click `Start Trading Bot.cmd`.
+4. Open `http://localhost:3400/`.
+5. Add one saved credential for each distinct Tradovate username/password,
+   connect it, and complete login or 2FA in the opened browser once.
+6. Keep ATLAS in Practice, scan or add accounts, verify each Next account and
+   ATM, then test the exact webhook URLs shown on the dashboard.
 
-- **Balances on the dashboard** — each account row shows its latest balance, a
-  small balance-history chart, and (for evals) how many dollars remain to the
-  target. History is kept in `data/balances.json`. **Scan Tradovate accounts**
-  also reads balances, so they populate the moment you scan instead of waiting
-  for the next sweep. Balance = Tradovate's **EQUITY** figure from the top bar
-  (the account menu itself shows no dollars), read by switching to each account;
-  while a trade is open the live account is already selected, so its balance is
-  read straight from the top bar every few seconds with no switching.
-- **Auto-adding new accounts** — any LFE…/LFF… id that appears in Tradovate but
-  isn't in the bot gets added automatically (LFE → Evals, LFF → Funded).
-- **The eval profit target** (default **$53,000**, `evalTarget` in
-  `data/settings.json`) — an eval at/above the target is retired to the
-  **🏆 Passed** column and never traded again (a "Put back in rotation" button
-  exists if it was retired by mistake). If the target is hit **while that
-  account holds the open trade, the bot flattens it immediately** without
-  waiting for a TradingView alert. There's also an entry-time guard so a
-  passed-level account can never take a new trade.
+The browser session folders, `.env`, account settings, rotations, balances,
+and open-trade records are local. Do not copy them into source control.
 
-Honest limits of the target stop: it reacts on the monitor interval (not
-tick-by-tick), it needs the bot running with the browser logged in, and it
-closes at market price — so the final balance will be near, not exactly at,
-the moment it crossed the target. If Tradovate's account menu doesn't show
-dollar amounts, balances stay blank and the bot says so in the Activity feed
-(a screenshot of the open menu lets us calibrate the reader).
+## Safety and verification
 
-## Contracts per trade (position size)
+- LIVE mode is an explicit dashboard choice and carries real-money risk.
+- A failed readiness, account, ATM, quantity, or login verification blocks the
+  entry instead of guessing.
+- A recorded open trade prevents background preparation, but reconnect is
+  allowed so ATLAS can verify and reconcile the real broker position.
+- The no-order simultaneous test changes prepared quantities only; it does not
+  place an order.
+- Start a release with `npm test`, then run `tsc --noEmit`. Browser-backed tests
+  use the Chrome path in `PW_CHROMIUM` when Playwright Chromium is not bundled.
 
-Each group card has a **"Contracts per trade"** box. That number — not the
-alert — decides the size: right before clicking Buy/Sell in LIVE mode the bot
-types it into Tradovate's order ticket **and reads it back to confirm**. If it
-can't set and verify the exact number it refuses to trade and says so, so a
-wrong-sized order can't slip through. Any `quantity` in the alert JSON is
-ignored for sizing.
+Useful commands:
 
-Use **"Test size on Tradovate"** (browser connected, any mode) to set the number
-on the order ticket without placing a trade — a safe way to confirm it works.
-Because setting the size drives the real order-ticket field, this is another
-spot that may need a one-time calibration against your live screen; the test
-button surfaces that immediately (and saves a `set-quantity-failed` screenshot).
+```powershell
+npm start
+npm test
+$env:PW_CHROMIUM='C:\Program Files\Google\Chrome\Application\chrome.exe'; npm test
+node node_modules/typescript/bin/tsc --noEmit
+```
 
-## Reaching it from anywhere (ngrok) — built into the dashboard
+## Remote access and notifications
 
-The PC must stay on and logged in — that's where the clicking happens. But the
-dashboard and webhooks get one permanent public address with ngrok, and the bot
-now manages the tunnel itself via a **"Remote access"** button (no separate
-ngrok window/command needed).
-
-One-time setup:
-1. Sign up free at ngrok.com, claim your **free static domain**
-   (Dashboard → Domains), e.g. `your-name.ngrok-free.dev`.
-2. Copy your **authtoken** (ngrok dashboard → Your Authtoken).
-3. In `v2/.env` set:
-   ```
-   NGROK_AUTHTOKEN=<your token>
-   NGROK_DOMAIN=your-name.ngrok-free.dev
-   ```
-4. Restart the bot. Remote access turns on automatically (`NGROK_AUTOSTART=true`),
-   or toggle it any time with the dashboard's **Remote access** button.
-
-Then, forever:
-- TradingView webhook URLs: `https://your-name.ngrok-free.dev/webhook/evals`
-  and `…/webhook/funded`
-- Dashboard from your phone or any computer: `https://your-name.ngrok-free.dev`
-  (it asks for your dashboard password)
-
-The tunnel uses the official `@ngrok/ngrok` SDK (an **optional** dependency
-running in-process). If it isn't installed the bot still runs — the Remote
-access button just reports it's unavailable, and you can fall back to the ngrok
-CLI (`ngrok http --url=your-name.ngrok-free.dev 3300`).
-
-Set `DASHBOARD_PASSWORD` in `.env` **before** exposing the dashboard.
-
-Only one computer can hold the tunnel at a time. If a second one tries, ngrok
-reports the address is already online — turn the bot off on the other computer
-(or stop its agent from dashboard.ngrok.com), then hit Remote access again.
-
-## Commands
-
-- `npm start` — run the bot + dashboard (or double-click `Start Trading Bot.cmd`)
-- `npm test` — rotation unit tests (no setup, no broker)
-- `npm run testhook` — fire a sample buy+close at the evals webhook
-  (`npm run testhook -- funded` for the funded one)
-
-## Safety
-
-- **Practice mode is the default** and survives restarts. In practice mode no
-  order ever reaches Tradovate — trades only appear in the Activity feed.
-- Switching to LIVE requires clicking through an explicit warning.
-- The Pause button makes the bot ignore all alerts until you press Start.
-- All state lives in `v2/data/` (created automatically, never edited by hand).
+The existing ngrok and Telegram settings remain supported. Set
+`NGROK_AUTHTOKEN` and `NGROK_DOMAIN` for remote access. Set
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for action-needed notifications.
+Keep `DASHBOARD_PASSWORD` set whenever the dashboard is exposed beyond the
+local computer.

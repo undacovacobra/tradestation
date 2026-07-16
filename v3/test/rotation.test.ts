@@ -1,15 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GroupRotation } from "../src/rotation.js";
+import { GroupRotation, laneStatePath, migrateLegacyLaneState } from "../src/rotation.js";
 import type { OrderRequest, StoredAccount } from "../src/types.js";
 
 const order: OrderRequest = { action: "buy", symbol: "MNQ1!" };
 
 function acct(label: string): StoredAccount {
-  return { tradovateLabel: label, name: label, group: "evals", enabled: true, status: "active" };
+  return { tradovateLabel: label, name: label, group: "evals", enabled: true, status: "active", atmPreset: "", loginId: "primary-tradovate", firm: "Primary prop firm" };
 }
 
 /** A rotation with a FIXED trading day so win-bench tests are deterministic. */
@@ -253,6 +253,25 @@ test("logs contracts + result per trade in today's history", () => {
   }
 });
 
+test("clearRest takes a benched winner off rest so it can trade again today", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = makeRot(path, true);
+    const accounts = [acct("A"), acct("B")];
+    const c1 = rot.selectAccountForEntry(accounts);
+    assert.ok("account" in c1 && c1.account.tradovateLabel === "A");
+    rot.recordOpen(c1.account, order, 50_000);
+    rot.recordClose(accounts, { exitBalance: 50_500 }); // A wins -> benched
+    assert.equal(rot.isBenchedToday("A"), true);
+
+    assert.equal(rot.clearRest("A"), true, "un-rest reports success");
+    assert.equal(rot.isBenchedToday("A"), false, "A is no longer resting");
+    assert.equal(rot.clearRest("A"), false, "un-resting an account that isn't resting is a no-op");
+  } finally {
+    cleanup();
+  }
+});
+
 test("bench is ignored when benchWinnersForDay is off", () => {
   const { path, cleanup } = tempPath();
   try {
@@ -263,6 +282,59 @@ test("bench is ignored when benchWinnersForDay is off", () => {
     rot.recordOpen(c1.account, order, 50_000);
     rot.recordClose(accounts, { exitBalance: 99_000 }); // big win
     assert.equal(rot.isBenchedToday("A"), false, "no benching when the feature is off");
+  } finally {
+    cleanup();
+  }
+});
+
+test("lane state paths are credential-and-stage scoped and filesystem safe", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const dataDir = join(path, "..");
+    assert.equal(laneStatePath(dataDir, "apex-main:evals"), join(dataDir, "state-apex-main-evals.json"));
+    assert.notEqual(laneStatePath(dataDir, "apex-main:evals"), laneStatePath(dataDir, "other:evals"));
+    assert.notEqual(laneStatePath(dataDir, "apex-main:evals"), laneStatePath(dataDir, "apex-main:funded"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("legacy primary state migrates atomically once and never overwrites lane state", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const dataDir = join(path, "..");
+    const legacy = join(dataDir, "state-evals.json");
+    const target = laneStatePath(dataDir, "primary-tradovate:evals");
+    writeFileSync(legacy, JSON.stringify({ nextLabel: "E2", history: [{ accountName: "legacy" }] }));
+
+    assert.equal(migrateLegacyLaneState(legacy, target), true);
+    assert.equal(existsSync(target), true);
+    assert.equal(JSON.parse(readFileSync(target, "utf8")).nextLabel, "E2");
+
+    writeFileSync(target, JSON.stringify({ nextLabel: "E3" }));
+    assert.equal(migrateLegacyLaneState(legacy, target), false);
+    assert.equal(JSON.parse(readFileSync(target, "utf8")).nextLabel, "E3");
+  } finally {
+    cleanup();
+  }
+});
+
+test("two credential rotations of the same stage never share state", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const dataDir = join(path, "..");
+    const apex = makeRot(laneStatePath(dataDir, "apex:evals"));
+    const other = makeRot(laneStatePath(dataDir, "other:evals"));
+    const apexAccounts = [acct("A1"), acct("A2")];
+    const otherAccounts = [acct("O1"), acct("O2")];
+
+    const first = apex.selectAccountForEntry(apexAccounts);
+    assert.ok("account" in first);
+    apex.recordOpen(first.account, order);
+    apex.recordClose(apexAccounts);
+
+    assert.equal(apex.peekNext(apexAccounts)?.tradovateLabel, "A2");
+    assert.equal(other.peekNext(otherAccounts)?.tradovateLabel, "O1");
   } finally {
     cleanup();
   }
