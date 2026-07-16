@@ -42,3 +42,20 @@ test("Windows launcher reuses an already-running healthy ATLAS server", () => {
   assert.match(launcher, /curl\.exe\s+-fsS\s+http:\/\/localhost:3400\/health/i);
   assert.match(launcher, /if not errorlevel 1 goto open_dashboard/i);
 });
+
+test("the inner v3 folder has a no-space PowerShell-friendly launcher", () => {
+  const v3Root = join(repositoryRoot, "v3");
+  const launcher = readFileSync(join(v3Root, "Start-ATLAS.cmd"), "utf8");
+  const watchdog = readFileSync(join(v3Root, "run-atlas-local.cmd"), "utf8");
+
+  assert.match(launcher, /run-atlas-local\.cmd/i);
+  assert.match(watchdog, /call\s+npm\.cmd\s+install/i);
+  assert.match(watchdog, /call\s+npm\.cmd\s+start/i);
+  assert.doesNotMatch(watchdog, /npm\.ps1/i);
+});
+
+test("README gives the exact command for a PowerShell prompt already inside v3", () => {
+  const readme = readFileSync(join(repositoryRoot, "README.md"), "utf8");
+
+  assert.match(readme, /\.\\Start-ATLAS\.cmd/i);
+});

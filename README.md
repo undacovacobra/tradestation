@@ -16,6 +16,13 @@ From PowerShell, use this policy-safe command:
 npm.cmd --prefix v3 start
 ```
 
+If your PowerShell prompt already ends in `\v3\v3>`, use the no-space launcher
+in that exact folder:
+
+```powershell
+.\Start-ATLAS.cmd
+```
+
 Use `npm.cmd`, not plain `npm`, on machines where PowerShell blocks `npm.ps1`.
 The launcher does this automatically and does not weaken Windows execution-policy
 security.
