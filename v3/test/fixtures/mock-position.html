@@ -18,11 +18,19 @@
     const value = state === "open-long" ? "+2" : state === "open-short" ? "-3" : state === "malformed" ? "0.00 USD" : "0";
     const positionLabel = state === "live-case" ? "Position" : "POSITION";
     const summaryOnly = state.startsWith("summary-");
+    const separateOnly = state.startsWith("separate-");
 
     function topSummary(text, { hidden = false } = {}) {
       const root = document.createElement("section");
       root.className = hidden ? "hidden" : "";
       root.innerHTML = `<span class="positions-summary">${text}</span>`;
+      document.body.append(root);
+    }
+
+    function separateTopPosition(value, { hidden = false } = {}) {
+      const root = document.createElement("section");
+      root.className = `top-position-card${hidden ? " hidden" : ""}`;
+      root.innerHTML = `<span>Positions</span><span class="positions-value">${value}</span>`;
       document.body.append(root);
     }
 
@@ -53,11 +61,24 @@
       topSummary("Positions: + 0/- 0");
     }
 
+    if (state === "separate-flat") separateTopPosition("0");
+    else if (state === "separate-long") separateTopPosition("+2");
+    else if (state === "separate-short") separateTopPosition("-3");
+    else if (state === "separate-malformed") separateTopPosition("0.00 USD");
+    else if (state === "separate-hidden") separateTopPosition("0", { hidden: true });
+    else if (state === "separate-duplicate") {
+      separateTopPosition("0");
+      separateTopPosition("0");
+    }
+
     if (state === "hidden") ticket({ hidden: true });
     else if (summaryOnly) {
       if (state === "summary-conflict") {
         // The conflicting ticket was created above.
       }
+    }
+    else if (separateOnly) {
+      // The top counter is the only position evidence in these states.
     }
     else {
       ticket();

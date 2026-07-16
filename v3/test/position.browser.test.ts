@@ -129,6 +129,45 @@ test("readSelectedPosition falls back to the visible top Positions counter", asy
   }
 });
 
+test("readSelectedPosition reads Tradovate's separate Positions label and value", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    const browser = fake(page);
+
+    await page.goto(`${fixture}?state=separate-flat`);
+    assert.equal((await browser.readSelectedPosition()).status, "flat");
+
+    await page.goto(`${fixture}?state=separate-long`);
+    const long = await browser.readSelectedPosition();
+    assert.equal(long.status, "open");
+    if (long.status === "open") assert.equal(long.netPosition, 2);
+
+    await page.goto(`${fixture}?state=separate-short`);
+    const short = await browser.readSelectedPosition();
+    assert.equal(short.status, "open");
+    if (short.status === "open") assert.equal(short.netPosition, -3);
+  } finally {
+    await chrome.close();
+  }
+});
+
+test("readSelectedPosition rejects unsafe separate Positions counters", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    const browser = fake(page);
+    for (const state of ["separate-malformed", "separate-hidden", "separate-duplicate"]) {
+      await page.goto(`${fixture}?state=${state}`);
+      assert.equal((await browser.readSelectedPosition()).status, "unknown", `${state} must fail safe`);
+    }
+  } finally {
+    await chrome.close();
+  }
+});
+
 test("readSelectedPosition fails safely for conflicting or unsafe top counter evidence", async (t) => {
   const chrome = await launch();
   if (!chrome) return t.skip("no Chromium available");

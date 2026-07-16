@@ -571,6 +571,7 @@ export class TradovateBrowser {
     const evidence = await this.page.evaluate(() => {
       const roots: (Document | ShadowRoot)[] = [document];
       const labels: HTMLElement[] = [];
+      const topPositionLabels: HTMLElement[] = [];
       const summaryCandidates: string[] = [];
       while (roots.length) {
         const root = roots.pop()!;
@@ -582,6 +583,7 @@ export class TradovateBrowser {
           if (el.offsetWidth <= 0 || el.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
           const text = (el.textContent || "").replace(/\s+/g, " ").trim();
           if (text.toUpperCase() === "POSITION") labels.push(el);
+          if (/^Positions:?$/i.test(text)) topPositionLabels.push(el);
 
           if (/^Positions:\s*\+\s*\d+\s*\/\s*-\s*\d+$/i.test(text)) {
             let hasMatchingDescendant = false;
@@ -644,11 +646,43 @@ export class TradovateBrowser {
         }
         if (candidate != null) found.push(candidate);
       }
-      return { ticketCandidates: found, summaryCandidates };
-    }).catch(() => ({ ticketCandidates: [] as string[], summaryCandidates: [] as string[] }));
+
+      const separatePositionCandidates: string[] = [];
+      for (let i = 0; i < topPositionLabels.length; i++) {
+        const label = topPositionLabels[i]!;
+        let scope: HTMLElement | null = label.parentElement;
+        let candidate: string | null = null;
+        while (scope && scope.tagName !== "BODY" && scope.tagName !== "HTML") {
+          const numeric: string[] = [];
+          const descendants = scope.querySelectorAll("*");
+          for (let j = 0; j < descendants.length; j++) {
+            const node = descendants[j] as HTMLElement;
+            if (node === label || node.childElementCount > 0) continue;
+            const style = getComputedStyle(node);
+            if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+            const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+            if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) numeric.push(text);
+          }
+          if (numeric.length === 1) {
+            candidate = numeric[0]!;
+            break;
+          }
+          if (numeric.length > 1) break;
+          scope = scope.parentElement;
+        }
+        if (candidate != null) separatePositionCandidates.push(candidate);
+      }
+      return { ticketCandidates: found, summaryCandidates, separatePositionCandidates };
+    }).catch(() => ({
+      ticketCandidates: [] as string[],
+      summaryCandidates: [] as string[],
+      separatePositionCandidates: [] as string[],
+    }));
 
     const ticket = classifyBrokerPosition(evidence.ticketCandidates, checkedAt);
-    const summary = classifyTopPositionSummary(evidence.summaryCandidates, checkedAt);
+    const formattedSummary = classifyTopPositionSummary(evidence.summaryCandidates, checkedAt);
+    const separateSummary = classifyBrokerPosition(evidence.separatePositionCandidates, checkedAt);
+    const summary = combineBrokerPositionSources(formattedSummary, separateSummary);
     return combineBrokerPositionSources(ticket, summary);
   }
 
