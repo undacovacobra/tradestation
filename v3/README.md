@@ -65,8 +65,13 @@ Each targeted lane enforces one recorded open trade at a time.
 
 - Webhooks request entries and exits, but they do not prove that the broker
   opened or closed the position.
-- While a live trade is recorded, ATLAS reads the verified account's dedicated
-  Tradovate `POSITION` field every active monitor tick.
+- While a live trade is recorded, ATLAS reads the verified account's actual
+  Tradovate position value every active monitor tick. It understands both the
+  order-ticket `Position` field and Tradovate's separate top `Positions`
+  counter.
+- If Evaluation and Funded trades are open under one login, ATLAS visibly
+  switches between the exact accounts, verifies each selection, and reads one
+  position/equity snapshot at a time. Funded is always checked first.
 - A nonzero signed value means the broker position is open. Two consecutive
   explicit zero readings are required before ATLAS records the close, clears
   the account lease, and rotates.
@@ -74,9 +79,12 @@ Each targeted lane enforces one recorded open trade at a time.
   completes automatically even when no close webhook arrives.
 - Missing, hidden, malformed, ambiguous, disconnected, or wrong-account
   evidence is `UNKNOWN`; it is never treated as flat by timeout or absence.
-- The first unknown reading is logged. Repeated unknown evidence is
-  rate-limited before an action-needed notification is sent, and it does not
-  pause every credential.
+- The first unknown reading is logged. A continuous unknown episode can send
+  only one action-needed notification, and it never pauses ATLAS.
+- A matching close webhook is retained as a bounded backup. Broker evidence
+  remains primary, but after at least two unknown reads and a five-second
+  grace period the close webhook may complete that exact lane/trade. Any
+  explicit nonzero broker position vetoes the fallback and requests Exit.
 - An Exit click keeps the open-trade safety lease until the broker confirms
   flat. Duplicate close webhooks cannot rotate the trade twice.
 - After a restart, ATLAS restores the lease, reconnects the saved session, and
@@ -85,9 +93,10 @@ Each targeted lane enforces one recorded open trade at a time.
   zero position to erase a simulated trade.
 
 The dashboard shows `OPEN +N`, `OPEN -N`, `FLAT CHECK 1/2`, `FLAT`,
-`UNKNOWN`, or `SIMULATED` per lane. `Check broker position (no order)` performs
-the same read-only, account-verified diagnostic without placing or exiting a
-trade.
+`UNKNOWN`, or `SIMULATED` per lane. **Test position reader** performs the same
+read-only, account-verified cycle for a login—Funded first, then Evaluation—and
+reports the account, position, equity, and timing. It never clicks Buy, Sell,
+Exit, or the ATM control.
 
 ## ATM defaults and preparation
 

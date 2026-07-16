@@ -493,12 +493,9 @@ async function forceClose(group: Group, reason: string, lane = primaryLane(group
   }
 }
 
-/**
- * The monitor's per-tick work: read ONLY the selected account's balance (the
- * open trade's account is the selected one), log it, and cut at the target.
- * Never switches accounts. No-op unless live + logged in + a trade is open on
- * the currently-selected account.
- */
+/** Per active tick, reconcile every open trade against its verified Tradovate
+ * account. A shared login is inspected serially (Funded first), visibly
+ * switching accounts when needed; independent logins may overlap. */
 async function monitorTick(): Promise<void> {
   if (store.mode !== "live") return;
   const targets = currentLanes().flatMap((lane) => {
