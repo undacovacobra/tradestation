@@ -546,6 +546,44 @@ $("#btn-browser").addEventListener("click", () => chooseLogin("Connect a Tradova
   }),
 ));
 
+function positionReaderResult(result) {
+  const position = result.position || { status: "unknown", reason: "No broker evidence returned." };
+  const state = position.status === "open"
+    ? `OPEN (${position.netPosition > 0 ? "+" : ""}${position.netPosition})`
+    : position.status === "flat" ? "FLAT (0)" : "COULD NOT VERIFY";
+  const className = position.status === "unknown" ? "failed" : "closed";
+  const evidence = position.status === "unknown"
+    ? position.reason || "Tradovate did not expose a reliable position number."
+    : `Verified ${result.label}${result.equity == null ? "" : ` · Equity ${money(result.equity)}`}`;
+  return `<li class="flatten-result ${className}">
+    <strong>${result.group === "funded" ? "Funded" : "Evaluation"}: ${esc(result.label)}</strong>
+    <span>${esc(state)} · ${esc(evidence)} · ${esc(String(result.elapsedMs))} ms</span>
+  </li>`;
+}
+
+$("#btn-test-position-reader").addEventListener("click", () => {
+  if (!status) return;
+  chooseLogin("Test the broker position reader", async (loginId) => {
+    showModal(`<h2>🔎 Testing the position reader</h2>
+      <p>ATLAS is visibly switching to the Funded account first, then the Evaluation account, and reading each account's actual Tradovate position number.</p>
+      <div class="warn-box"><strong>No order is placed.</strong> Buy, Sell, Exit, and the ATM preset are never touched by this test.</div>
+      <p id="position-reader-progress">Checking Tradovate…</p>`);
+    try {
+      const data = await api("/test-position-reader", { loginId });
+      const rows = (data.results || []).map(positionReaderResult).join("");
+      showModal(`<h2>🔎 Position reader results</h2>
+        <ul class="flatten-results">${rows || '<li class="flatten-result failed">No accounts were available to test.</li>'}</ul>
+        <p class="modal-note"><strong>No order was placed.</strong> The ATM preset and ATLAS Running/Paused state were unchanged.</p>
+        <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+    } catch (error) {
+      showModal(`<h2>🔎 Position reader test</h2>
+        <div class="warn-box">${esc(error.message)}</div>
+        <p class="modal-note"><strong>No order was placed.</strong></p>
+        <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+    }
+  });
+});
+
 $("#btn-scan-assign").addEventListener("click", () => chooseLogin("Scan and assign a Tradovate login", (loginId) =>
   doAction(async () => {
     const result = await api(`/logins/${loginId}/accounts`);

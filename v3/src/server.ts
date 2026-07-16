@@ -28,6 +28,7 @@ import { flattenPositions, type FlattenTarget } from "./flattenPositions.js";
 import { registerFlattenRoutes } from "./flattenRoutes.js";
 import { runLoginPositionCycles } from "./loginPositionCycle.js";
 import { CloseWebhookFallback } from "./closeWebhookFallback.js";
+import { registerPositionTestRoutes, type PositionTestTarget } from "./positionTestRoutes.js";
 
 const store = new SettingsStore(config.settingsPath);
 const sessions = new LoginManager(
@@ -957,6 +958,23 @@ registerFlattenRoutes(api, {
     const [result] = await runFlatten([flattenTarget(account)]);
     if (!result) throw new Error(`Account ${label} could not be inspected.`);
     return result;
+  },
+});
+
+registerPositionTestRoutes(api, {
+  isLoginReady: (loginId) => Boolean(sessions.get(loginId)?.status().loggedIn),
+  targets: (loginId) => currentLanes().flatMap((lane): PositionTestTarget[] => {
+    if (lane.credentialId !== loginId) return [];
+    const rotation = ensureLaneRotation(lane);
+    const open = rotation.getState().openTrade;
+    const next = rotation.peekNext(accountsForLane(lane));
+    const label = open?.tradovateLabel || next?.tradovateLabel;
+    return label ? [{ loginId, stage: lane.stage, label }] : [];
+  }),
+  inspect: async (target) => {
+    const worker = sessions.get(target.loginId);
+    if (!worker?.status().loggedIn) throw new Error("Tradovate disconnected during the position reader test.");
+    return worker.readLaneSnapshot(target.stage, target.label);
   },
 });
 
