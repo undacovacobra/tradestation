@@ -4,6 +4,7 @@ import type { EventKind } from "./events.js";
 import { GroupDispatcher } from "./groupDispatch.js";
 import type { CredentialLane, LaneKey } from "./lanes.js";
 import { AlertSchema, GROUPS, isCloseAlert, type Alert, type Group, type SavedLogin } from "./types.js";
+import type { SignalLedger } from "./signalLedger.js";
 
 const BroadcastAlertSchema = AlertSchema.extend({
   groups: z.array(z.enum(GROUPS)).min(1).default([...GROUPS]),
@@ -32,6 +33,7 @@ interface WebhookRouteDependencies {
   cancelPendingLane?(lane: CredentialLane): unknown;
   pushEvent(kind: EventKind, message: string, group?: Group): unknown;
   notifyActionNeeded(message: string): unknown;
+  signalLedger?: SignalLedger;
 }
 
 function legacyLanes(): CredentialLane[] {
@@ -64,7 +66,7 @@ function fundedFirst(lanes: readonly CredentialLane[]): CredentialLane[] {
 }
 
 export function registerWebhookRoutes(app: Application, deps: WebhookRouteDependencies): void {
-  const signalTtlMs = 5 * 60_000;
+  const signalTtlMs = 7 * 24 * 60 * 60_000;
   const completedOrRunning = new Map<string, { work: Promise<WebhookHandleResult>; expiresAt: number }>();
   const laneEpoch = new Map<LaneKey, number>();
   const activeEntry = new Map<LaneKey, Promise<WebhookHandleResult>>();
@@ -93,7 +95,7 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
     expectedEpoch: number,
   ): Promise<WebhookHandleResult> => {
     const signalKey = alert.tradeId
-      ? `${lane.key}:${alert.tradeId}:${alert.action}:${alert.marketPosition ?? ""}`
+      ? `${lane.key}:${alert.tradeId}:${isCloseAlert(alert) ? "close" : "entry"}`
       : undefined;
     if (signalKey) {
       const now = Date.now();
@@ -104,6 +106,9 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
       if (existing) {
         await existing.work;
         return { message: "Duplicate signal ignored for this lane.", duplicate: true };
+      }
+      if (deps.signalLedger?.has(signalKey)) {
+        return { message: "Duplicate completed signal ignored for this lane.", duplicate: true };
       }
     }
     const invoke = () => deps.handleLane
@@ -137,7 +142,9 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
       if (completedOrRunning.size > 5_000) completedOrRunning.delete(completedOrRunning.keys().next().value!);
     }
     try {
-      return await work;
+      const result = await work;
+      if (signalKey) deps.signalLedger?.mark(signalKey, signalTtlMs);
+      return result;
     } catch (error) {
       if (signalKey) completedOrRunning.delete(signalKey);
       throw error;

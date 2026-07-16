@@ -546,6 +546,62 @@ test("sequential fallback prepares a remembered nonphysical lane on its executio
   assert.deepEqual(adapter.calls, ["arm:E1", "equity", "atm:25", "qty:3:force", "order:buy:E1"]);
 });
 
+test("entry persistence hooks bracket the live broker click", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const acct = account("E1", "evals", "one");
+  await worker.prepare("evals", acct, callbacks);
+  adapter.calls.length = 0;
+
+  await worker.enterPrepared("evals", acct, { action: "buy", symbol: "MNQ", quantity: 2 }, {
+    skipFundedWindow: true,
+    beforeClick: async () => { adapter.calls.push("persist:intent"); },
+    afterClick: async () => { adapter.calls.push("persist:clicked"); },
+  });
+
+  assert.deepEqual(adapter.calls, ["qty:2:force", "persist:intent", "order:buy:E1", "persist:clicked"]);
+});
+
+test("a failed durable entry-intent write prevents the broker click", async () => {
+  const adapter = new FakeAdapter();
+  const worker = new LoginWorker(login("one"), adapter);
+  const acct = account("E1", "evals", "one");
+  await worker.prepare("evals", acct, callbacks);
+  adapter.calls.length = 0;
+
+  await assert.rejects(
+    worker.enterPrepared("evals", acct, { action: "buy", symbol: "MNQ", quantity: 1 }, {
+      skipFundedWindow: true,
+      beforeClick: async () => { throw new Error("disk unavailable"); },
+    }),
+    /disk unavailable/i,
+  );
+  assert.equal(adapter.calls.some((call) => call.startsWith("order:")), false);
+});
+
+test("settled equity switches to and verifies the exact owning account", async () => {
+  const adapter = new FakeAdapter();
+  adapter.selectedAccount = "OTHER";
+  adapter.activeVerificationResults = [false, true];
+  const worker = new LoginWorker(login("one"), adapter);
+
+  assert.equal(await worker.readSettledLaneEquity("evals", "E1"), 50_100);
+  assert.deepEqual(adapter.calls, ["arm:E1", "settled"]);
+});
+
+test("settled equity is never read when the owning account cannot be verified", async () => {
+  const adapter = new FakeAdapter();
+  adapter.selectedAccount = "OTHER";
+  adapter.activeVerificationResults = [false, false];
+  const worker = new LoginWorker(login("one"), adapter);
+
+  await assert.rejects(
+    worker.readSettledLaneEquity("evals", "E1"),
+    /Could not verify E1 before reading its settled balance/i,
+  );
+  assert.equal(adapter.calls.includes("settled"), false);
+});
+
 test("close work overtakes pending funded and eval maintenance on one credential", async () => {
   const adapter = new FakeAdapter();
   adapter.selectedAccount = "F1";

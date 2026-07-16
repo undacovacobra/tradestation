@@ -41,9 +41,9 @@ export const config = {
   // Futures "trading day" boundary — the 6pm ET session reset, not midnight.
   tradingDayTz: process.env.TRADING_DAY_TZ ?? "America/New_York",
   tradingDayResetHour: Number(process.env.TRADING_DAY_RESET_HOUR ?? 18),
-  // While a trade is open, how often (seconds) to re-read that ONE account's
-  // balance to catch the profit target. Only touches the already-selected
-  // account — never switches. Min 1s. Idle = no browser work at all.
+  // While trades are open, how often (seconds) to verify each exact account's
+  // position and balance. One shared login switches serially, Funded first;
+  // different logins may overlap. Min 1s. Idle = no position polling.
   monitorActiveSeconds: Math.max(1, Number(process.env.MONITOR_ACTIVE_SECONDS ?? 3)),
   // Remote access (ngrok) — dashboard "Remote access" button.
   ngrokAuthtoken: process.env.NGROK_AUTHTOKEN ?? "",

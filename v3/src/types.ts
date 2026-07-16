@@ -52,7 +52,9 @@ export const AlertSchema = z.object({
   action: z.enum(["buy", "sell", "close"]),
   symbol: z.string().min(1),
   quantity: z.number().int().positive().optional(),
-  orderType: z.enum(["market", "limit"]).default("market"),
+  // Browser execution currently clicks Buy/Sell market controls. Reject limit
+  // instructions rather than silently placing a materially different order.
+  orderType: z.literal("market").default("market"),
   price: z.number().positive().optional(),
   stopLoss: z.number().positive().optional(),
   takeProfit: z.number().positive().optional(),

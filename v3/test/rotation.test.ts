@@ -339,3 +339,86 @@ test("two credential rotations of the same stage never share state", () => {
     cleanup();
   }
 });
+
+test("a durable entry intent is persisted before submission and then marked clicked", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = makeRot(path);
+    const open = rot.recordOpen(acct("A"), order, 50_000, "intent");
+    assert.equal(open.submissionState, "intent");
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).openTrade.submissionState, "intent");
+
+    assert.equal(rot.markEntryClicked(open.openedAt), true);
+    assert.equal(rot.getState().openTrade?.submissionState, "clicked");
+    assert.equal(rot.markEntryClicked("different-trade"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("corrupt rotation state fails closed instead of silently becoming flat", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    writeFileSync(path, '{"openTrade":');
+    assert.throws(() => makeRot(path, true), /could not be read safely|corrupt/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test("rotation saves atomically without leaving a temporary file", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rotation = makeRot(path, true);
+    const list = [acct("A"), acct("B")];
+    rotation.setNext("A", list);
+    assert.equal(existsSync(`${path}.tmp`), false);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).nextLabel, "A");
+  } finally {
+    cleanup();
+  }
+});
+
+test("recordClose reports the next selectable account rather than a resting winner", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rotation = makeRot(path, true);
+    const list = [acct("A"), acct("B"), acct("C")];
+    rotation.recordOpen(list[0]!, order, 50_000);
+    rotation.recordClose(list, { exitBalance: 50_001 });
+    rotation.recordOpen(list[1]!, order, 50_000);
+    rotation.recordClose(list, { exitBalance: 50_001 });
+    rotation.recordOpen(list[2]!, order, 50_000);
+    const result = rotation.recordClose(list, { exitBalance: 49_999 });
+
+    assert.equal(result.next?.tradovateLabel, "C");
+    assert.equal(rotation.peekNext(list)?.tradovateLabel, "C");
+  } finally {
+    cleanup();
+  }
+});
+
+test("an evaluation can be marked won manually for the current futures day", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rotation = makeRot(path, true, "evals", "2026-07-16");
+    assert.equal(rotation.markRest("A"), true);
+    assert.equal(rotation.isBenchedToday("A"), true);
+    assert.equal(rotation.markRest("A"), false, "repeat mark is idempotent");
+    assert.equal(rotation.clearRest("A"), true);
+    assert.equal(rotation.isBenchedToday("A"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("manual rest is ignored for a rotation whose winner bench is disabled", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rotation = makeRot(path, false, "funded", "2026-07-16");
+    assert.equal(rotation.markRest("F"), false);
+    assert.equal(rotation.isBenchedToday("F"), false);
+  } finally {
+    cleanup();
+  }
+});

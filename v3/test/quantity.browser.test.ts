@@ -140,3 +140,24 @@ test("setQuantity rejects a bad size before touching the page", async (t) => {
     await browser.close();
   }
 });
+
+test("setQuantity clears stale hidden bot markers before writing the visible ticket", async (t) => {
+  const browser = await launch();
+  if (!browser) return t.skip("no Chromium available");
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+    await page.setContent(`
+      <input id="old" data-bot-qty="1" value="8" style="display:none" />
+      <input id="visible" aria-label="Order Qty" value="9" />
+      <button>Buy Mkt</button><button>Sell Mkt</button>
+    `);
+    const b = fake(page);
+
+    await b.setQuantity(3, true);
+
+    assert.equal(await page.locator("#visible").inputValue(), "3");
+    assert.equal(await page.locator("#old").getAttribute("data-bot-qty"), null);
+  } finally {
+    await browser.close();
+  }
+});

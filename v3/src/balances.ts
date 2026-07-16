@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 
 export interface BalancePoint {
@@ -35,7 +35,9 @@ export class BalanceLog {
 
   private save(): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    writeFileSync(this.path, JSON.stringify(this.recs, null, 2));
+    const temp = `${this.path}.tmp`;
+    writeFileSync(temp, JSON.stringify(this.recs, null, 2));
+    renameSync(temp, this.path);
   }
 
   /** Last known balance for an account, or null (instant, in-memory). */

@@ -18,6 +18,9 @@ export interface OpenTrade {
   /** Execution session captured at entry so later reassignment cannot redirect close. */
   loginId?: string;
   firm?: string;
+  /** `intent` is durable before the live click; `clicked` means the click
+   * returned. Both remain broker-reconciled exposure until confirmed flat. */
+  submissionState?: "intent" | "clicked";
 }
 
 export interface TradeRecord {
@@ -84,14 +87,19 @@ export class GroupRotation {
     if (!existsSync(this.statePath)) return emptyState();
     try {
       return { ...emptyState(), ...JSON.parse(readFileSync(this.statePath, "utf8")) };
-    } catch {
-      return emptyState();
+    } catch (error) {
+      throw new Error(
+        `Rotation state ${this.statePath} could not be read safely; refusing to assume the lane is flat. `
+        + `Restore the file from backup or inspect it before restarting ATLAS. (${error instanceof Error ? error.message : String(error)})`,
+      );
     }
   }
 
   private save(): void {
     mkdirSync(dirname(this.statePath), { recursive: true });
-    writeFileSync(this.statePath, JSON.stringify(this.state, null, 2));
+    const temp = `${this.statePath}.tmp`;
+    writeFileSync(temp, JSON.stringify(this.state, null, 2));
+    renameSync(temp, this.statePath);
   }
 
   getState(): Readonly<GroupState> {
@@ -112,6 +120,15 @@ export class GroupRotation {
   clearRest(label: string): boolean {
     if (!(label in this.state.lastWonDay)) return false;
     delete this.state.lastWonDay[label];
+    this.save();
+    return true;
+  }
+
+  /** Mark an account as a winner for the current futures day. Used by the
+   * dashboard's manual override; disabled rotations (including Funded) ignore it. */
+  markRest(label: string): boolean {
+    if (!this.benchWinnersForDay || this.state.lastWonDay[label] === this.today()) return false;
+    this.state.lastWonDay[label] = this.today();
     this.save();
     return true;
   }
@@ -151,7 +168,12 @@ export class GroupRotation {
     return true;
   }
 
-  recordOpen(account: StoredAccount, order: OrderRequest, entryBalance?: number): OpenTrade {
+  recordOpen(
+    account: StoredAccount,
+    order: OrderRequest,
+    entryBalance?: number,
+    submissionState: "intent" | "clicked" = "clicked",
+  ): OpenTrade {
     const open: OpenTrade = {
       tradovateLabel: account.tradovateLabel,
       accountName: account.name,
@@ -163,11 +185,21 @@ export class GroupRotation {
       entryBalance,
       loginId: account.loginId,
       firm: account.firm,
+      submissionState,
     };
     this.state.openTrade = open;
     this.state.nextLabel = account.tradovateLabel;
     this.save();
     return open;
+  }
+
+  /** Mark the exact persisted entry intent as having returned from the broker
+   * click. A mismatched callback from an older request cannot mutate it. */
+  markEntryClicked(openedAt: string): boolean {
+    if (!this.state.openTrade || this.state.openTrade.openedAt !== openedAt) return false;
+    this.state.openTrade.submissionState = "clicked";
+    this.save();
+    return true;
   }
 
   /**
@@ -210,7 +242,10 @@ export class GroupRotation {
     let next: StoredAccount | null = null;
     if (accounts.length > 0) {
       const idx = accounts.findIndex((a) => a.tradovateLabel === closed.tradovateLabel);
-      next = accounts[(idx + 1) % accounts.length]!;
+      const candidate = accounts[(idx + 1) % accounts.length]!;
+      this.state.nextLabel = candidate.tradovateLabel;
+      const selected = this.selectAccountForEntry(accounts);
+      next = "account" in selected ? selected.account : null;
     }
     this.state.nextLabel = next?.tradovateLabel ?? null;
     this.save();

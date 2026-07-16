@@ -74,6 +74,33 @@ test("armed switchAccount does NOT open the menu; entry is just the click", asyn
     assert.equal(await page.evaluate(() => window.__menuOpened), true, "switching accounts opens the menu");
     assert.equal(await page.evaluate(() => document.querySelector(".acctid")?.textContent), "LFE05079261220007");
     assert.equal(b3.currentAccount, "LFE05079261220007");
+
+    // A hidden menu row must never prove the wrong account. This reproduces the
+    // live SPA layout after the Funded account was selected manually.
+    await page.setContent(`
+      <div style="display:none">LFE05079261220006</div>
+      <div class="acctid">LFF05079261220003</div>
+      <button>Buy Mkt</button><button>Sell Mkt</button>
+    `);
+    const b4 = fake(page);
+    assert.equal(await b4.verifyActiveAccount("LFE05079261220006"), false);
+    assert.equal(await b4.verifyActiveAccount("LFF05079261220003"), true);
+
+    // Additional prop firms can use a different Tradovate account prefix.
+    await page.setContent(`
+      <div class="acctid">PAAPEX91234567</div>
+      <button>Buy Mkt</button><button>Sell Mkt</button>
+    `);
+    const b5 = fake(page);
+    assert.equal(await b5.verifyActiveAccount("PAAPEX91234567"), true);
+
+    await page.setContent(`
+      <button class="acctid" onclick="document.querySelector('#accounts').style.display='block'">PAAPEX91234567</button>
+      <div id="accounts" style="display:none"><div>PAAPEX91234567</div><div>TRADEIFY76543210</div></div>
+      <button>Buy Mkt</button><button>Sell Mkt</button>
+    `);
+    const b6 = fake(page);
+    assert.deepEqual(await b6.listAccounts(), ["PAAPEX91234567", "TRADEIFY76543210"]);
   } finally {
     await browser.close();
   }

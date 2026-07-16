@@ -94,6 +94,7 @@ async function post(
   store: MemoryAccountStore,
   rearmed: Group[],
   hasOpenTradeForAccount: (label: string) => boolean = () => false,
+  hasActiveWorkForLogin: (loginId: string) => boolean = () => false,
 ): Promise<{ ok: boolean; status: number; error?: string }> {
   const registerAccountMutationRoutes = await loadRegisterAccountMutationRoutes();
   const app = express();
@@ -106,6 +107,7 @@ async function post(
     },
     pushEvent() {},
     hasOpenTradeForAccount,
+    hasActiveWorkForLogin,
   });
   app.use(api);
 
@@ -195,6 +197,20 @@ test("an account with an open trade cannot be moved or removed through account m
   assert.equal(store.find("LFE1")?.group, "evals");
   assert.equal(store.find("LFE1")?.loginId, "primary-tradovate");
   assert.deepEqual(rearmed, []);
+});
+
+test("account controls cannot mutate a login while broker work is in flight", async () => {
+  const store = new MemoryAccountStore([account("LFE1", "evals")]);
+  const result = await post(
+    "/accounts/remove",
+    { label: "LFE1" },
+    store,
+    [],
+    () => false,
+    (loginId) => loginId === "primary-tradovate",
+  );
+  assert.equal(result.status, 409);
+  assert.ok(store.find("LFE1"));
 });
 
 test("toggle re-arms the mutated account's group", async () => {

@@ -129,6 +129,15 @@ function render() {
     banner.hidden = true;
   }
 
+  const incidentBanner = $("#incident-banner");
+  const unresolved = Object.values(status.incidents || {});
+  if (unresolved.length) {
+    incidentBanner.hidden = false;
+    incidentBanner.textContent = `⚠️ ${unresolved[0].message}${unresolved.length > 1 ? ` (+${unresolved.length - 1} more issue${unresolved.length === 2 ? "" : "s"})` : ""}`;
+  } else {
+    incidentBanner.hidden = true;
+  }
+
   renderLogins();
   renderPassed();
   renderTradeLog();
@@ -217,6 +226,7 @@ function renderLogins() {
           lane.openTrade.accountName === account.name
         );
         const brokerAccountOpen = account.brokerPosition?.status === "open";
+        const restingToday = account.group === "evals" && account.restingToday === true;
         const stageLabel = account.group === "funded" ? "FUNDED" : "EVAL";
         return `<li class="credential-account-row ${account.enabled ? "" : "disabled"}" data-stage="${esc(account.group)}" data-label="${esc(account.tradovateLabel)}">
           <div class="credential-account-main">
@@ -225,6 +235,7 @@ function renderLogins() {
               <small class="credential-account-id">${esc(account.tradovateLabel)}</small>
             </span>
             <span class="stage-tag ${esc(account.group)}">${stageLabel}</span>
+            ${restingToday ? '<span class="won-today-tag">WON TODAY</span>' : ""}
             ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
           </div>
           <div class="credential-account-details">
@@ -232,10 +243,14 @@ function renderLogins() {
             ${bracketLine(account)}
             ${sparkline(account.history)}
             ${isOpen ? `<span class="open-account-trade">Open: ${esc(lane.openTrade.symbol || "position")}</span>` : ""}
+            ${restingToday ? '<span class="resting-account-note">Resting until 6:00 PM ET</span>' : ""}
             ${account.brokerPosition ? `<span class="account-broker-position">Position: <strong>${account.brokerPosition.status === "open" ? esc(String(account.brokerPosition.netPosition)) : esc(account.brokerPosition.status.toUpperCase())}</strong></span>` : ""}
           </div>
           <div class="credential-account-actions">
-            ${!isNext && account.enabled ? '<button class="btn small credential-account-action" data-act="next">Next</button>' : ""}
+            ${!isNext && account.enabled && !restingToday ? '<button class="btn small credential-account-action" data-act="next">Next</button>' : ""}
+            ${account.group === "evals" && !isOpen ? restingToday
+              ? '<button class="btn small credential-account-action" data-act="unrest">Put back in rotation</button>'
+              : '<button class="btn small credential-account-action" data-act="rest">Mark won / rest today</button>' : ""}
             <button class="btn small credential-account-action" data-act="bracket">ATM</button>
             <button class="btn small credential-position-check">Position</button>
             ${brokerAccountOpen ? '<button class="btn small danger credential-flatten-position">Flatten position</button>' : ""}
@@ -243,7 +258,7 @@ function renderLogins() {
             <button class="btn small credential-account-action" data-act="down" title="Move down">&#9660;</button>
             <button class="btn small credential-account-action" data-act="toggle">${account.enabled ? "Disable" : "Enable"}</button>
             <button class="btn small credential-account-action remove" data-act="remove">Remove</button>
-            ${isOpen ? '<button class="btn small credential-reset">Mark closed / reset</button>' : ""}
+            ${isOpen ? '<span class="open-account-note">Clears automatically after broker-flat confirmation.</span>' : ""}
           </div>
         </li>`;
       }).join("") || '<li class="credential-account-empty">No accounts assigned. Use Scan &amp; assign accounts above.</li>';
@@ -262,6 +277,10 @@ function renderLogins() {
     }).join("");
 
     const accountCount = lanes.flatMap((lane) => lane.accounts || []).length;
+    const evalLane = lanes.find((lane) => lane.stage === "evals");
+    const fundedLane = lanes.find((lane) => lane.stage === "funded");
+    const evalWebhook = new URL(evalLane?.webhookPath || `/webhook/${credential.id}/evals`, webhookBase).href;
+    const fundedWebhook = new URL(fundedLane?.webhookPath || `/webhook/${credential.id}/funded`, webhookBase).href;
     return `<div class="credential-card" data-login-id="${esc(credential.id)}">
       <div class="credential-heading">
         <div class="login-details">
@@ -271,6 +290,11 @@ function renderLogins() {
         </div>
         ${accountCount === 0 ? '<button class="btn small login-remove">Remove unused login</button>' : ""}
       </div>
+      <details class="credential-webhooks">
+        <summary>Webhook URLs for this login</summary>
+        <div><span>Evaluations</span><code>${esc(evalWebhook)}</code><button class="btn small credential-copy" data-copy-text="${esc(evalWebhook)}">Copy</button></div>
+        <div><span>Funded</span><code>${esc(fundedWebhook)}</code><button class="btn small credential-copy" data-copy-text="${esc(fundedWebhook)}">Copy</button></div>
+      </details>
       <div class="credential-stage-grid">${stagePanels}</div>
     </div>`;
   }).join("") || '<p style="color:var(--muted)">No saved Tradovate credentials.</p>';
@@ -283,6 +307,9 @@ function renderLogins() {
     const credential = credentials.find((item) => item.id === loginId);
     const remove = $(".login-remove", credentialRow);
     if (remove) remove.addEventListener("click", () => doAction(() => apiDelete(`/logins/${loginId}`)));
+    for (const button of $$(".credential-copy", credentialRow)) {
+      button.addEventListener("click", () => copyButton(button, button.dataset.copyText));
+    }
 
     for (const accountRow of $$(".credential-account-row", credentialRow)) {
       const stage = accountRow.dataset.stage;
@@ -301,8 +328,6 @@ function renderLogins() {
       })));
       const flatten = $(".credential-flatten-position", accountRow);
       if (flatten) flatten.addEventListener("click", () => showFlattenOneModal(account));
-      const reset = $(".credential-reset", accountRow);
-      if (reset) reset.addEventListener("click", () => doAction(() => api("/reset-trade", { group: stage, credentialId: loginId })));
     }
   }
 }
@@ -430,8 +455,12 @@ async function accountAction(act, acct) {
       await api("/accounts/toggle", { label: acct.tradovateLabel });
     } else if (act === "next") {
       await api("/next", { group: acct.group, credentialId: acct.loginId, label: acct.tradovateLabel });
-    } else if (act === "unrest") {
-      await api("/accounts/unrest", { group: acct.group, label: acct.tradovateLabel });
+    } else if (act === "rest" || act === "unrest") {
+      await api(act === "rest" ? "/accounts/rest" : "/accounts/unrest", {
+        loginId: acct.loginId,
+        group: acct.group,
+        label: acct.tradovateLabel,
+      });
     } else {
       await api("/accounts/move", { label: acct.tradovateLabel, direction: act });
     }

@@ -3,13 +3,11 @@
  * target. It is deliberately tiny and LAZY:
  *
  *  - When NO trade is open it does nothing at all (no browser, no switching).
- *  - When a trade IS open it wakes every `activeMs`, reads ONLY the already-
- *    selected account's balance (the trade account is the selected one), and
- *    lets the injected `tick` decide whether to cut.
+ *  - When a trade IS open it wakes every `activeMs` and lets the injected
+ *    broker-reconciliation tick inspect every recorded account.
  *
- * It never opens the account dropdown and never switches accounts, so it can't
- * interfere with an entry click. All the real work lives in `tick`; this class
- * is just a self-rescheduling timer that gates on `isActive`.
+ * All browser work lives in `tick` and is serialized by credential queues;
+ * this class is only a self-rescheduling timer that gates on `isActive`.
  */
 export class Monitor {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -17,7 +15,11 @@ export class Monitor {
 
   constructor(
     private readonly tick: () => Promise<void>,
-    private readonly opts: { activeMs: number; isActive: () => boolean },
+    private readonly opts: {
+      activeMs: number;
+      isActive: () => boolean;
+      onError?: (error: unknown) => void;
+    },
   ) {}
 
   start(): void {
@@ -36,7 +38,7 @@ export class Monitor {
     if (!this.running) return;
     this.timer = setTimeout(async () => {
       if (this.opts.isActive()) {
-        await this.tick().catch(() => {});
+        await this.tick().catch((error) => this.opts.onError?.(error));
       }
       this.schedule();
     }, this.opts.activeMs);

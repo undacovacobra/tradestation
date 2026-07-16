@@ -23,13 +23,16 @@ import {
  * user's demo accounts. We use text locators (not CSS classes) because
  * Tradovate's React class names are auto-generated and unstable.
  *
- * Design choice: the bot does NOT set the symbol or quantity. You pick your
- * contract and size on the Tradovate screen; the bot only switches account and
- * clicks Buy / Sell / Exit. Fewer moving parts = far faster and more reliable.
+ * Design choice: the bot does NOT change the symbol. It does force and verify
+ * webhook quantity immediately before every entry, then clicks Buy / Sell /
+ * Exit only after the account and ATM are also verified.
  */
 const TXT = {
   loggedInMarker: "Buy Mkt", // only renders once logged in + trader loaded
-  accountIdPattern: /LF[EF]\d{6,}/, // e.g. LFF05079261220001 / LFE05079261220005
+  // Prop firms use different prefixes, but Tradovate account ids consistently
+  // end in a multi-digit identifier. Requiring 4+ trailing digits excludes
+  // symbols (MNQH6), currencies, and normal interface words.
+  accountIdPattern: /\b[A-Z][A-Z0-9_-]{1,}\d{4,}\b/,
   buy: "Buy Mkt",
   sell: "Sell Mkt",
   exit: "Exit at Mkt", // "Exit at Mkt & Cxl" — flatten position + cancel orders
@@ -347,7 +350,8 @@ export class TradovateBrowser {
 
   /**
    * Read every account id visible in the Tradovate account menu (for the
-   * dashboard's “Scan” feature). Opens the menu, collects LFE…/LFF… labels,
+   * dashboard's “Scan” feature). Opens the menu, collects account labels from
+   * any Tradovate prop-firm prefix,
    * then closes the menu. Places no orders.
    */
   async listAccounts(): Promise<string[]> {
@@ -357,7 +361,9 @@ export class TradovateBrowser {
       await this.p.waitForTimeout(600);
       const texts = await this.p.getByText(TXT.accountIdPattern).allTextContents();
       const labels = new Set<string>();
-      for (const t of texts) for (const m of t.match(/LF[EF]\d{6,}/g) ?? []) labels.add(m);
+      for (const t of texts) {
+        for (const m of t.match(/\b[A-Z][A-Z0-9_-]{1,}\d{4,}\b/g) ?? []) labels.add(m);
+      }
       await this.p.keyboard.press("Escape").catch(() => {});
       await this.p.waitForTimeout(200);
       return [...labels].sort();
@@ -379,21 +385,30 @@ export class TradovateBrowser {
   async switchAccount(label: string): Promise<void> {
     if (this.currentAccount === label) return;
     await this.requireLoggedIn();
-    const current = await this.p
-      .getByText(TXT.accountIdPattern)
-      .first()
-      .textContent({ timeout: 2_000 })
-      .catch(() => null);
-    if (current?.includes(label)) {
+    const current = await this.readVisibleActiveAccount();
+    if (current === label) {
       this.currentAccount = label;
       this.lastQty = null; // new account — ticket size unknown, re-set on next order
       return;
     }
     log.info(`Switching active account to ${label}`);
     try {
-      await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
-      await this.p.getByText(label, { exact: false }).last().click({ timeout: 10_000 });
-      await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
+      const opener = await this.firstVisible(this.p.getByText(TXT.accountIdPattern));
+      if (!opener) throw new Error("The selected-account control is not visible.");
+      await opener.click({ timeout: 10_000 });
+      const option = await this.firstVisible(this.p.getByText(label, { exact: true }));
+      if (!option) throw new Error(`Account ${label} is not visible in the account menu.`);
+      await option.click({ timeout: 10_000 });
+      const deadline = Date.now() + Math.max(1_500, Math.max(0, this.config.switchSettleMs));
+      let verified = false;
+      while (Date.now() < deadline) {
+        if (await this.readVisibleActiveAccount() === label) {
+          verified = true;
+          break;
+        }
+        await this.p.waitForTimeout(25);
+      }
+      if (!verified) throw new Error(`Tradovate did not show ${label} as the selected account after the menu click.`);
       this.currentAccount = label;
       this.lastQty = null; // new account — ticket size unknown, re-set on next order
     } catch (err) {
@@ -431,16 +446,47 @@ export class TradovateBrowser {
   /** Cheap safety read used only while closing/monitoring an open trade. */
   async verifyActiveAccount(label: string): Promise<boolean> {
     await this.requireLoggedIn();
-    const current = await this.p
-      .getByText(TXT.accountIdPattern)
-      .first()
-      .textContent({ timeout: 2_000 })
-      .catch(() => null);
-    const normalized = (current ?? "").replace(/\s+/g, " ").trim();
-    const tokens = normalized.split(/[^A-Za-z0-9_-]+/).filter(Boolean);
-    const matches = normalized === label || tokens.includes(label);
+    const matches = await this.readVisibleActiveAccount() === label;
     if (!matches) this.currentAccount = null;
     return matches;
+  }
+
+  private async firstVisible(locator: Locator): Promise<Locator | null> {
+    const count = await locator.count();
+    for (let index = 0; index < count; index++) {
+      const candidate = locator.nth(index);
+      if (await candidate.isVisible().catch(() => false)) return candidate;
+    }
+    return null;
+  }
+
+  /** Read only visible account-id leaf text. Hidden menu rows and broad parent
+   * containers are deliberately ignored; more than one visible id is ambiguous. */
+  private async readVisibleActiveAccount(): Promise<string | null> {
+    if (!this.page) return null;
+    const labels = await this.page.evaluate(() => {
+      const found: string[] = [];
+      const all = document.querySelectorAll("*");
+      for (let index = 0; index < all.length; index++) {
+        const el = all[index] as HTMLElement;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+        let direct = "";
+        for (let childIndex = 0; childIndex < el.childNodes.length; childIndex++) {
+          const child = el.childNodes[childIndex]!;
+          if (child.nodeType === 3) direct += ` ${child.textContent || ""}`;
+        }
+        direct = direct.replace(/\s+/g, " ").trim();
+        if (!direct || direct.length > 80) continue;
+        const matches = direct.match(/\b[A-Z][A-Z0-9_-]{1,}\d{4,}\b/g) ?? [];
+        for (let matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+          if (!found.includes(matches[matchIndex]!)) found.push(matches[matchIndex]!);
+        }
+      }
+      return found;
+    }).catch(() => [] as string[]);
+    return labels.length === 1 ? labels[0]! : null;
   }
 
   /**
@@ -799,11 +845,16 @@ export class TradovateBrowser {
         let formCtrl: HTMLInputElement | null = null;
         while (stack.length) {
           const root = stack.pop()!;
+          const old = root.querySelectorAll("[data-bot-qty]");
+          for (let oldIndex = 0; oldIndex < old.length; oldIndex++) old[oldIndex]!.removeAttribute("data-bot-qty");
           const all = root.querySelectorAll("*");
           for (let i = 0; i < all.length; i++) {
             const el = all[i] as HTMLElement;
             if (el.shadowRoot) stack.push(el.shadowRoot);
             if (el instanceof HTMLInputElement) {
+              const rect = el.getBoundingClientRect();
+              const style = getComputedStyle(el);
+              if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
               const role = (el.getAttribute("role") || "").toLowerCase();
               const isNum = el.type === "number" || role === "spinbutton";
               const cls = (el.getAttribute("class") || "").toLowerCase();
@@ -833,7 +884,7 @@ export class TradovateBrowser {
         }
         const box = labelled || numeric || formCtrl;
         if (!box) return false;
-        box.setAttribute("data-bot-qty", "1");
+        box.setAttribute("data-bot-qty", "active");
         return true;
       })
       .catch(() => false);
@@ -844,7 +895,7 @@ export class TradovateBrowser {
       // select ALL of it, then type the new number OVER the selection. Typing
       // over a full selection overwrites it, so it can never append or add.
       // Commit with Tab (never Enter — Enter could place an order).
-      const box = this.p.locator("[data-bot-qty]").first();
+      const box = this.p.locator('[data-bot-qty="active"]');
       try {
         await box.click({ timeout: 3_000 });
         await box.press("ControlOrMeta+a");
@@ -1194,8 +1245,13 @@ export class TradovateBrowser {
     const wait = Math.max(0, this.config.orderConfirmWaitMs);
     if (wait === 0) return;
     const confirm = this.p.getByRole("button", { name: TXT.confirm }).first();
-    if (await confirm.isVisible({ timeout: wait }).catch(() => false)) {
-      await confirm.click().catch(() => {});
+    const appeared = await confirm.waitFor({ state: "visible", timeout: wait }).then(() => true, () => false);
+    if (!appeared) return;
+    try {
+      await confirm.click({ timeout: wait });
+    } catch (error) {
+      await this.snapshot("order-confirm-failed", true);
+      throw new Error(`Tradovate showed an order confirmation but ATLAS could not click it. The order was not treated as submitted. (${error instanceof Error ? error.message : String(error)})`);
     }
   }
 

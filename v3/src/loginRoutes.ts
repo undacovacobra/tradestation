@@ -30,6 +30,7 @@ interface LoginRouteDependencies {
   manager: RouteManager;
   hasOpenTradeForLogin(loginId: string): boolean;
   hasOpenTradeForAccount(label: string): boolean;
+  hasActiveWorkForLogin?(loginId: string): boolean;
   armLogin(loginId: string): Promise<void>;
   reconcileLogin?(loginId: string): Promise<void>;
   armNext(group: Group, options?: { force?: boolean }): void;
@@ -91,6 +92,7 @@ export function registerLoginRoutes(api: Router, deps: LoginRouteDependencies): 
     const id = req.params.id;
     try {
       if (deps.hasOpenTradeForLogin(id)) throw new Error("This login has an open trade.");
+      if (deps.hasActiveWorkForLogin?.(id)) throw new Error("This login is handling broker work. Try removing it after that work finishes.");
       if (deps.store.accounts.some((account) => account.loginId === id)) {
         throw new Error("This login still has accounts. Reassign or remove them first.");
       }
@@ -111,6 +113,9 @@ export function registerLoginRoutes(api: Router, deps: LoginRouteDependencies): 
     if (!deps.store.login(loginId)) return res.status(400).json({ ok: false, error: "Unknown login" });
     if (deps.hasOpenTradeForAccount(label)) return res.status(400).json({ ok: false, error: "This account has an open trade." });
     const previousLoginId = account.loginId;
+    if (deps.hasActiveWorkForLogin?.(previousLoginId) || deps.hasActiveWorkForLogin?.(loginId)) {
+      return res.status(409).json({ ok: false, error: "One of these Tradovate logins is handling broker work. Try the assignment again after it finishes." });
+    }
     try {
       const ok = deps.store.assignAccountLogin(label, loginId);
       deps.manager.get(previousLoginId)?.invalidateReady();

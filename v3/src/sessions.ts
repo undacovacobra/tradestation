@@ -268,7 +268,14 @@ export class CredentialWorker {
     group: Group,
     account: StoredAccount,
     order: OrderRequest,
-    options: { skipFundedWindow?: boolean; prepareIfNeeded?: ArmingCallbacks } = {},
+    options: {
+      skipFundedWindow?: boolean;
+      prepareIfNeeded?: ArmingCallbacks;
+      /** Persist the exact account/order intent immediately before any live click. */
+      beforeClick?: () => Promise<void> | void;
+      /** Persist that the broker click returned before the queue can switch accounts. */
+      afterClick?: () => Promise<void> | void;
+    } = {},
   ): Promise<EntryTiming> {
     const generation = this.entryGeneration.get(group) ?? 0;
     await this.ensureCapabilities();
@@ -358,6 +365,10 @@ export class CredentialWorker {
             throw new Error(`Final broker verification failed for ${account.name} after automatic repair. No order was placed.`);
           }
         }
+        // Fail closed if the durable intent cannot be written. Once this hook
+        // succeeds, a crash or ambiguous click can be reconciled from disk
+        // instead of allowing a duplicate entry after restart.
+        await options.beforeClick?.();
         if (this.executionMode === "dual-ticket") {
           await this.adapter.clickLaneOrder!(group, order.action, account.tradovateLabel);
         } else {
@@ -366,6 +377,7 @@ export class CredentialWorker {
         // Acquire the open-trade lease before releasing this session queue. A
         // prepare already waiting behind entry must never switch the account.
         this.openTrades.set(group, account.tradovateLabel);
+        await options.afterClick?.();
       } finally {
         this.ready.delete(group);
         this.desired.delete(group);
@@ -530,6 +542,23 @@ export class CredentialWorker {
     });
   }
   readSettledEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSettledEquity()); }
+  /** Read the post-exit balance only after proving the exact owning account.
+   * This runs at close priority and holds the credential queue through the
+   * broker's settlement delay, so another lane cannot switch underneath it. */
+  readSettledLaneEquity(group: Group, label: string): Promise<number | null> {
+    return this.enqueue("close", async () => {
+      if (this.executionMode === "dual-ticket") {
+        if (!await this.adapter.verifyLaneAccount!(group, label)) {
+          throw new Error(`Could not verify ${label} before reading its settled balance.`);
+        }
+        return this.adapter.readLaneEquity!(group);
+      }
+      if (!await this.verifyOrSelectSequentialAccount(label)) {
+        throw new Error(`Could not verify ${label} before reading its settled balance.`);
+      }
+      return this.adapter.readSettledEquity();
+    });
+  }
   dismissPopups(): Promise<boolean> { return this.enqueue("diagnostic", () => this.adapter.dismissPopups()); }
   refreshLoginState(timeout?: number): Promise<boolean> { return this.enqueue("diagnostic", () => this.adapter.refreshLoginState(timeout)); }
   verifyActiveAccount(label: string): Promise<boolean> {

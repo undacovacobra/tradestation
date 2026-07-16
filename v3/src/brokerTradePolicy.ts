@@ -14,6 +14,20 @@ export function tradeFingerprint(trade: Pick<OpenTrade, "tradovateLabel" | "symb
   return `${trade.tradovateLabel}|${trade.symbol}|${trade.openedAt}`;
 }
 
+/** Protect a newer/different open trade from a delayed close webhook. */
+export function closeIdentityError(
+  open: Pick<OpenTrade, "symbol" | "tradeId">,
+  close: { symbol: string; tradeId?: string },
+): string | null {
+  if (open.symbol.trim().toUpperCase() !== close.symbol.trim().toUpperCase()) {
+    return `Close symbol ${close.symbol} does not match the recorded open symbol ${open.symbol}.`;
+  }
+  if (open.tradeId && close.tradeId && open.tradeId !== close.tradeId) {
+    return `Close trade id ${close.tradeId} does not match the recorded open trade id ${open.tradeId}.`;
+  }
+  return null;
+}
+
 export function brokerStatusLabel(position: BrokerPosition, flatReads = 0): string {
   if (position.status === "unknown") return "UNKNOWN";
   if (position.status === "flat") return flatReads >= 2 ? "FLAT" : `FLAT CHECK ${Math.max(1, flatReads)}/2`;
