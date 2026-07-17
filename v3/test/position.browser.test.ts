@@ -58,6 +58,19 @@ test("readSelectedPosition matches the live title-case Position DOM label", asyn
   }
 });
 
+test("readSelectedPosition reads the live combined POSITION 0 container", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=live-stacked`);
+    const result = await fake(page).readSelectedPosition();
+    assert.equal(result.status, "flat");
+  } finally {
+    await chrome.close();
+  }
+});
+
 test("readSelectedPosition preserves long and short quantities", async (t) => {
   const chrome = await launch();
   if (!chrome) return t.skip("no Chromium available");

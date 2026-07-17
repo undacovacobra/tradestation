@@ -27,7 +27,7 @@ export interface TradingSessionAdapter {
   readSelectedPosition(): Promise<BrokerPosition>;
   diagnosePosition?(): Promise<{ position: BrokerPosition; nearby: Array<Record<string, string>> }>;
   selectAtmPreset(name: string): Promise<void>;
-  setQuantity(quantity: number): Promise<void>;
+  setQuantity(quantity: number, force?: boolean): Promise<void>;
   clickOrder(action: "buy" | "sell", label: string): Promise<void>;
   clickExit(label: string): Promise<void>;
   readSettledEquity(): Promise<number | null>;
@@ -46,6 +46,8 @@ export interface TradingSessionAdapter {
   verifyLaneAccount?(group: Group, label: string): Promise<boolean>;
   /** Fresh broker-DOM verification performed immediately before an entry. */
   verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<boolean>;
+  /** Rebuild the live ticket after a person or the broker changes prepared state. */
+  repairPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<void>;
   /** Fresh broker-DOM account verification performed immediately before Exit. */
   verifyExitState(group: Group, label: string): Promise<boolean>;
 }
@@ -260,7 +262,7 @@ export class CredentialWorker {
     group: Group,
     account: StoredAccount,
     order: OrderRequest,
-    options: { skipFundedWindow?: boolean } = {},
+    options: { skipFundedWindow?: boolean; prepareIfNeeded?: ArmingCallbacks } = {},
   ): Promise<EntryTiming> {
     const generation = this.entryGeneration.get(group) ?? 0;
     await this.ensureCapabilities();
@@ -272,12 +274,6 @@ export class CredentialWorker {
     if (!initialStatus.connected || !initialStatus.loggedIn) {
       throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
     }
-    const plan = this.desired.get(group);
-    if (!plan
-      || plan.signature.accountLabel !== account.tradovateLabel
-      || plan.signature.atmPreset !== account.atmPreset) {
-      throw new Error(`${account.name} is not ready on ${this.definition.name}. Prepare its exact account and ATM before sending a live signal.`);
-    }
     const kind: CredentialTaskKind = group === "funded" ? "funded-entry" : "eval-entry";
     return this.enqueue(kind, async () => {
       if ((this.entryGeneration.get(group) ?? 0) !== generation) {
@@ -288,6 +284,34 @@ export class CredentialWorker {
       if (!queuedStatus.connected || !queuedStatus.loggedIn) {
         throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
       }
+
+      let plan = this.desired.get(group);
+      if (!plan
+        || plan.signature.accountLabel !== account.tradovateLabel
+        || plan.signature.atmPreset !== account.atmPreset) {
+        const callbacks = options.prepareIfNeeded ?? {
+          onBalance: () => {},
+          onPresetError: () => {},
+        };
+        if (this.openTrades.size > 0 && this.executionMode === "sequential" && !this.adapter.verifyActiveAccount) {
+          throw new Error(`${this.definition.name} cannot safely switch away from an open position in sequential mode.`);
+        }
+        await this.preparePhysical(group, account, callbacks);
+        plan = {
+          account,
+          callbacks,
+          signature: {
+            group,
+            accountLabel: account.tradovateLabel,
+            atmPreset: account.atmPreset,
+            preparedAt: new Date().toISOString(),
+          },
+        };
+        this.desired.set(group, plan);
+        if ((this.entryGeneration.get(group) ?? 0) !== generation) {
+          throw new Error(`Pending ${group} entry cancelled because a close signal arrived first.`);
+        }
+      }
       if (!this.isReady(group, account)) {
         if (this.executionMode === "dual-ticket") throw new Error(`${account.name} is not physically ready on ${this.definition.name}.`);
         if (this.openTrades.size > 0 && !this.adapter.verifyActiveAccount) {
@@ -297,12 +321,23 @@ export class CredentialWorker {
       }
       const executionStarted = Date.now();
       try {
+        if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset)) {
+          await this.adapter.repairPreparedOrderState(group, account.tradovateLabel, account.atmPreset);
+        }
         if (order.quantity != null) {
           if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, order.quantity);
-          else await this.adapter.setQuantity(order.quantity);
+          else await this.adapter.setQuantity(order.quantity, true);
         }
         if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset, order.quantity)) {
-          throw new Error(`Final broker verification failed for ${account.name}: account, ATM, or quantity changed. No order was placed.`);
+          await this.adapter.repairPreparedOrderState(
+            group,
+            account.tradovateLabel,
+            account.atmPreset,
+            order.quantity,
+          );
+          if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset, order.quantity)) {
+            throw new Error(`Final broker verification failed for ${account.name} after automatic repair. No order was placed.`);
+          }
         }
         if (this.executionMode === "dual-ticket") {
           await this.adapter.clickLaneOrder!(group, order.action, account.tradovateLabel);
@@ -350,7 +385,7 @@ export class CredentialWorker {
       if (!this.isReady(group, account)) throw new Error(`${account.name} is not ready on ${this.definition.name}.`);
       const executionStarted = Date.now();
       if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, quantity);
-      else await this.adapter.setQuantity(quantity);
+      else await this.adapter.setQuantity(quantity, true);
       return { queueWaitMs, executionMs: Date.now() - executionStarted, totalMs: Date.now() - requestedAt };
     });
   }
@@ -378,7 +413,7 @@ export class CredentialWorker {
   disconnect(): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.disconnect()); }
   discoverAccounts(): Promise<string[]> { return this.enqueue("diagnostic", () => this.adapter.discoverAccounts()); }
   testAtmPreset(name: string): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.selectAtmPreset(name)); }
-  testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity)); }
+  testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity, true)); }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.enqueue("diagnostic", () => this.adapter.inspectFields?.() ?? Promise.resolve([])); }
   async close(group: Group, label: string): Promise<void> {
     await this.enqueue("close", async () => {
@@ -493,7 +528,7 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   readSelectedPosition() { return this.browser.readSelectedPosition(); }
   diagnosePosition() { return this.browser.diagnosePosition(); }
   selectAtmPreset(name: string) { return this.browser.selectAtmPreset(name); }
-  setQuantity(quantity: number) { return this.browser.setQuantity(quantity); }
+  setQuantity(quantity: number, force = false) { return this.browser.setQuantity(quantity, force); }
   clickOrder(action: "buy" | "sell", label: string) { return this.browser.clickOrder(action, label); }
   clickExit(label: string) { return this.browser.clickExit(label); }
   readSettledEquity() { return this.browser.readSettledEquity(); }
@@ -522,6 +557,12 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number) {
     if (this.independentTicketsBlocked) return Promise.resolve(false);
     return this.browser.verifySequentialPreparedOrderState(label, atmPreset, quantity);
+  }
+  repairPreparedOrderState(_group: Group, label: string, atmPreset: string, quantity?: number) {
+    if (this.independentTicketsBlocked) {
+      return Promise.reject(new Error("Automatic ticket repair is blocked because two independent tickets are open."));
+    }
+    return this.browser.repairSequentialPreparedOrderState(label, atmPreset, quantity);
   }
   verifyExitState(_group: Group, label: string) {
     if (this.independentTicketsBlocked) return Promise.resolve(false);

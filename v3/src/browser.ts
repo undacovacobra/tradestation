@@ -352,7 +352,11 @@ export class TradovateBrowser {
   async listAccounts(): Promise<string[]> {
     await this.requireLoggedIn();
     try {
-      await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
+      await this.p.keyboard.press("Escape").catch(() => {});
+      const active = await this.readVisibleActiveAccount();
+      const opener = active ? await this.visibleAccountLocator(active) : null;
+      if (!opener) throw new Error("Could not find the visible selected-account control.");
+      await opener.click({ timeout: 10_000 });
       await this.p.waitForTimeout(600);
       const texts = await this.p.getByText(TXT.accountIdPattern).allTextContents();
       const labels = new Set<string>();
@@ -378,23 +382,39 @@ export class TradovateBrowser {
   async switchAccount(label: string): Promise<void> {
     if (this.currentAccount === label) return;
     await this.requireLoggedIn();
-    const current = await this.p
-      .getByText(TXT.accountIdPattern)
-      .first()
-      .textContent({ timeout: 2_000 })
-      .catch(() => null);
-    if (current?.includes(label)) {
+    const current = await this.readVisibleActiveAccount();
+    if (current === label) {
       this.currentAccount = label;
       this.lastQty = null; // new account — ticket size unknown, re-set on next order
       return;
     }
     log.info(`Switching active account to ${label}`);
     try {
-      await this.p.getByText(TXT.accountIdPattern).first().click({ timeout: 10_000 });
-      await this.p.getByText(label, { exact: false }).last().click({ timeout: 10_000 });
-      await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
-      this.currentAccount = label;
-      this.lastQty = null; // new account — ticket size unknown, re-set on next order
+      let lastObserved = current;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await this.p.keyboard.press("Escape").catch(() => {});
+        const visibleCurrent = await this.readVisibleActiveAccount();
+        const opener = visibleCurrent ? await this.visibleAccountLocator(visibleCurrent) : null;
+        if (!opener) throw new Error("Could not find the visible selected-account control.");
+        await opener.click({ timeout: 10_000 });
+        await this.p.waitForTimeout(100).catch(() => {});
+
+        const option = await this.visibleAccountLocator(label);
+        if (!option) {
+          await this.p.keyboard.press("Escape").catch(() => {});
+          throw new Error(`Account ${label} was not visible in the Tradovate account menu.`);
+        }
+        await option.click({ timeout: 10_000 });
+        await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
+        lastObserved = await this.readVisibleActiveAccount();
+        if (lastObserved === label) {
+          this.currentAccount = label;
+          this.lastQty = null; // new account — ticket size unknown, re-set on next order
+          return;
+        }
+        this.currentAccount = null;
+      }
+      throw new Error(`Tradovate still showed ${lastObserved ?? "no account"} after selecting ${label}.`);
     } catch (err) {
       this.currentAccount = null; // we no longer know where we are
       await this.snapshot(`switch-account-failed-${label}`, true);
@@ -413,19 +433,68 @@ export class TradovateBrowser {
     log.info(`Armed: ${label} selected and ready.`);
   }
 
+  /** Rebuild the sequential ticket from live Tradovate state after manual drift. */
+  async repairSequentialPreparedOrderState(label: string, atmPreset: string, quantity?: number): Promise<void> {
+    this.currentAccount = null;
+    this.lastPreset = null;
+    this.lastQty = null;
+    await this.armFor(label);
+    if (atmPreset.trim()) await this.selectAtmPreset(atmPreset, true);
+    if (quantity != null) await this.setQuantity(quantity, true);
+  }
+
   /** Cheap safety read used only while closing/monitoring an open trade. */
   async verifyActiveAccount(label: string): Promise<boolean> {
     await this.requireLoggedIn();
-    const current = await this.p
-      .getByText(TXT.accountIdPattern)
-      .first()
-      .textContent({ timeout: 2_000 })
-      .catch(() => null);
-    const normalized = (current ?? "").replace(/\s+/g, " ").trim();
-    const tokens = normalized.split(/[^A-Za-z0-9_-]+/).filter(Boolean);
-    const matches = normalized === label || tokens.includes(label);
+    const matches = await this.readVisibleActiveAccount() === label;
     if (!matches) this.currentAccount = null;
     return matches;
+  }
+
+  /** Tradovate leaves every account-menu label mounted while the menu is
+   * closed. Playwright's `.first()` can therefore read or click a hidden stale
+   * row instead of the selected-account header. Close the menu, then use only
+   * a genuinely visible account token as the broker source of truth. */
+  private async readVisibleActiveAccount(): Promise<string | null> {
+    if (!this.page) return null;
+    await this.page.keyboard.press("Escape").catch(() => {});
+    await this.page.waitForTimeout(50).catch(() => {});
+    const matches = this.page.getByText(TXT.accountIdPattern);
+    const count = await matches.count().catch(() => 0);
+    let best: { label: string; area: number; y: number } | null = null;
+    for (let i = 0; i < count; i++) {
+      const item = matches.nth(i);
+      if (!await item.isVisible().catch(() => false)) continue;
+      const text = await item.textContent().catch(() => null);
+      const candidate = text?.match(/LF[EF]\d{6,}/)?.[0] ?? null;
+      if (!candidate) continue;
+      const box = await item.boundingBox().catch(() => null);
+      const area = box ? box.width * box.height : Number.POSITIVE_INFINITY;
+      const y = box?.y ?? Number.POSITIVE_INFINITY;
+      if (!best || area < best.area || (area === best.area && y < best.y)) best = { label: candidate, area, y };
+    }
+    return best?.label ?? null;
+  }
+
+  /** Find the smallest visible element containing one exact account token.
+   * Clicking the inner text bubbles to Tradovate's stable header/menu control
+   * while hidden duplicate rows are ignored. */
+  private async visibleAccountLocator(label: string): Promise<Locator | null> {
+    if (!this.page) return null;
+    const matches = this.page.getByText(label, { exact: false });
+    const count = await matches.count().catch(() => 0);
+    let best: { locator: Locator; area: number } | null = null;
+    for (let i = 0; i < count; i++) {
+      const item = matches.nth(i);
+      if (!await item.isVisible().catch(() => false)) continue;
+      const text = (await item.textContent().catch(() => null) ?? "").replace(/\s+/g, " ").trim();
+      const tokens = text.split(/[^A-Za-z0-9_-]+/).filter(Boolean);
+      if (!tokens.includes(label)) continue;
+      const box = await item.boundingBox().catch(() => null);
+      const area = box ? box.width * box.height : Number.POSITIVE_INFINITY;
+      if (!best || area < best.area) best = { locator: item, area };
+    }
+    return best?.locator ?? null;
   }
 
   /**
@@ -571,6 +640,7 @@ export class TradovateBrowser {
     const evidence = await this.page.evaluate(() => {
       const roots: (Document | ShadowRoot)[] = [document];
       const labels: HTMLElement[] = [];
+      const positionContainers: Array<{ element: HTMLElement; value: string }> = [];
       const summaryCandidates: string[] = [];
       while (roots.length) {
         const root = roots.pop()!;
@@ -582,6 +652,28 @@ export class TradovateBrowser {
           if (el.offsetWidth <= 0 || el.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
           const text = (el.textContent || "").replace(/\s+/g, " ").trim();
           if (text.toUpperCase() === "POSITION") labels.push(el);
+
+          // The live Tradovate ticket currently renders POSITION, its integer,
+          // and the USD placeholder in one container (for example
+          // "POSITION0-.-- USD"). There may be no standalone POSITION element,
+          // so capture the integer directly from the smallest matching visible
+          // container. A decimal such as "0.00 USD" is deliberately rejected.
+          const direct = text.match(/^POSITION\s*:?\s*([+-]?(?:\d+|\d{1,3}(?:,\d{3})+))(?=\s|$|[-A-Za-z])/i);
+          if (direct) {
+            let hasMatchingDescendant = false;
+            const descendants = el.querySelectorAll("*");
+            for (let j = 0; j < descendants.length; j++) {
+              const child = descendants[j] as HTMLElement;
+              const childStyle = getComputedStyle(child);
+              if (child.offsetWidth <= 0 || child.offsetHeight <= 0 || childStyle.display === "none" || childStyle.visibility === "hidden") continue;
+              const childText = (child.textContent || "").replace(/\s+/g, " ").trim();
+              if (/^POSITION\s*:?\s*([+-]?(?:\d+|\d{1,3}(?:,\d{3})+))(?=\s|$|[-A-Za-z])/i.test(childText)) {
+                hasMatchingDescendant = true;
+                break;
+              }
+            }
+            if (!hasMatchingDescendant) positionContainers.push({ element: el, value: direct[1]! });
+          }
 
           if (/^Positions:\s*\+\s*\d+\s*\/\s*-\s*\d+$/i.test(text)) {
             let hasMatchingDescendant = false;
@@ -599,6 +691,36 @@ export class TradovateBrowser {
             if (!hasMatchingDescendant) summaryCandidates.push(text);
           }
         }
+      }
+
+      // Accept a direct POSITION value only when it belongs to the actual
+      // order ticket containing both market-entry buttons. This rejects the
+      // portfolio/history decoys elsewhere on the page.
+      const directTicketCandidates: string[] = [];
+      for (let i = 0; i < positionContainers.length; i++) {
+        const position = positionContainers[i]!;
+        let ticket: HTMLElement | null = position.element;
+        while (ticket && ticket.tagName !== "BODY" && ticket.tagName !== "HTML") {
+          let hasBuy = false;
+          let hasSell = false;
+          const descendants = ticket.querySelectorAll("*");
+          for (let j = 0; j < descendants.length; j++) {
+            const node = descendants[j] as HTMLElement;
+            const style = getComputedStyle(node);
+            if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+            const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+            if (text === "Buy Mkt") hasBuy = true;
+            if (text === "Sell Mkt") hasSell = true;
+          }
+          if (hasBuy && hasSell) break;
+          ticket = ticket.parentElement;
+        }
+        if (ticket && ticket.tagName !== "BODY" && ticket.tagName !== "HTML") {
+          directTicketCandidates.push(position.value);
+        }
+      }
+      if (directTicketCandidates.length > 0) {
+        return { ticketCandidates: directTicketCandidates, summaryCandidates };
       }
 
       const found: string[] = [];

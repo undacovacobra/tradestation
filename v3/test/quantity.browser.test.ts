@@ -80,6 +80,29 @@ test("setQuantity sets the shadow-DOM qty box and verifies it", async (t) => {
   }
 });
 
+test("forced webhook quantity replaces a manual visible change despite a matching cache", async (t) => {
+  const browser = await launch();
+  if (!browser) return t.skip("no Chromium available");
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+    await page.goto(fixture);
+    const b = fake(page);
+    b.lastQty = 3;
+    await page.evaluate(() => {
+      const input = document.querySelector("order-ticket")!.shadowRoot!
+        .querySelector('input[aria-label="Order Qty"]') as HTMLInputElement;
+      input.value = "9";
+    });
+
+    await b.setQuantity(3, true);
+
+    assert.equal(await qtyValue(page), "3");
+    assert.equal(b.lastQty, 3);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("setQuantity finds Tradovate's 'Select value' form-control box, not the search box", async (t) => {
   const browser = await launch();
   if (!browser) return t.skip("no Chromium available");

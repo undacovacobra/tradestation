@@ -33,6 +33,8 @@
     const nestedValue = state === "nested-long" ? "+2" : state === "nested-short" ? "-3" : "0";
     const positionCell = nested
       ? `<div class="info-column"><small class="text-muted">Position</small><div class="number">${nestedValue}<span class="smaller text-success">29178.50</span></div><div class="small">-.--<span class="currency">USD</span></div></div>`
+      : state === "live-stacked"
+        ? `<div class="position-row">${positionLabel}<span class="position-value">${value}</span><span>-.-- USD</span></div>`
       : `<div class="position-row"><span>${positionLabel}</span><span class="position-value">${value}</span><span>-.-- USD</span></div>`;
 
     function ticket({ hidden = false } = {}) {

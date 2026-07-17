@@ -23,6 +23,7 @@ import { CredentialLaneRegistry, laneKey, type CredentialLane, type LaneKey } fr
 import type { BrokerPosition } from "./brokerPosition.js";
 import { PositionReconciler, type PositionObservation } from "./positionReconciler.js";
 import { brokerStatusLabel, decideCloseAction, tradeFingerprint } from "./brokerTradePolicy.js";
+import { readWithFlatConfirmation } from "./brokerPositionConfirmation.js";
 import { connectedLoginNextStep, restorePersistedTradeLeases } from "./startupPositionRecovery.js";
 import { flattenPositions, type FlattenTarget } from "./flattenPositions.js";
 import { registerFlattenRoutes } from "./flattenRoutes.js";
@@ -265,7 +266,16 @@ async function executeEntry(
   const account = store.find(label);
   if (!account) throw new Error(`Account ${label} is no longer configured.`);
   const worker = workerForAccount(account);
-  const timing = await worker.enterPrepared(group, account, order, options);
+  const timing = await worker.enterPrepared(group, account, order, {
+    ...options,
+    prepareIfNeeded: {
+      onBalance: (accountLabel, equity) => balanceLog.set(accountLabel, equity),
+      onPresetError: (error) => {
+        pushEvent("warn", `Couldn't select ${account.name}'s ATM preset "${account.atmPreset}": ${error.message}`, group);
+        notifyActionNeeded(`Couldn't pick ${account.name}'s ATM preset "${account.atmPreset}" on Tradovate - no order was placed. (${error.message})`);
+      },
+    },
+  });
   pushEvent("trade", `LIVE — clicked ${order.action.toUpperCase()} ${sizeLabel}${order.symbol} on ${name} (${label}) via ${worker.definition.name}.`, group);
   return timing;
 }
@@ -319,6 +329,30 @@ function observeBrokerPosition(
     );
   }
   return observation;
+}
+
+/**
+ * Read the broker position and, when the first reading is an explicit zero,
+ * immediately take the required second reading. This keeps the two-zero
+ * safety rule while avoiding a dependency on a later monitor timer or webhook
+ * request to finish rotation after an ATM/liquidation exit.
+ */
+async function readAndConfirmBrokerPosition(
+  lane: CredentialLane,
+  open: OpenTrade,
+  worker: LoginWorker,
+): Promise<{ position: BrokerPosition; observation: PositionObservation }> {
+  const read = async (): Promise<BrokerPosition> => worker.readLanePosition(lane.stage, open.tradovateLabel)
+    .catch((error) => ({
+      status: "unknown" as const,
+      reason: error instanceof Error ? error.message : String(error),
+      checkedAt: new Date().toISOString(),
+    }));
+
+  return readWithFlatConfirmation(
+    read,
+    (position) => observeBrokerPosition(lane, open, position),
+  );
 }
 
 async function completeRecordedTrade(
@@ -399,6 +433,9 @@ async function handleEntry(
   lane = primaryLane(group),
   options: { skipFundedWindow?: boolean } = {},
 ): Promise<WebhookHandleResult> {
+  if (store.mode === "live" && !hasOpenTradeForLogin(lane.credentialId)) {
+    await prepareLane(lane);
+  }
   const rotation = ensureLaneRotation(lane);
   const laneAccounts = accountsForLane(lane);
   const choice = rotation.selectAccountForEntry(laneAccounts);
@@ -449,12 +486,7 @@ async function handleClose(group: Group, symbol: string, lane = primaryLane(grou
   const worker = sessions.get(loginId);
   if (!worker) throw new Error(`The open trade on ${open.accountName} references a missing login.`);
 
-  const position = await worker.readLanePosition(group, open.tradovateLabel).catch((error) => ({
-    status: "unknown" as const,
-    reason: error instanceof Error ? error.message : String(error),
-    checkedAt: new Date().toISOString(),
-  }));
-  const observation = observeBrokerPosition(lane, open, position);
+  const { position, observation } = await readAndConfirmBrokerPosition(lane, open, worker);
   if (observation.kind === "confirmed-flat") {
     return (await completeRecordedTrade(lane, fingerprint, { source: "broker was already flat when the close webhook arrived" }))
       ?? "The broker-flat trade was already reconciled.";
@@ -526,12 +558,7 @@ async function monitorTick(): Promise<void> {
     const worker = loginId ? sessions.get(loginId) : undefined;
     if (!worker?.status().loggedIn) return;
 
-    const position = await worker.readLanePosition(group, open.tradovateLabel).catch((error) => ({
-      status: "unknown" as const,
-      reason: error instanceof Error ? error.message : String(error),
-      checkedAt: new Date().toISOString(),
-    }));
-    const observation = observeBrokerPosition(lane, open, position);
+    const { position, observation } = await readAndConfirmBrokerPosition(lane, open, worker);
     if (observation.kind === "confirmed-flat") {
       const pending = pendingBrokerClose.get(lane.key);
       await completeRecordedTrade(lane, tradeFingerprint(open), {

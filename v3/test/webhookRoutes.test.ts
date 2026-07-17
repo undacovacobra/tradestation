@@ -172,9 +172,9 @@ test("a close waits for an in-flight final click and then closes it", async () =
   });
   try {
     const entryRequest = f.post("/webhook/apex/evals", alert);
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await f.waitForRequests(1);
     const closeRequest = f.post("/webhook/apex/evals", { ...alert, marketPosition: "flat" });
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await f.waitForRequests(2);
     assert.deepEqual(calls, ["entry-start"]);
     releaseEntry();
     const closeResponse = await closeRequest;
