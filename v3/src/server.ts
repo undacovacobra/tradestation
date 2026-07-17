@@ -208,8 +208,32 @@ function armStageAll(group: Group, options: { force?: boolean } = {}): void {
   for (const lane of currentLanes().filter((candidate) => candidate.stage === group)) armLane(lane, options);
 }
 
+/**
+ * Order a login's lanes so the EVAL lane comes LAST. Whatever is armed last is
+ * the account the browser physically rests on, so the bot sits armed and ready
+ * on the next eval account (user preference) rather than drifting onto funded.
+ * Funded is still armed (first), so its webhook stays ready — it just isn't the
+ * resting selection.
+ */
+function lanesRestingOnEvals(loginId: string): CredentialLane[] {
+  return currentLanes()
+    .filter((lane) => lane.credentialId === loginId)
+    .sort((a, b) => (a.stage === "evals" ? 1 : 0) - (b.stage === "evals" ? 1 : 0));
+}
+
+/**
+ * Re-arm a login so the browser rests selected on the next eval account. Funded
+ * is armed first (keeping its webhook ready); evals last. Because the scheduler
+ * runs eval-maintenance after funded-maintenance, the eval account is the one
+ * physically selected last.
+ */
+function armRestOnEvals(loginId: string, options: { force?: boolean } = {}): void {
+  for (const lane of lanesRestingOnEvals(loginId)) armLane(lane, options);
+}
+
 async function armLogin(loginId: string): Promise<void> {
-  for (const lane of currentLanes().filter((candidate) => candidate.credentialId === loginId)) {
+  // Arm evals LAST so the browser comes to rest on the next eval account.
+  for (const lane of lanesRestingOnEvals(loginId)) {
     const next = ensureLaneRotation(lane).peekNext(accountsForLane(lane));
     if (!next) continue;
     await prepareLane(lane).catch((error) => {
@@ -355,7 +379,9 @@ async function completeRecordedTrade(
     if (won) {
       notifyGoodNews(`Won a trade on ${closed.accountName}${pnl != null ? ` (+${money(pnl)})` : ""}. It's resting for the rest of today.`);
     }
-    armLane(lane);
+    // Come to rest armed on the next EVAL account (never drift onto funded),
+    // while keeping the funded lane webhook-ready.
+    armRestOnEvals(lane.credentialId);
     return `Broker confirmed flat on ${closed.accountName}.${wonMsg} ${nextMsg}`;
   })();
 
