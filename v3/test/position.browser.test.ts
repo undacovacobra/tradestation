@@ -168,6 +168,24 @@ test("readSelectedPosition reads the live nested <div.number> cell (value beside
   }
 });
 
+test("readSelectedPosition reads the live signed quantity span without mistaking average price or P/L for position", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=live-open-span`);
+
+    // Exact evidence captured from Tradovate after a live SELL 10x:
+    // Position -> div.number own text "@28814.00" -> signed child "-10",
+    // followed by an unrelated "420.00 USD" P/L value.
+    const result = await fake(page).readSelectedPosition();
+    assert.equal(result.status, "open");
+    if (result.status === "open") assert.equal(result.netPosition, -10);
+  } finally {
+    await chrome.close();
+  }
+});
+
 test("diagnosePosition reports the live markup near POSITION when the read is UNKNOWN", async (t) => {
   const chrome = await launch();
   if (!chrome) return t.skip("no Chromium available");

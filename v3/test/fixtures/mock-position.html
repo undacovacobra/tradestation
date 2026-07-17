@@ -31,7 +31,10 @@
     // reproduce that exact shape; the plain states keep the simpler flat spans.
     const nested = state.startsWith("nested");
     const nestedValue = state === "nested-long" ? "+2" : state === "nested-short" ? "-3" : "0";
-    const positionCell = nested
+    const liveOpenSpan = state === "live-open-span";
+    const positionCell = liveOpenSpan
+      ? `<div class="info-column"><small class="text-muted">Position</small><div class="number">@28814.00<span class="smaller text-danger">-10</span></div><div class="small text-success">420.00<span class="currency">USD</span></div></div>`
+      : nested
       ? `<div class="info-column"><small class="text-muted">Position</small><div class="number">${nestedValue}<span class="smaller text-success">29178.50</span></div><div class="small">-.--<span class="currency">USD</span></div></div>`
       : state === "live-stacked"
         ? `<div class="position-row">${positionLabel}<span class="position-value">${value}</span><span>-.-- USD</span></div>`

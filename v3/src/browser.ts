@@ -767,6 +767,23 @@ export class TradovateBrowser {
             own = own.replace(/\s+/g, " ").trim();
             if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(own)) numeric.push(own);
           }
+          // A live open Tradovate position reverses that nesting: the
+          // div.number's own text is the average price ("@28814.00") and the
+          // signed contract count is a child span ("-10"). If no direct child
+          // supplied a count, inspect only leaf descendants inside this tight
+          // Position cell. Decimal prices/P&L remain ineligible, and multiple
+          // whole-number leaves remain ambiguous instead of guessing.
+          if (numeric.length === 0) {
+            const descendants = scope.querySelectorAll("*");
+            for (let j = 0; j < descendants.length; j++) {
+              const node = descendants[j] as HTMLElement;
+              if (node.childElementCount > 0) continue;
+              const style = getComputedStyle(node);
+              if (node.offsetWidth <= 0 || node.offsetHeight <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+              const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+              if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) numeric.push(text);
+            }
+          }
           if (numeric.length === 1) {
             candidate = numeric[0]!;
             break;
