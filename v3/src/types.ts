@@ -1,13 +1,18 @@
 import { z } from "zod";
 
-/** The two independent rotation lanes. */
-export const GROUPS = ["evals", "funded"] as const;
+/** The independent rotation lanes. Each has its own webhook and rotation. */
+export const GROUPS = ["evals", "funded", "winning"] as const;
 export type Group = (typeof GROUPS)[number];
 /** Credential-scoped name for a rotation group. */
 export type Stage = Group;
 
 export function isGroup(v: string): v is Group {
   return (GROUPS as readonly string[]).includes(v);
+}
+
+/** Human-friendly name for a rotation lane, for the dashboard and events. */
+export function groupLabel(group: Group): string {
+  return group === "evals" ? "Evaluations" : group === "funded" ? "Funded" : "Winning Days";
 }
 
 /** One isolated persistent browser execution session. */

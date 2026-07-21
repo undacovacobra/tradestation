@@ -140,7 +140,7 @@ test("credential-specific stage and combined webhooks target only that credentia
     assert.deepEqual(calls, ["apex:evals"]);
     calls.length = 0;
     assert.equal((await f.post("/webhook/other", alert)).status, 200);
-    assert.deepEqual(calls, ["other:funded", "other:evals"]);
+    assert.deepEqual(calls, ["other:funded", "other:evals", "other:winning"]);
     assert.equal((await f.post("/webhook/missing/funded", alert)).status, 404);
   } finally { await f.close(); }
 });

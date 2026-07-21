@@ -78,9 +78,9 @@ class FakeAdapter implements TradingSessionAdapter {
 }
 
 class DualFakeAdapter extends FakeAdapter {
-  laneAccounts = { evals: "E0", funded: "F0" };
-  laneAtm = { evals: "25", funded: "funded" };
-  laneQty = { evals: 1, funded: 1 };
+  laneAccounts: Record<string, string> = { evals: "E0", funded: "F0" };
+  laneAtm: Record<string, string> = { evals: "25", funded: "funded" };
+  laneQty: Record<string, number> = { evals: 1, funded: 1 };
 
   async inspectCapabilities() { return { mode: "dual-ticket" as const, reason: "fixture proved independent" }; }
   async armForLane(group: Group, label: string) { this.calls.push(`lane-arm:${group}:${label}`); this.laneAccounts[group] = label; }

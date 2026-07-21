@@ -2,7 +2,9 @@ export type CredentialTaskKind =
   | "close"
   | "funded-entry"
   | "eval-entry"
+  | "winning-entry"
   | "funded-maintenance"
+  | "winning-maintenance"
   | "eval-maintenance"
   | "diagnostic";
 
@@ -21,13 +23,18 @@ interface ScheduledTask<T> {
   reject: (reason?: unknown) => void;
 }
 
+// eval-maintenance sorts AFTER the other maintenance kinds on purpose: whatever
+// is prepared last is the account the browser rests on, and the bot is meant to
+// come to rest armed on the next eval account.
 const PRIORITY: Record<CredentialTaskKind, number> = {
   close: 0,
   "funded-entry": 1,
   "eval-entry": 2,
-  "funded-maintenance": 3,
-  "eval-maintenance": 4,
-  diagnostic: 5,
+  "winning-entry": 3,
+  "funded-maintenance": 4,
+  "winning-maintenance": 5,
+  "eval-maintenance": 6,
+  diagnostic: 7,
 };
 
 export class CredentialPriorityScheduler {

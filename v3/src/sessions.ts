@@ -7,6 +7,14 @@ import type { Group, OrderRequest, SavedLogin, StoredAccount } from "./types.js"
 import { CredentialPriorityScheduler, type CredentialTaskKind, type SchedulerSnapshot } from "./priorityScheduler.js";
 import type { TicketCapabilities, TicketExecutionMode } from "./ticketCapabilities.js";
 
+/** Map a rotation lane to its scheduler task kind (entry vs. background prep). */
+function entryKind(group: Group): CredentialTaskKind {
+  return group === "funded" ? "funded-entry" : group === "winning" ? "winning-entry" : "eval-entry";
+}
+function maintenanceKind(group: Group): CredentialTaskKind {
+  return group === "funded" ? "funded-maintenance" : group === "winning" ? "winning-maintenance" : "eval-maintenance";
+}
+
 export interface AdapterStatus {
   connected: boolean;
   loggedIn: boolean;
@@ -190,9 +198,7 @@ export class CredentialWorker {
   }
 
   runMaintenance<T>(task: () => Promise<T>, group?: Group): Promise<T> {
-    const kind: CredentialTaskKind = group === "funded"
-      ? "funded-maintenance"
-      : group === "evals" ? "eval-maintenance" : "diagnostic";
+    const kind: CredentialTaskKind = group ? maintenanceKind(group) : "diagnostic";
     return this.enqueue(kind, task);
   }
 
@@ -237,7 +243,7 @@ export class CredentialWorker {
   ): Promise<void> {
     await this.ensureCapabilities();
     if (this.isReady(group, account)) return;
-    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    const kind: CredentialTaskKind = maintenanceKind(group);
     await this.enqueue(kind, async () => {
       if (this.openTrades.size > 0) {
         throw new Error(
@@ -274,7 +280,7 @@ export class CredentialWorker {
     if (!initialStatus.connected || !initialStatus.loggedIn) {
       throw new Error(`${this.definition.name} is not connected and logged in. The live signal was blocked.`);
     }
-    const kind: CredentialTaskKind = group === "funded" ? "funded-entry" : "eval-entry";
+    const kind: CredentialTaskKind = entryKind(group);
     return this.enqueue(kind, async () => {
       if ((this.entryGeneration.get(group) ?? 0) !== generation) {
         throw new Error(`Pending ${group} entry cancelled because a close signal arrived first.`);
@@ -371,7 +377,7 @@ export class CredentialWorker {
 
   cancelPendingEntry(group: Group): number {
     this.entryGeneration.set(group, (this.entryGeneration.get(group) ?? 0) + 1);
-    const kind: CredentialTaskKind = group === "funded" ? "funded-entry" : "eval-entry";
+    const kind: CredentialTaskKind = entryKind(group);
     return this.scheduler.cancel(kind, new Error(`Pending ${group} entry cancelled because a close signal arrived first.`));
   }
 
@@ -379,7 +385,7 @@ export class CredentialWorker {
     const requestedAt = Date.now();
     if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Quantity must be a positive whole number.");
     if (!this.isReady(group, account)) throw new Error(`${account.name} is not ready on ${this.definition.name}.`);
-    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    const kind: CredentialTaskKind = maintenanceKind(group);
     return this.enqueue(kind, async () => {
       const queueWaitMs = Date.now() - requestedAt;
       if (!this.isReady(group, account)) throw new Error(`${account.name} is not ready on ${this.definition.name}.`);
@@ -442,7 +448,7 @@ export class CredentialWorker {
   }
   readSelectedEquity(): Promise<number | null> { return this.enqueue("diagnostic", () => this.adapter.readSelectedEquity()); }
   readLaneEquity(group: Group, label: string): Promise<number | null> {
-    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    const kind: CredentialTaskKind = maintenanceKind(group);
     return this.enqueue(kind, async () => {
       if (this.executionMode === "dual-ticket") {
         if (!await this.adapter.verifyLaneAccount!(group, label)) {
@@ -457,7 +463,7 @@ export class CredentialWorker {
     });
   }
   readLanePosition(group: Group, label: string): Promise<BrokerPosition> {
-    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    const kind: CredentialTaskKind = maintenanceKind(group);
     return this.enqueue(kind, async () => {
       const checkedAt = new Date().toISOString();
       if (this.executionMode === "dual-ticket") {
@@ -475,7 +481,7 @@ export class CredentialWorker {
     });
   }
   diagnoseLanePosition(group: Group, label: string): Promise<{ position: BrokerPosition; nearby: Array<Record<string, string>> }> {
-    const kind: CredentialTaskKind = group === "funded" ? "funded-maintenance" : "eval-maintenance";
+    const kind: CredentialTaskKind = maintenanceKind(group);
     return this.enqueue(kind, async () => {
       const checkedAt = new Date().toISOString();
       const unknown = { position: { status: "unknown" as const, reason: `Could not verify ${label} before reading its broker position.`, checkedAt }, nearby: [] as Array<Record<string, string>> };

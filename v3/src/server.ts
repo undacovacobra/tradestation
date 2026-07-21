@@ -110,6 +110,7 @@ for (const lane of currentLanes()) ensureLaneRotation(lane);
 const rotations: Record<Group, GroupRotation> = {
   evals: ensureLaneRotation(primaryLane("evals")),
   funded: ensureLaneRotation(primaryLane("funded")),
+  winning: ensureLaneRotation(primaryLane("winning")),
 };
 
 // Restore the safety leases represented by persisted rotation state before any
@@ -825,7 +826,10 @@ api.get("/status", (_req, res) => {
       accountCount: store.accounts.filter((account) => account.loginId === worker.definition.id).length,
     })),
     broadcastWebhookPath: "/webhook",
-    globalWebhookPaths: { all: "/webhook", evals: "/webhook/evals", funded: "/webhook/funded" },
+    globalWebhookPaths: Object.assign(
+      { all: "/webhook" },
+      ...GROUPS.map((group) => ({ [group]: `/webhook/${group}` })),
+    ) as Record<"all" | Group, string>,
     publicWebhookBaseUrl: config.publicWebhookBaseUrl,
     tunnel: tunnelStatus(),
     groups,
@@ -1298,7 +1302,7 @@ app.use(express.static(config.publicDir));
 async function main() {
   app.listen(config.port, () => {
     log.info(`Dashboard + webhooks listening on http://localhost:${config.port}`);
-    log.info(`Webhooks: /webhook/evals and /webhook/funded | mode=${store.mode} | running=${store.running}`);
+    log.info(`Webhooks: ${GROUPS.map((g) => `/webhook/${g}`).join(", ")} | mode=${store.mode} | running=${store.running}`);
     // Note: no phone ping on a normal start. A clean restart that recovers on
     // its own isn't something you need to act on — so it stays quiet.
     pushEvent("info", `ATLAS server started. Mode: ${store.mode.toUpperCase()}. Open the dashboard to manage it.`);

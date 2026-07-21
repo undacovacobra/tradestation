@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
-import type { Group, SavedLogin, StoredAccount } from "./types.js";
+import { GROUPS, type Group, type SavedLogin, type StoredAccount } from "./types.js";
 import { CredentialLaneRegistry, type CredentialLane } from "./lanes.js";
 import { laneStatePath, migrateLegacyLaneState } from "./rotation.js";
 
@@ -25,13 +25,13 @@ function primaryLogin(): SavedLogin {
 }
 
 export function defaultAtmPreset(group: Group): string {
-  return group === "evals" ? "25" : "funded";
+  return group === "evals" ? "25" : group === "funded" ? "funded" : "winning";
 }
 
 const AccountSchema = z.object({
   tradovateLabel: z.string().min(1),
   name: z.string().min(1),
-  group: z.enum(["evals", "funded"]),
+  group: z.enum(GROUPS),
   enabled: z.boolean().default(true),
   /** "active" = trades; "passed" = hit the eval target, retired from rotation. */
   status: z.enum(["active", "passed"]).default("active"),
@@ -107,7 +107,7 @@ export class SettingsStore {
       while (ids.has(next)) next = `${previous}-credential-${suffix++}`;
       login.id = next;
       for (const account of settings.accounts) if (account.loginId === previous) account.loginId = next;
-      for (const stage of ["evals", "funded"] as const) {
+      for (const stage of GROUPS) {
         migrateLegacyLaneState(
           laneStatePath(dirname(this.path), `${previous}:${stage}`),
           laneStatePath(dirname(this.path), `${next}:${stage}`),

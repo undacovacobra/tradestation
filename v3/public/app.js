@@ -4,6 +4,15 @@
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
+/** The rotation lanes, in display order, and their names in each UI form. */
+const STAGES = ["evals", "funded", "winning"];
+const STAGE = {
+  evals: { label: "Evaluations", short: "EVAL", tag: "Eval" },
+  funded: { label: "Funded", short: "FUNDED", tag: "Funded" },
+  winning: { label: "Winning Days", short: "WINNING", tag: "Winning" },
+};
+const stageInfo = (g) => STAGE[g] || { label: g, short: (g || "").toUpperCase(), tag: g };
+
 const loginOptions = (selectedId = "") => ((status && status.logins) || [])
   .map((login) => `<option value="${esc(login.id)}" ${login.id === selectedId ? "selected" : ""}>${esc(login.name)} - ${esc(login.firm)}</option>`)
   .join("");
@@ -179,7 +188,7 @@ function renderTradeLog() {
     else if (t.pnl != null) result = `<span style="color:${t.pnl < 0 ? "var(--red)" : "var(--muted)"}">${t.pnl < 0 ? "−" : "+"}${money(Math.abs(t.pnl))}</span>`;
     html += `<tr>
       <td>${esc(time)}</td>
-      <td>${esc(t.accountName)} <span class="grouptag">${t.group === "evals" ? "Eval" : "Funded"}</span></td>
+      <td>${esc(t.accountName)} <span class="grouptag">${esc(stageInfo(t.group).tag)}</span></td>
       <td>${esc(side)}</td>
       <td>${esc(String(qty))}</td>
       <td>${result}</td>
@@ -198,7 +207,7 @@ function renderLogins() {
     const connection = credential.status || {};
     const connectionState = connection.loggedIn ? "Logged in" : connection.connected ? "Needs login" : "Not connected";
     const lanes = credential.lanes || [];
-    const orderedStages = ["evals", "funded"];
+    const orderedStages = STAGES;
     const stagePanels = orderedStages.map((stage) => {
       const lane = lanes.find((candidate) => candidate.stage === stage) || {
         stage,
@@ -217,7 +226,7 @@ function renderLogins() {
           lane.openTrade.accountName === account.name
         );
         const brokerAccountOpen = account.brokerPosition?.status === "open";
-        const stageLabel = account.group === "funded" ? "FUNDED" : "EVAL";
+        const stageLabel = stageInfo(account.group).short;
         return `<li class="credential-account-row ${account.enabled ? "" : "disabled"}" data-stage="${esc(account.group)}" data-label="${esc(account.tradovateLabel)}">
           <div class="credential-account-main">
             <span class="credential-account-identity">
@@ -250,7 +259,7 @@ function renderLogins() {
 
       return `<section class="credential-stage-panel" data-stage="${esc(lane.stage)}">
         <header class="credential-stage-heading">
-          <strong>${lane.stage === "funded" ? "Funded" : "Evaluations"}</strong>
+          <strong>${stageInfo(lane.stage).label}</strong>
           <span>Next: ${esc(lane.next || "None")}</span>
           <span>Queue: ${queue.totalPending || 0}${queue.running ? " + running" : ""}</span>
           <span class="broker-position" data-broker-state="${esc(brokerPosition.state || "UNKNOWN")}">Broker: <strong>${esc(brokerPosition.state || "UNKNOWN")}</strong></span>
@@ -275,8 +284,10 @@ function renderLogins() {
     </div>`;
   }).join("") || '<p style="color:var(--muted)">No saved Tradovate credentials.</p>';
 
-  $("#global-evals-webhook-url").textContent = new URL((status.globalWebhookPaths || {}).evals || "/webhook/evals", webhookBase).href;
-  $("#global-funded-webhook-url").textContent = new URL((status.globalWebhookPaths || {}).funded || "/webhook/funded", webhookBase).href;
+  for (const stage of STAGES) {
+    const el = $(`#global-${stage}-webhook-url`);
+    if (el) el.textContent = new URL((status.globalWebhookPaths || {})[stage] || `/webhook/${stage}`, webhookBase).href;
+  }
 
   for (const credentialRow of $$(".credential-card", list)) {
     const loginId = credentialRow.dataset.loginId;
@@ -342,7 +353,9 @@ function balanceLine(acct) {
   if (acct.balance == null) {
     return `<span class="balance-row muted">Balance: not read yet (updates when it's armed or trading).</span>`;
   }
-  if (acct.group === "funded") {
+  if (acct.group !== "evals") {
+    // Only the evaluation lane tracks a profit target; funded and winning show
+    // the plain balance.
     return `<span class="balance-row">&#128176; <strong>${money(acct.balance)}</strong></span>`;
   }
   if (acct.balance >= target) {
@@ -748,6 +761,7 @@ function showScanModal(labels, loginId) {
         ${already ? '<span style="font-size:12px;color:var(--muted)">(already added)</span>' : ""}
         <label><input type="radio" name="scan-${i}" value="evals" ${suggested === "evals" && !already ? "checked" : ""}/> Evals</label>
         <label><input type="radio" name="scan-${i}" value="funded" ${suggested === "funded" && !already ? "checked" : ""}/> Funded</label>
+        <label><input type="radio" name="scan-${i}" value="winning" ${suggested === "winning" && !already ? "checked" : ""}/> Winning Days</label>
         <label><input type="radio" name="scan-${i}" value="skip" ${suggested === "skip" || already ? "checked" : ""}/> Skip</label>
       </li>`;
     })

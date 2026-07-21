@@ -25,7 +25,8 @@ test("dashboard renders one credential surface with evaluation left and funded r
   assert.match(app, /credential-card/);
   assert.match(app, /credential-stage-grid/);
   assert.match(app, /credential-stage-panel/);
-  assert.match(app, /const orderedStages = \["evals", "funded"\]/);
+  assert.match(app, /const STAGES = \["evals", "funded", "winning"\]/);
+  assert.match(app, /const orderedStages = STAGES/);
   assert.match(app, /data-stage="\$\{esc\(lane\.stage\)\}"/);
   assert.match(app, /credential-account-list/);
   assert.match(app, /credential-account-row/);
@@ -37,7 +38,7 @@ test("dashboard renders one credential surface with evaluation left and funded r
   assert.doesNotMatch(`${app}\n${css}`, /lane-card|lane-grid|lane-accounts/);
   assert.doesNotMatch(app, /combinedAccounts/);
   assert.doesNotMatch(app, /data-lane-login|lane-login-assign/);
-  assert.match(css, /\.credential-stage-grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
+  assert.match(css, /\.credential-stage-grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.credential-card/);
 });
 
@@ -45,9 +46,9 @@ test("combined rows preserve balance, evaluation target, ATM, and history inform
   assert.match(app, /balanceLine\(account\)/);
   assert.match(app, /bracketLine\(account\)/);
   assert.match(app, /sparkline\(account\.history\)/);
-  assert.match(app, /account\.group === "funded" \? "FUNDED" : "EVAL"/);
+  assert.match(app, /stageInfo\(account\.group\)\.short/);
   assert.match(app, /\$53,000|53000|status\.evalTarget/);
-  assert.match(app, /acct\.group === "funded"/);
+  assert.match(app, /acct\.group !== "evals"/);
 });
 
 test("stage account identity stays compact and details and actions wrap independently", () => {

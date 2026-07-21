@@ -140,6 +140,7 @@ test("legacy settings gain credential-lane migration state without changing ATM 
     assert.deepEqual(store.credentialLanes().map((lane) => lane.key), [
       `${PRIMARY_LOGIN_ID}:evals`,
       `${PRIMARY_LOGIN_ID}:funded`,
+      `${PRIMARY_LOGIN_ID}:winning`,
     ]);
     assert.equal(JSON.parse(readFileSync(path, "utf8")).credentialLaneVersion, 1);
   } finally {
@@ -198,8 +199,10 @@ test("credential lanes are derived for each enabled saved login", () => {
     assert.deepEqual(store.credentialLanes().map((lane) => lane.key), [
       `${PRIMARY_LOGIN_ID}:evals`,
       `${PRIMARY_LOGIN_ID}:funded`,
+      `${PRIMARY_LOGIN_ID}:winning`,
       `${extra.id}:evals`,
       `${extra.id}:funded`,
+      `${extra.id}:winning`,
     ]);
   } finally {
     cleanup();

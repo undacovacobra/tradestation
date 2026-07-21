@@ -13,7 +13,7 @@ test("recognizable V3 layout remains while one login owns two stage columns", ()
   assert.match(app, /credential-stage-panel/);
   assert.match(app, /credential-account-list/);
   assert.match(app, /data-stage="\$\{esc\(account\.group\)\}"/);
-  assert.match(app, /account\.group === "funded"/);
+  assert.match(app, /stageInfo\(account\.group\)/);
   assert.doesNotMatch(app, /lane-card|lane-grid|lane-add-account|showAddAccountModal/);
   assert.doesNotMatch(`${html}\n${app}`, /No-order simultaneous test|No-order test|simultaneous-form/);
   assert.doesNotMatch(`${html}\n${app}`, /dollar bracket|pool editor/i);
@@ -28,7 +28,7 @@ test("additional logins and scan-and-assign remain first-class controls", () => 
   assert.match(app, /globalWebhookPaths/);
   assert.match(app, /publicWebhookBaseUrl/);
   assert.doesNotMatch(app, /broadcastWebhookPath/);
-  assert.match(app, /acct\.group === "funded"/);
+  assert.match(app, /acct\.group !== "evals"/);
   assert.match(app, /status\.tunnel\.url/);
   assert.doesNotMatch(app, /data-lane-login|\/accounts\/login|class="btn small login-connect"|class="btn small login-scan"/);
 });

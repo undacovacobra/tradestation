@@ -1,4 +1,4 @@
-import type { Group, SavedLogin, StoredAccount } from "./types.js";
+import { GROUPS, isGroup, type Group, type SavedLogin, type StoredAccount } from "./types.js";
 
 export type Stage = Group;
 export type LaneKey = `${string}:${Stage}`;
@@ -28,7 +28,7 @@ export function parseLaneKey(value: string): ParsedLaneKey | undefined {
   if (separator <= 0) return undefined;
   const credentialId = value.slice(0, separator);
   const stage = value.slice(separator + 1);
-  if (stage !== "evals" && stage !== "funded") return undefined;
+  if (!isGroup(stage)) return undefined;
   return { credentialId, stage };
 }
 
@@ -46,7 +46,7 @@ export class CredentialLaneRegistry {
   ) {
     for (const credential of credentials) {
       if (!credential.enabled) continue;
-      for (const stage of ["evals", "funded"] as const) {
+      for (const stage of GROUPS) {
         const key = laneKey(credential.id, stage);
         this.lanes.set(key, {
           key,

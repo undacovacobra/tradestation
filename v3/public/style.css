@@ -132,7 +132,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .credential-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .credential-stage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
 }
 .credential-stage-panel {
@@ -198,6 +198,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
 .stage-tag { flex: none; padding: 2px 6px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: .03em; }
 .stage-tag.evals { color: #3156a3; background: #e8eefc; }
 .stage-tag.funded { color: #8a5500; background: var(--amber-soft); }
+.stage-tag.winning { color: #1f7a4d; background: #e3f6ec; }
 .open-account-trade { color: var(--amber); font-size: 12px; font-weight: 700; }
 .login-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 9px; padding: 10px; }
 .login-details { display: grid; gap: 2px; flex: 1; min-width: 0; }

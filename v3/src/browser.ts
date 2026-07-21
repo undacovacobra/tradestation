@@ -18,6 +18,13 @@ import {
   type TicketCapabilities,
 } from "./ticketCapabilities.js";
 
+/** Dual-ticket isolation covers only the eval + funded pair; a third rotation
+ *  lane (e.g. winning) always runs in sequential mode and never reaches here. */
+function dualStage(group: Group): "evals" | "funded" {
+  if (group === "winning") throw new Error("Dual-ticket operations support only the evaluation and funded lanes.");
+  return group;
+}
+
 /**
  * Visible text labels from the live Tradovate web trader, confirmed on the
  * user's demo accounts. We use text locators (not CSS classes) because
@@ -190,8 +197,8 @@ export class TradovateBrowser {
 
   async armForLane(group: Group, label: string): Promise<void> {
     const controller = await this.dualTicketController();
-    const current = await controller.read(group);
-    await controller.prepare(group, { ...current, account: label });
+    const current = await controller.read(dualStage(group));
+    await controller.prepare(dualStage(group), { ...current, account: label });
   }
 
   async readLaneEquity(_group: Group): Promise<number | null> {
@@ -202,26 +209,26 @@ export class TradovateBrowser {
 
   async selectLaneAtmPreset(group: Group, name: string): Promise<void> {
     const controller = await this.dualTicketController();
-    const current = await controller.read(group);
-    await controller.prepare(group, { ...current, atmPreset: name });
+    const current = await controller.read(dualStage(group));
+    await controller.prepare(dualStage(group), { ...current, atmPreset: name });
   }
 
   async setLaneQuantity(group: Group, quantity: number): Promise<void> {
     const controller = await this.dualTicketController();
-    const current = await controller.read(group);
-    await controller.prepare(group, { ...current, quantity });
+    const current = await controller.read(dualStage(group));
+    await controller.prepare(dualStage(group), { ...current, quantity });
   }
 
   async clickLaneOrder(group: Group, action: "buy" | "sell", _label: string): Promise<void> {
-    await (await this.dualTicketController()).clickOrder(group, action);
+    await (await this.dualTicketController()).clickOrder(dualStage(group), action);
   }
 
   async clickLaneExit(group: Group, _label: string): Promise<void> {
-    await (await this.dualTicketController()).clickExit(group);
+    await (await this.dualTicketController()).clickExit(dualStage(group));
   }
 
   async verifyLaneAccount(group: Group, label: string): Promise<boolean> {
-    return (await (await this.dualTicketController()).read(group)).account === label;
+    return (await (await this.dualTicketController()).read(dualStage(group))).account === label;
   }
 
   /** Read the visible ticket size from the DOM, never from the cached value. */
@@ -269,7 +276,7 @@ export class TradovateBrowser {
   async verifyPreparedOrderState(group: Group, label: string, atmPreset: string, quantity?: number): Promise<boolean> {
     const capability = await this.inspectCapabilities();
     if (capability.mode === "dual-ticket" && capability.controller) {
-      const state = await capability.controller.read(group);
+      const state = await capability.controller.read(dualStage(group));
       return state.account === label
         && (!atmPreset.trim() || state.atmPreset === atmPreset.trim())
         && (quantity == null || state.quantity === Math.floor(quantity));
@@ -281,7 +288,7 @@ export class TradovateBrowser {
   async verifyExitState(group: Group, label: string): Promise<boolean> {
     const capability = await this.inspectCapabilities();
     if (capability.mode === "dual-ticket" && capability.controller) {
-      return (await capability.controller.read(group)).account === label;
+      return (await capability.controller.read(dualStage(group))).account === label;
     }
     return this.verifySequentialExitState(label);
   }

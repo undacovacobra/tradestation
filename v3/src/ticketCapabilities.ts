@@ -1,5 +1,7 @@
 import type { Locator, Page } from "playwright";
-import type { Stage } from "./lanes.js";
+/** Dual-ticket isolation is inherently a two-ticket (eval + funded) proof; it is
+ *  deliberately decoupled from the global set of rotation groups. */
+type DualStage = "evals" | "funded";
 
 export type TicketExecutionMode = "dual-ticket" | "sequential";
 
@@ -50,9 +52,9 @@ async function alternateOption(locator: Locator, current: string): Promise<strin
 }
 
 export class DualTicketController {
-  constructor(private readonly bindings: Record<Stage, TicketBinding>) {}
+  constructor(private readonly bindings: Record<DualStage, TicketBinding>) {}
 
-  async read(stage: Stage): Promise<TicketSnapshot> {
+  async read(stage: DualStage): Promise<TicketSnapshot> {
     const binding = this.bindings[stage];
     const quantity = Number(await fieldValue(binding.quantity));
     if (!Number.isInteger(quantity) || quantity < 1) throw new Error(`${stage} ticket quantity could not be verified.`);
@@ -63,7 +65,7 @@ export class DualTicketController {
     };
   }
 
-  async prepare(stage: Stage, preparation: TicketPreparation): Promise<TicketSnapshot> {
+  async prepare(stage: DualStage, preparation: TicketPreparation): Promise<TicketSnapshot> {
     const binding = this.bindings[stage];
     await chooseExact(binding.account, preparation.account);
     await chooseExact(binding.atm, preparation.atmPreset);
@@ -83,11 +85,11 @@ export class DualTicketController {
     return snapshot;
   }
 
-  async clickOrder(stage: Stage, action: "buy" | "sell"): Promise<void> {
+  async clickOrder(stage: DualStage, action: "buy" | "sell"): Promise<void> {
     await this.bindings[stage][action].click();
   }
 
-  async clickExit(stage: Stage): Promise<void> {
+  async clickExit(stage: DualStage): Promise<void> {
     await this.bindings[stage].exit.click();
   }
 }
@@ -131,7 +133,7 @@ export async function inspectTicketCapabilities(page: Page): Promise<TicketCapab
   const evals = found[0]!;
   const funded = found[1]!;
   const controller = new DualTicketController({ evals, funded });
-  const stableRead = async (stage: Stage): Promise<TicketSnapshot> => {
+  const stableRead = async (stage: DualStage): Promise<TicketSnapshot> => {
     await page.waitForTimeout(75);
     const first = await controller.read(stage);
     await page.waitForTimeout(75);

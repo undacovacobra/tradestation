@@ -43,7 +43,7 @@ test("lane keys round-trip without losing credential or stage", () => {
   assert.equal(parseLaneKey("apex:unknown"), undefined);
 });
 
-test("registry derives two lanes for every enabled credential", () => {
+test("registry derives one lane per group for every enabled credential", () => {
   const registry = new CredentialLaneRegistry(
     [credential("apex"), credential("other"), credential("disabled", false)],
     [],
@@ -52,10 +52,19 @@ test("registry derives two lanes for every enabled credential", () => {
   assert.deepEqual(registry.keys(), [
     "apex:evals",
     "apex:funded",
+    "apex:winning",
     "other:evals",
     "other:funded",
+    "other:winning",
   ]);
   assert.equal(registry.get("disabled:evals"), undefined);
+});
+
+test("the winning lane has its own credential and global webhooks", () => {
+  const registry = new CredentialLaneRegistry([credential("apex")], []);
+  const winning = registry.get("apex:winning");
+  assert.equal(winning?.webhookPath, "/webhook/apex/winning");
+  assert.equal(winning?.globalWebhookPath, "/webhook/winning");
 });
 
 test("each lane contains only accounts owned by its credential and stage", () => {

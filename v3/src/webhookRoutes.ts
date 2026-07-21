@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { EventKind } from "./events.js";
 import { GroupDispatcher } from "./groupDispatch.js";
 import type { CredentialLane, LaneKey } from "./lanes.js";
-import { AlertSchema, GROUPS, isCloseAlert, type Alert, type Group, type SavedLogin } from "./types.js";
+import { AlertSchema, GROUPS, isCloseAlert, isGroup, type Alert, type Group, type SavedLogin } from "./types.js";
 
 const BroadcastAlertSchema = AlertSchema.extend({
   groups: z.array(z.enum(GROUPS)).min(1).default([...GROUPS]),
@@ -212,8 +212,8 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
 
   app.post("/webhook/:credentialId/:stage", async (req, res) => {
     const stage = req.params.stage;
-    if (stage !== "evals" && stage !== "funded") {
-      return res.status(404).json({ ok: false, error: "Unknown stage. Use evals or funded." });
+    if (!isGroup(stage)) {
+      return res.status(404).json({ ok: false, error: `Unknown stage. Use ${GROUPS.join(", ")}.` });
     }
     const selected = lanes().filter((lane) => lane.credentialId === req.params.credentialId && lane.stage === stage);
     if (selected.length === 0) return res.status(404).json({ ok: false, error: "Unknown credential webhook." });

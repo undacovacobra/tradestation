@@ -43,7 +43,7 @@
       <div class="credential-tools">
         <div>
           <strong>Add or import Tradovate accounts</strong>
-          <small>Connect the username once, then scan its accounts and assign each one to Evaluations or Funded.</small>
+          <small>Connect the username once, then scan its accounts and assign each one to Evaluations, Funded, or Winning Days.</small>
         </div>
         <button id="btn-add-login" class="btn small primary">+ Add Tradovate login</button>
         <button id="btn-scan-assign" class="btn small">Scan &amp; assign accounts</button>
@@ -58,6 +58,11 @@
           <span class="webhook-label">Funded webhook (all funded lanes)</span>
           <code id="global-funded-webhook-url"></code>
           <button class="btn small copy-global" data-copy-target="global-funded-webhook-url">Copy</button>
+        </div>
+        <div class="webhook-row webhook-card winning-webhook">
+          <span class="webhook-label">Winning Days webhook (all winning lanes)</span>
+          <code id="global-winning-webhook-url"></code>
+          <button class="btn small copy-global" data-copy-target="global-winning-webhook-url">Copy</button>
         </div>
       </div>
       <div id="login-list" class="login-list"></div>
