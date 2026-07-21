@@ -348,9 +348,11 @@ test("entry repairs manual account and ATM drift before placing", async () => {
 
   await worker.enterPrepared("funded", acct, { action: "sell", symbol: "MNQ", quantity: 4 });
 
+  // The single final verification catches the drifted account/ATM and repairs it
+  // (with the authoritative size) before any order — no order until it verifies.
   assert.deepEqual(adapter.calls, [
-    "repair:funded:F1:funded",
     "qty:4:force",
+    "repair:funded:F1:funded:4",
     "order:sell:F1",
   ]);
 });

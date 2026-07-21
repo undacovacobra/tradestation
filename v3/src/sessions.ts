@@ -327,9 +327,12 @@ export class CredentialWorker {
       }
       const executionStarted = Date.now();
       try {
-        if (!await this.adapter.verifyPreparedOrderState(group, account.tradovateLabel, account.atmPreset)) {
-          await this.adapter.repairPreparedOrderState(group, account.tradovateLabel, account.atmPreset);
-        }
+        // Account + ATM were locked in at arm time (an idle moment). We skip a
+        // redundant pre-check here and rely on the ONE final verification below,
+        // which re-reads account + ATM + size together right before the click —
+        // so a drifted account/ATM/size still blocks the order, but the fast
+        // (unchanged) case does the minimum work. The size is still written
+        // authoritatively from the alert.
         if (order.quantity != null) {
           if (this.executionMode === "dual-ticket") await this.adapter.setLaneQuantity!(group, order.quantity);
           else await this.adapter.setQuantity(order.quantity, true);
