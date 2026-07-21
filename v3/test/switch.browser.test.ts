@@ -78,3 +78,31 @@ test("armed switchAccount does NOT open the menu; entry is just the click", asyn
     await browser.close();
   }
 });
+
+test("switchAccount scrolls a long account menu to reach a row below the fold", async (t) => {
+  const browser = await launch();
+  if (!browser) return t.skip("no Chromium available");
+  try {
+    const page = await browser.newPage({ viewport: { width: 900, height: 500 } });
+    const ids = [
+      "LFE05079261220021", "LFF05079261220004", "LFF05079261220003", "LFE05079261220022",
+      "LFF05079261220001", "LFE05079261220006", "LFF05079261220002", "LFF05079261220005",
+    ];
+    await page.setContent(`
+      <div><span class="acctid" onclick="document.getElementById('m').style.display='block'">${ids[0]}</span></div>
+      <div id="m" style="display:none;height:120px;overflow-y:auto;width:260px">
+        ${ids.map((id) => `<div style="padding:10px" onclick="document.querySelector('.acctid').textContent='${id}';document.getElementById('m').style.display='none'">${id} Demo &amp; Active</div>`).join("")}
+      </div>`);
+    const b = fake(page);
+    b.currentAccount = ids[0];
+    b.requireLoggedIn = async () => {}; // this unit only exercises menu scrolling
+
+    // The target is the last row, well below the 120px fold — the old reader gave
+    // up here; now it scrolls the menu until the row renders and clicks it.
+    await b.switchAccount("LFF05079261220005");
+    assert.equal(await page.evaluate(() => document.querySelector(".acctid")?.textContent), "LFF05079261220005");
+    assert.equal(b.currentAccount, "LFF05079261220005");
+  } finally {
+    await browser.close();
+  }
+});

@@ -406,10 +406,12 @@ export class TradovateBrowser {
         await opener.click({ timeout: 10_000 });
         await this.p.waitForTimeout(100).catch(() => {});
 
-        const option = await this.visibleAccountLocator(label);
+        const seen = new Set<string>();
+        const option = await this.findAccountInOpenMenu(label, seen);
         if (!option) {
           await this.p.keyboard.press("Escape").catch(() => {});
-          throw new Error(`Account ${label} was not visible in the Tradovate account menu.`);
+          const list = [...seen].sort().join(", ") || "no accounts";
+          throw new Error(`Account ${label} was not found in the Tradovate account menu even after scrolling (menu showed: ${list}).`);
         }
         await option.click({ timeout: 10_000 });
         await this.p.waitForTimeout(Math.max(0, this.config.switchSettleMs));
@@ -502,6 +504,39 @@ export class TradovateBrowser {
       if (!best || area < best.area) best = { locator: item, area };
     }
     return best?.locator ?? null;
+  }
+
+  /**
+   * With the account menu already open, find the row for `label` — scrolling the
+   * menu down to bring accounts that are below the fold (or lazily rendered by a
+   * long/virtualized list) into view. Records every account id it passes into
+   * `seen` so a failure can report exactly what the menu actually contained.
+   */
+  private async findAccountInOpenMenu(label: string, seen: Set<string>, maxScrolls = 30): Promise<Locator | null> {
+    const collect = async () => {
+      for (const t of await this.p.getByText(TXT.accountIdPattern).allTextContents().catch(() => [])) {
+        for (const m of t.match(/LF[EF]\d{6,}/g) ?? []) seen.add(m);
+      }
+    };
+    await collect();
+    let found = await this.visibleAccountLocator(label);
+    let previousLast = "";
+    for (let i = 0; i < maxScrolls && !found; i++) {
+      const rows = this.p.getByText(TXT.accountIdPattern);
+      const n = await rows.count().catch(() => 0);
+      if (n === 0) break;
+      // Pulling the last rendered row into view scrolls a plain long list and
+      // forces a virtualized list to render its next batch.
+      await rows.nth(n - 1).scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+      await this.p.waitForTimeout(120).catch(() => {});
+      await collect();
+      found = await this.visibleAccountLocator(label);
+      const lastText = (await rows.nth(n - 1).textContent().catch(() => "")) ?? "";
+      const lastToken = lastText.match(/LF[EF]\d{6,}/)?.[0] ?? "";
+      if (!lastToken || lastToken === previousLast) break; // reached the end — no more rows appearing
+      previousLast = lastToken;
+    }
+    return found;
   }
 
   /**
