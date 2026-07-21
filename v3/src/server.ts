@@ -651,7 +651,12 @@ async function healthCheck(worker: LoginWorker): Promise<void> {
     notifyActionNeeded("Tradovate logged out / left the trading screen WHILE A TRADE IS OPEN and ATLAS could not complete the safe click-only login. Check the bot computer and Tradovate right away.");
     return;
   }
-  // Flat — safe to try fixing it ourselves.
+  // If a session was never established this run, we're not "unexpectedly logged
+  // out" — you're signing in by hand (or haven't yet). Stay out of the way: no
+  // reload, no login clicks, no alarm. Auto-login only self-heals a session
+  // that WAS established and then dropped.
+  if (!(worker.status().expectsLogin ?? false)) return;
+  // Flat and a session was established earlier — safe to try fixing it ourselves.
   pushEvent("warn", "Tradovate isn't on the trading screen — trying to log back in automatically…");
   const status = await worker.recover().catch(() => null);
   if (status?.loggedIn) {

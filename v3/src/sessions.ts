@@ -19,6 +19,9 @@ export interface AdapterStatus {
   connected: boolean;
   loggedIn: boolean;
   selectedAccount: string | null;
+  /** True once a session was established this run — logged out now is
+   *  unexpected, so the self-heal path may log back in. */
+  expectsLogin?: boolean;
 }
 
 /** Broker-window boundary. Tradovate is the only implementation in this release. */

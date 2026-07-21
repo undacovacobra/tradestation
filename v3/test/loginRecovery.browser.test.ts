@@ -102,6 +102,60 @@ test("automatic recovery keeps Start Simulated Trading compatibility", async (t)
   }
 });
 
+test("connect never auto-clicks the login flow (leaves manual sign-in alone)", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=full`);
+    const browser = fake(page);
+    browser.config = { captureShots: false, tradovateUrl: `${fixture}?state=full` };
+
+    const status = await browser.connect();
+
+    assert.deepEqual(await clicks(page), [], "Connect must not click Login/Continue/Access Simulation");
+    assert.equal(status.loggedIn, false);
+  } finally {
+    await chrome.close();
+  }
+});
+
+test("recover stays out of the way when a session was never established", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=full`);
+    const browser = fake(page); // shouldBeLoggedIn is falsy — never logged in this run
+    browser.config = { captureShots: false, tradovateUrl: `${fixture}?state=full` };
+
+    await browser.recover();
+
+    assert.deepEqual(await clicks(page), [], "self-heal must not fire before a session was ever established");
+  } finally {
+    await chrome.close();
+  }
+});
+
+test("recover DOES auto-log back in once a session was established and then dropped", async (t) => {
+  const chrome = await launch();
+  if (!chrome) return t.skip("no Chromium available");
+  try {
+    const page = await chrome.newPage();
+    await page.goto(`${fixture}?state=full`);
+    const browser = fake(page);
+    browser.shouldBeLoggedIn = true; // a session existed earlier — being logged out now is unexpected
+    browser.config = { captureShots: false, tradovateUrl: `${fixture}?state=full` };
+
+    const status = await browser.recover();
+
+    assert.deepEqual(await clicks(page), ["Login", "Continue", "Access Simulation"]);
+    assert.equal(status.loggedIn, true);
+  } finally {
+    await chrome.close();
+  }
+});
+
 test("automatic recovery does not click an unknown page", async (t) => {
   const chrome = await launch();
   if (!chrome) return t.skip("no Chromium available");

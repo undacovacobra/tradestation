@@ -51,6 +51,9 @@ const TXT = {
 export interface BrowserStatus {
   connected: boolean;
   loggedIn: boolean;
+  /** True once a session was established this run — i.e. being logged out now
+   *  is unexpected and the self-heal path may log back in. */
+  expectsLogin: boolean;
 }
 
 /**
@@ -61,6 +64,10 @@ export class TradovateBrowser {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private loggedIn = false;
+  /** True once a logged-in session has been confirmed at least once this run.
+   *  Gates auto-login so it only self-heals a session that WAS established and
+   *  then dropped — never on a fresh Connect or while you sign in by hand. */
+  private shouldBeLoggedIn = false;
   /** The account the bot last selected. The bot is the only thing that switches
    *  accounts, so this is authoritative — used to skip the switch instantly when
    *  we're already on the right account (armed). Reset on (re)connect. */
@@ -78,7 +85,7 @@ export class TradovateBrowser {
   }
 
   status(): BrowserStatus {
-    return { connected: this.page !== null, loggedIn: this.loggedIn };
+    return { connected: this.page !== null, loggedIn: this.loggedIn, expectsLogin: this.shouldBeLoggedIn };
   }
 
   /** The account the bot currently believes is selected (null if unknown). */
@@ -128,13 +135,17 @@ export class TradovateBrowser {
       await this.page.goto(this.config.tradovateUrl, { waitUntil: "domcontentloaded" });
     }
     await this.refreshLoginState(5_000);
+    // Connect NEVER auto-clicks the login flow. If you're not logged in, the
+    // screen is left alone so you can sign in yourself (or switch accounts)
+    // without the bot spamming the Login button. Auto-login only ever happens
+    // from the self-heal path (recover), and only after a session was actually
+    // established and then unexpectedly lost.
     if (!this.loggedIn) {
-      log.info("Not logged in — attempting automatic login (Login → Simulated)…");
-      await this.tryAutoLogin();
-      await this.refreshLoginState(6_000);
+      log.info("Connected but not logged in — leaving the login screen for you (no auto-login on Connect).");
+    } else {
+      // A popup (notice/agreement) often greets a fresh session — clear it now.
+      await this.dismissPopups().catch(() => false);
     }
-    // A popup (notice/agreement) often greets a fresh session — clear it now.
-    if (this.loggedIn) await this.dismissPopups().catch(() => false);
     return this.status();
   }
 
@@ -146,6 +157,14 @@ export class TradovateBrowser {
    * account/size since a reload loses them.
    */
   async recover(): Promise<BrowserStatus> {
+    // Only auto-login when a session was actually established this run and then
+    // lost — "logged out when it shouldn't be." If we were never logged in
+    // (fresh connect, or you're signing in by hand), leave the screen alone so
+    // the bot never fights your manual login / account switch.
+    if (!this.shouldBeLoggedIn) {
+      await this.refreshLoginState(1_000).catch(() => false);
+      return this.status();
+    }
     if (!this.page) return this.connect();
     log.warn("Recovering Tradovate session (reload + re-login)…");
     this.currentAccount = null;
@@ -298,6 +317,7 @@ export class TradovateBrowser {
     if (!this.page) return false;
     const marker = this.page.getByText(TXT.loggedInMarker, { exact: true }).first();
     this.loggedIn = await marker.isVisible({ timeout }).catch(() => false);
+    if (this.loggedIn) this.shouldBeLoggedIn = true; // a real session existed — self-heal may re-login it later
     return this.loggedIn;
   }
 
@@ -1383,6 +1403,7 @@ export class TradovateBrowser {
     this.context = null;
     this.page = null;
     this.loggedIn = false;
+    this.shouldBeLoggedIn = false; // an explicit disconnect clears the "should be logged in" expectation
     this.currentAccount = null;
     this.ticketCapabilities = undefined;
   }
