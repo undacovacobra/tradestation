@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { resolve } from "node:path";
 import { config, ROOT } from "./config.js";
+import { normalizePublicWebhookBase } from "./publicWebhookBase.js";
 import { GROUPS, isCloseAlert, isGroup, type Alert, type Group, type OrderRequest, type StoredAccount } from "./types.js";
 import { PRIMARY_LOGIN_ID, SettingsStore } from "./store.js";
 import { GroupRotation, laneStatePath, migrateLegacyLaneState, type OpenTrade } from "./rotation.js";
@@ -68,6 +69,24 @@ function brokerAccountKey(loginId: string, label: string): string {
 function rememberBrokerPosition(loginId: string, label: string, position: BrokerPosition): BrokerPosition {
   brokerAccountStatus.set(brokerAccountKey(loginId, label), position);
   return position;
+}
+
+/**
+ * The public origin shown for TradingView webhooks. Prefer an explicitly set
+ * PUBLIC_WEBHOOK_BASE_URL; otherwise fall back to the configured ngrok reserved
+ * domain — a permanent address, so it stays accurate even before the tunnel has
+ * finished connecting (the tunnel status pill shows whether it's live). Only if
+ * neither is configured does the dashboard fall back to localhost.
+ */
+function publicWebhookBase(): string | null {
+  if (config.publicWebhookBaseUrl) return config.publicWebhookBaseUrl;
+  const domain = config.ngrokDomain?.trim();
+  if (!domain) return null;
+  try {
+    return normalizePublicWebhookBase(/^https?:\/\//i.test(domain) ? domain : `https://${domain}`);
+  } catch {
+    return null;
+  }
 }
 
 function currentLanes(): CredentialLane[] {
@@ -830,7 +849,7 @@ api.get("/status", (_req, res) => {
       { all: "/webhook" },
       ...GROUPS.map((group) => ({ [group]: `/webhook/${group}` })),
     ) as Record<"all" | Group, string>,
-    publicWebhookBaseUrl: config.publicWebhookBaseUrl,
+    publicWebhookBaseUrl: publicWebhookBase(),
     tunnel: tunnelStatus(),
     groups,
     credentials,
