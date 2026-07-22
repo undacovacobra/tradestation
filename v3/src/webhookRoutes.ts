@@ -13,6 +13,9 @@ export interface WebhookHandleResult {
   message: string;
   timingMs?: { queueWaitMs: number; executionMs: number; totalMs: number };
   duplicate?: boolean;
+  /** A benign no-op (e.g. the lane is done for the day) — don't log a "Handled"
+   *  line, so a resting lane stays silent in the activity feed. */
+  quiet?: boolean;
 }
 
 interface WebhookRouteDependencies {

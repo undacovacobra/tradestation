@@ -3,7 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { resolve } from "node:path";
 import { config, ROOT } from "./config.js";
 import { normalizePublicWebhookBase } from "./publicWebhookBase.js";
-import { GROUPS, isCloseAlert, isGroup, type Alert, type Group, type OrderRequest, type StoredAccount } from "./types.js";
+import { GROUPS, groupLabel, isCloseAlert, isGroup, type Alert, type Group, type OrderRequest, type StoredAccount } from "./types.js";
 import { PRIMARY_LOGIN_ID, SettingsStore } from "./store.js";
 import { GroupRotation, laneStatePath, migrateLegacyLaneState, type OpenTrade } from "./rotation.js";
 import { BalanceLog } from "./balances.js";
@@ -61,6 +61,9 @@ interface PendingBrokerClose {
 }
 const pendingBrokerClose = new Map<LaneKey, PendingBrokerClose>();
 const completingTrades = new Map<LaneKey, Promise<string | undefined>>();
+/** lane -> trading-day we last logged "this lane is done for the day", so a lane
+ *  whose accounts are all resting is noted once and then silently ignores alerts. */
+const restingNoticeDay = new Map<LaneKey, string>();
 
 function brokerAccountKey(loginId: string, label: string): string {
   return `${loginId}:${label}`;
@@ -459,11 +462,26 @@ async function handleEntry(
   lane = primaryLane(group),
   options: { skipFundedWindow?: boolean } = {},
 ): Promise<WebhookHandleResult> {
+  const rotation = ensureLaneRotation(lane);
+  const laneAccounts = accountsForLane(lane);
+
+  // Done-for-the-day short-circuit: if the lane is flat and EVERY account in it
+  // is resting for the trading day (e.g. a winning lane that takes one trade a
+  // day, or evals that all won), quietly ignore the alert — no arming, no
+  // browser work. Log one calm note the first time it happens today so it never
+  // reads like a failed attempt, then stay silent until the 6pm reset frees it.
+  if (rotation.isFlat && laneAccounts.length > 0 && laneAccounts.every((a) => rotation.isBenchedToday(a.tradovateLabel))) {
+    const today = tradingDay();
+    if (restingNoticeDay.get(lane.key) !== today) {
+      restingNoticeDay.set(lane.key, today);
+      pushEvent("info", `${groupLabel(group)} is done for today — every account is resting until the 6pm reset, so further alerts are ignored.`, group);
+    }
+    return { message: `${groupLabel(group)} already traded today; resting until the reset.`, quiet: true };
+  }
+
   if (store.mode === "live" && !hasOpenTradeForLogin(lane.credentialId)) {
     await prepareLane(lane);
   }
-  const rotation = ensureLaneRotation(lane);
-  const laneAccounts = accountsForLane(lane);
   const choice = rotation.selectAccountForEntry(laneAccounts);
   if ("error" in choice) {
     pushEvent("warn", `Entry skipped: ${choice.error}`, group);
@@ -745,7 +763,11 @@ async function handleWebhookLane(
     }, lane, options);
   const totalMs = Date.now() - received;
   const clickMs = result.timingMs?.totalMs;
-  pushEvent("info", `Handled ${lane.key} in ${totalMs}ms${clickMs != null ? ` (prepared entry path ${clickMs}ms)` : ""}.`, group);
+  // A resting lane's alert is a benign no-op — stay silent so it doesn't spam
+  // the feed after it's done for the day.
+  if (!result.quiet) {
+    pushEvent("info", `Handled ${lane.key} in ${totalMs}ms${clickMs != null ? ` (prepared entry path ${clickMs}ms)` : ""}.`, group);
+  }
   return result;
 }
 
