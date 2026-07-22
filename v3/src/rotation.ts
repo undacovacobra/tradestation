@@ -63,9 +63,10 @@ export function migrateLegacyLaneState(legacyPath: string, targetPath: string): 
 
 /**
  * Account-cycling for ONE group: one round-trip at a time, advance to the next.
- * Keyed by account LABEL so it survives add/remove/reorder. When
- * `benchWinnersForDay` is on, an account that closes a WINNER sits out the rest
- * of the (futures) trading day; losers/breakeven keep cycling.
+ * Keyed by account LABEL so it survives add/remove/reorder. Daily rest (reset at
+ * the 6pm futures boundary): the WINNING group rests an account after ANY trade
+ * (one per day, win or loss); for eval/funded, when `benchWinnersForDay` is on,
+ * an account rests only after a WINNER while losers/breakeven keep cycling.
  */
 export class GroupRotation {
   private state: GroupState;
@@ -102,9 +103,12 @@ export class GroupRotation {
     return this.state.openTrade === null;
   }
 
-  /** True when this account won a trade earlier today and is benched for the day. */
+  /** True when this account is resting for the rest of the trading day.
+   *  - winning group: after ANY trade (win or loss) — one trade per day.
+   *  - eval/funded: after a WINNER, when the daily win-bench is on. */
   isBenchedToday(label: string): boolean {
-    return this.benchWinnersForDay && this.state.lastWonDay[label] === this.today();
+    if (this.state.lastWonDay[label] !== this.today()) return false;
+    return this.group === "winning" || this.benchWinnersForDay;
   }
 
   /** Take an account off the "won today / resting" bench so it can trade again
@@ -204,7 +208,9 @@ export class GroupRotation {
       firm: closed.firm,
     });
     if (this.state.history.length > 500) this.state.history.splice(0, this.state.history.length - 500);
-    if (won) this.state.lastWonDay[closed.tradovateLabel] = this.today();
+    // Bench for the rest of the trading day: winning accounts after ANY trade
+    // (one per day, win or loss); eval/funded only after a winner.
+    if (won || this.group === "winning") this.state.lastWonDay[closed.tradovateLabel] = this.today();
     this.state.openTrade = null;
 
     let next: StoredAccount | null = null;

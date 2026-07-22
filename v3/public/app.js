@@ -235,6 +235,7 @@ function renderLogins() {
             </span>
             <span class="stage-tag ${esc(account.group)}">${stageLabel}</span>
             ${isNext ? '<span class="next-tag">NEXT</span>' : ""}
+            ${account.restingToday ? `<span class="rest-tag">😴 ${account.group === "winning" ? "traded today" : "won today"}</span>` : ""}
           </div>
           <div class="credential-account-details">
             ${balanceLine(account)}
@@ -245,6 +246,7 @@ function renderLogins() {
           </div>
           <div class="credential-account-actions">
             ${!isNext && account.enabled ? '<button class="btn small credential-account-action" data-act="next">Next</button>' : ""}
+            ${account.restingToday ? '<button class="btn small credential-account-action" data-act="unrest">Trade again today</button>' : ""}
             <button class="btn small credential-account-action" data-act="bracket">ATM</button>
             <button class="btn small credential-position-check">Position</button>
             ${brokerAccountOpen ? '<button class="btn small danger credential-flatten-position">Flatten position</button>' : ""}

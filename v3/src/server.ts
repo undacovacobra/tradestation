@@ -424,9 +424,15 @@ async function completeRecordedTrade(
       pushEvent("info", `${closed.accountName} reached the ${money(store.evalTarget)} target and was retired from rotation.`, group);
     }
 
+    // The winning group takes one trade a day (win or loss), so it always rests
+    // after a round-trip; eval/funded rest only on a winner.
+    const restsToday = won || group === "winning";
+    const pnlText = pnl != null ? ` (${pnl >= 0 ? "+" : "-"}${money(Math.abs(pnl))})` : "";
     const wonMsg = won
       ? ` WINNER${pnl != null ? ` (+${money(pnl)})` : ""} - resting for the rest of today.`
-      : pnl != null ? ` (${pnl >= 0 ? "+" : "-"}${money(Math.abs(pnl))})` : "";
+      : restsToday
+        ? `${pnlText} - resting for the rest of today (one trade a day).`
+        : pnlText;
     const nextMsg = next ? `Next up: ${next.name}.` : "No accounts left in this group.";
     pushEvent("info", `Broker confirmed flat on ${closed.accountName} (${options.source}).`, group);
     pushEvent("info", `Round-trip finished on ${closed.accountName}.${wonMsg} ${nextMsg}`, group);

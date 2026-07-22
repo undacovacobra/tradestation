@@ -13,7 +13,7 @@ function acct(label: string): StoredAccount {
 }
 
 /** A rotation with a FIXED trading day so win-bench tests are deterministic. */
-function makeRot(path: string, bench = false, group: "evals" | "funded" = "evals", day = "2026-07-04"): GroupRotation {
+function makeRot(path: string, bench = false, group: "evals" | "funded" | "winning" = "evals", day = "2026-07-04"): GroupRotation {
   return new GroupRotation(group, path, bench, () => day);
 }
 
@@ -282,6 +282,34 @@ test("bench is ignored when benchWinnersForDay is off", () => {
     rot.recordOpen(c1.account, order, 50_000);
     rot.recordClose(accounts, { exitBalance: 99_000 }); // big win
     assert.equal(rot.isBenchedToday("A"), false, "no benching when the feature is off");
+  } finally {
+    cleanup();
+  }
+});
+
+test("winning group rests an account after ANY trade — win or loss — even with the win-bench off", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const rot = makeRot(path, false, "winning"); // win-bench OFF; winning rests anyway
+    const accounts = [acct("A"), acct("B")];
+
+    // A takes a LOSING trade → still benched for the day.
+    rot.recordOpen(accounts[0]!, order, 50_000);
+    rot.recordClose(accounts, { exitBalance: 49_800 }); // loss
+    assert.equal(rot.isBenchedToday("A"), true, "winning rests after a loss");
+    assert.equal(rot.peekNext(accounts)?.tradovateLabel, "B", "the next winning trade skips the rested account");
+
+    // B takes a WINNING trade → also benched.
+    rot.recordOpen(accounts[1]!, order, 50_000);
+    rot.recordClose(accounts, { exitBalance: 50_500 }); // win
+    assert.equal(rot.isBenchedToday("B"), true);
+
+    // Both have traded today → nothing left until the 6pm reset.
+    assert.ok("error" in rot.selectAccountForEntry(accounts));
+
+    // A new trading day clears the rest.
+    const nextDay = new GroupRotation("winning", path, false, () => "2026-07-05");
+    assert.equal(nextDay.isBenchedToday("A"), false, "the rest clears at the next trading day");
   } finally {
     cleanup();
   }
