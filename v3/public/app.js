@@ -720,6 +720,53 @@ $("#btn-testqty").addEventListener("click", () => {
   });
 });
 
+$("#btn-testwebhook").addEventListener("click", () => {
+  if (!status) return;
+  const live = status.mode === "live";
+  showModal(`
+    <h2>🧪 Test webhook — real 1-for-1</h2>
+    <p>Sends a real alert to <strong>/webhook/&lt;lane&gt;</strong> exactly like TradingView would — same address, same secret, same handling. ${live ? '<strong style="color:var(--red)">You are in LIVE mode — this places a REAL order.</strong>' : "You are in Practice mode — no real order is placed."}</p>
+    <form id="tw-form" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0">
+      <label>Lane <select id="tw-group">${STAGES.map((s) => `<option value="${s}">${esc(stageInfo(s).label)}</option>`).join("")}</select></label>
+      <label>Action <select id="tw-action"><option value="buy">Buy</option><option value="sell">Sell</option></select></label>
+      <label>Quantity <input id="tw-qty" type="number" min="1" step="1" value="1" style="width:80px;padding:8px;border-radius:8px;border:1px solid var(--line)"/></label>
+      <label style="display:flex;align-items:center;gap:6px"><input id="tw-close" type="checkbox"/> send as CLOSE (flat)</label>
+      <button class="btn primary" type="submit">Fire it</button>
+    </form>
+    <div id="tw-result" style="font-size:14px;min-height:24px"></div>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+  const form = $("#tw-form");
+  const result = $("#tw-result");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const group = $("#tw-group").value;
+    const action = $("#tw-action").value;
+    const quantity = Math.floor(Number($("#tw-qty").value));
+    const close = $("#tw-close").checked;
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      result.innerHTML = `<span style="color:var(--red)">Enter a whole number of 1 or more.</span>`;
+      return;
+    }
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    result.textContent = "Firing…";
+    try {
+      const r = await api("/test-webhook", { group, action, quantity, close, confirmLive: true });
+      const msg = (r.response && (r.response.message || r.response.error)) || "(no message)";
+      result.innerHTML = `<div><strong>Sent to ${esc(r.sentTo)}</strong> — HTTP ${r.httpStatus} in ${r.ms}ms</div>
+        <div style="margin-top:6px">Bot replied: <strong>${esc(msg)}</strong></div>
+        <pre style="margin-top:8px;background:rgba(127,127,127,.12);padding:8px;border-radius:8px;overflow:auto;font-size:12px">${esc(JSON.stringify(r.sentPayload, null, 2))}</pre>
+        <p style="color:var(--muted);font-size:12px">This is the exact JSON that was sent — compare it field-for-field to your TradingView alert message.</p>`;
+    } catch (err) {
+      result.innerHTML = `<span style="color:var(--red)">⚠️ ${esc(err.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+      lastStatusJson = "";
+      refresh();
+    }
+  });
+});
+
 $("#btn-tunnel").addEventListener("click", () => {
   if (!status) return;
   const on = (status.tunnel || {}).state === "on";

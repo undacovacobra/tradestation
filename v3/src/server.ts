@@ -1138,6 +1138,58 @@ api.post("/next", (req, res) => {
   res.json({ ok });
 });
 
+/**
+ * A TRUE 1-for-1 webhook test: POST a real alert to the bot's OWN public webhook
+ * path (`/webhook/<group>`) exactly like TradingView would — same route, same
+ * secret check, same dispatch and execution — with a quantity you choose. Places
+ * a REAL order in live mode (the user opts in with confirmLive). Echoes back the
+ * exact payload sent (secret redacted) so it can be compared to the TradingView
+ * alert message field-for-field.
+ */
+api.post("/test-webhook", async (req, res) => {
+  const group = req.body?.group;
+  if (typeof group !== "string" || !isGroup(group)) {
+    return res.status(400).json({ ok: false, error: `group must be ${GROUPS.join(", ")}` });
+  }
+  const quantity = Math.floor(Number(req.body?.quantity));
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    return res.status(400).json({ ok: false, error: "quantity must be a whole number of 1 or more" });
+  }
+  const action = req.body?.action === "sell" ? "sell" : "buy";
+  const close = req.body?.close === true;
+  if (store.mode === "live" && req.body?.confirmLive !== true) {
+    return res.status(400).json({ ok: false, error: "This places a REAL order in LIVE mode — confirm to proceed." });
+  }
+  // Exactly the JSON shape TradingView sends, on the same global path it hits.
+  const payload: Record<string, unknown> = {
+    secret: config.webhookSecret,
+    action: close ? (action === "buy" ? "sell" : "buy") : action,
+    symbol: typeof req.body?.symbol === "string" && req.body.symbol.trim() ? req.body.symbol.trim() : "TEST",
+    quantity,
+    marketPosition: close ? "flat" : action === "buy" ? "long" : "short",
+  };
+  const path = `/webhook/${group}`;
+  const started = Date.now();
+  try {
+    const r = await fetch(`http://localhost:${config.port}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = (await r.json().catch(() => ({}))) as { message?: string; error?: string };
+    const ms = Date.now() - started;
+    pushEvent(
+      r.ok ? "info" : "warn",
+      `🧪 Test webhook → ${path} (${payload.action} ${quantity}x, ${store.mode}): ${body.message ?? body.error ?? `HTTP ${r.status}`}`,
+      group,
+    );
+    return res.json({ ok: true, httpStatus: r.status, sentTo: path, sentPayload: { ...payload, secret: "•••hidden•••" }, response: body, ms });
+  } catch (err) {
+    return res.json({ ok: false, error: (err as Error).message });
+  }
+});
+
 /** Manually clear a stuck open trade (no order placed) and advance to the next
  *  account. Only fixes the bot's memory — it does NOT close any real position. */
 api.post("/reset-trade", (req, res) => {
