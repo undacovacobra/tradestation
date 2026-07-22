@@ -132,6 +132,16 @@ test("invalid webhook secrets never dispatch", async () => {
   } finally { await f.close(); }
 });
 
+test("a webhook at an unrecognized address is logged so a mistyped URL is visible", async () => {
+  const f = await fixture(async (lane) => { return { message: `${lane.key} ok` }; });
+  try {
+    // "/webhook/eval" (singular typo) matches no lane webhook and no credential.
+    const res = await f.post("/webhook/eval", alert);
+    assert.equal(res.status, 404);
+    assert.ok(f.events.some((e) => /doesn't recognize/i.test(e)), "the mistyped address must be surfaced in the activity feed");
+  } finally { await f.close(); }
+});
+
 test("credential-specific stage and combined webhooks target only that credential", async () => {
   const calls: string[] = [];
   const f = await fixture(async (lane) => { calls.push(lane.key); return { message: "ok" }; });

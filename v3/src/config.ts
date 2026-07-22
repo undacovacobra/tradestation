@@ -32,7 +32,11 @@ export const config = {
   switchSettleMs: Number(process.env.SWITCH_SETTLE_MS ?? 250),
   // Hold evaluation-only entries very briefly so a funded entry arriving at
   // nearly the same moment can take priority on the shared credential queue.
-  fundedPriorityWindowMs: Math.max(0, Number(process.env.FUNDED_PRIORITY_WINDOW_MS ?? 75)),
+  // A non-numeric env value falls back to 75 so a typo can never STALL evals.
+  fundedPriorityWindowMs: (() => {
+    const v = Number(process.env.FUNDED_PRIORITY_WINDOW_MS ?? 75);
+    return Number.isFinite(v) ? Math.max(0, v) : 75;
+  })(),
   // Save a screenshot on every order (slower). Failures always screenshot.
   captureShots: (process.env.SCREENSHOTS ?? "false") === "true",
   // Daily WIN bench: an account that closes a winner sits out the rest of the

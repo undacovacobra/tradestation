@@ -49,7 +49,9 @@ export class CredentialPriorityScheduler {
   private wakeTimer: NodeJS.Timeout | undefined;
 
   constructor(options: { fundedWindowMs?: number; now?: () => number } = {}) {
-    this.fundedWindowMs = Math.max(0, options.fundedWindowMs ?? 75);
+    // Guard against a non-finite window (e.g. a bad env value): a NaN readyAt
+    // would make eval-entry tasks never become eligible and silently stall.
+    this.fundedWindowMs = Number.isFinite(options.fundedWindowMs) ? Math.max(0, options.fundedWindowMs!) : 75;
     this.now = options.now ?? Date.now;
   }
 

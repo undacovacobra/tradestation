@@ -191,12 +191,25 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
     return response.status(status).json({ ok: successes === bodyResults.length, results: bodyResults });
   };
 
+  // Make "silent" webhook outcomes visible in the activity feed so a mis-typed
+  // URL or a paused bot is never an invisible mystery.
+  const notePaused = (group?: Group) =>
+    deps.pushEvent("warn", "An alert arrived but ATLAS is PAUSED — it was ignored. Press Start/Run to enable trading.", group);
+  const noteUnrecognized = (path: string) =>
+    deps.pushEvent(
+      "warn",
+      `A webhook arrived at an address ATLAS doesn't recognize (${path}). Check the URL in your TradingView alert — the lane webhooks are ${GROUPS.map((g) => `/webhook/${g}`).join(", ")}.`,
+    );
+
   app.post("/webhook", async (req, res) => {
     const parsed = BroadcastAlertSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ ok: false, error: "Invalid broadcast alert payload" });
     const { groups, ...alert } = parsed.data;
-    if (alert.secret !== deps.webhookSecret) return res.status(401).json({ ok: false, error: "Bad secret" });
-    if (!deps.isRunning()) return res.json({ ok: true, message: "ATLAS is paused; alert ignored.", results: [] });
+    if (alert.secret !== deps.webhookSecret) {
+      deps.pushEvent("warn", "Rejected a broadcast alert with the wrong secret.");
+      return res.status(401).json({ ok: false, error: "Bad secret" });
+    }
+    if (!deps.isRunning()) { notePaused(); return res.json({ ok: true, message: "ATLAS is paused; alert ignored.", results: [] }); }
     const selected = lanes().filter((lane) => groups.includes(lane.stage));
     return dispatch(selected, alert, groups.length > 1, res);
   });
@@ -205,7 +218,7 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
     app.post(`/webhook/${stage}`, async (req, res) => {
       const alert = parseAlert(req.body, res, stage);
       if (!alert) return;
-      if (!deps.isRunning()) return res.json({ ok: true, message: "ATLAS is paused; alert ignored." });
+      if (!deps.isRunning()) { notePaused(stage); return res.json({ ok: true, message: "ATLAS is paused; alert ignored." }); }
       return dispatch(lanes().filter((lane) => lane.stage === stage), alert, false, res);
     });
   }
@@ -213,22 +226,29 @@ export function registerWebhookRoutes(app: Application, deps: WebhookRouteDepend
   app.post("/webhook/:credentialId/:stage", async (req, res) => {
     const stage = req.params.stage;
     if (!isGroup(stage)) {
+      noteUnrecognized(req.originalUrl);
       return res.status(404).json({ ok: false, error: `Unknown stage. Use ${GROUPS.join(", ")}.` });
     }
     const selected = lanes().filter((lane) => lane.credentialId === req.params.credentialId && lane.stage === stage);
-    if (selected.length === 0) return res.status(404).json({ ok: false, error: "Unknown credential webhook." });
+    if (selected.length === 0) {
+      noteUnrecognized(req.originalUrl);
+      return res.status(404).json({ ok: false, error: "Unknown credential webhook." });
+    }
     const alert = parseAlert(req.body, res, stage);
     if (!alert) return;
-    if (!deps.isRunning()) return res.json({ ok: true, message: "ATLAS is paused; alert ignored." });
+    if (!deps.isRunning()) { notePaused(stage); return res.json({ ok: true, message: "ATLAS is paused; alert ignored." }); }
     return dispatch(selected, alert, false, res);
   });
 
   app.post("/webhook/:credentialId", async (req, res) => {
     const selected = lanes().filter((lane) => lane.credentialId === req.params.credentialId);
-    if (selected.length === 0) return res.status(404).json({ ok: false, error: "Unknown credential webhook." });
+    if (selected.length === 0) {
+      noteUnrecognized(req.originalUrl);
+      return res.status(404).json({ ok: false, error: "Unknown credential webhook." });
+    }
     const alert = parseAlert(req.body, res);
     if (!alert) return;
-    if (!deps.isRunning()) return res.json({ ok: true, message: "ATLAS is paused; alert ignored." });
+    if (!deps.isRunning()) { notePaused(); return res.json({ ok: true, message: "ATLAS is paused; alert ignored." }); }
     return dispatch(selected, alert, true, res);
   });
 }
