@@ -1082,13 +1082,26 @@ export class TradovateBrowser {
     // Tradovate has several nearby controls (quantity, ATM, DAY/GTC). Anchor
     // to the exact visible ATM label and accept only a preset-bearing select /
     // combobox / dropdown control on that same row, never a generic icon.
-    const control = await this.findAtmPresetControl();
+    let control = await this.findAtmPresetControl();
     if (!control) {
       await this.snapshot("atm-dropdown-not-found", true);
       throw new Error(`Couldn't find the ATM dropdown to pick preset "${want}".`);
     }
-    await control.click({ timeout: 2_500 });
-    const option = await this.waitForNewVisibleAtmOption(want, 1_200);
+    // Open the dropdown, tolerating a transient block: after several lanes close
+    // and re-arm at once the screen churns, and an overlay or a still-settling
+    // ticket can briefly intercept the click. Clear popups and retry once with a
+    // generous timeout (this is arm time, off the Buy/Sell click path).
+    try {
+      await control.click({ timeout: 8_000 });
+    } catch {
+      await this.dismissPopups().catch(() => false);
+      await p.keyboard.press("Escape").catch(() => {});
+      await p.waitForTimeout(150).catch(() => {});
+      await this.markAtmVisibleBaseline();
+      control = (await this.findAtmPresetControl()) ?? control;
+      await control.click({ timeout: 8_000 });
+    }
+    const option = await this.waitForNewVisibleAtmOption(want, 1_500);
 
     if (!option) {
       await p.keyboard.press("Escape").catch(() => {});
@@ -1096,7 +1109,7 @@ export class TradovateBrowser {
       throw new Error(`ATM preset "${want}" wasn't in the dropdown — check the name matches exactly.`);
     }
 
-    await option.click({ timeout: 2_500 });
+    await option.click({ timeout: 8_000 });
     await p.waitForTimeout(200).catch(() => {});
     if (!(await this.atmPresetShown(want))) {
       await this.snapshot("atm-preset-not-applied", true);
