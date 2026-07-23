@@ -1092,16 +1092,23 @@ export class TradovateBrowser {
     // ticket can briefly intercept the click. Clear popups and retry once with a
     // generous timeout (this is arm time, off the Buy/Sell click path).
     try {
-      await control.click({ timeout: 8_000 });
+      await control.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+      await control.click({ timeout: 6_000 });
     } catch {
       await this.dismissPopups().catch(() => false);
       await p.keyboard.press("Escape").catch(() => {});
       await p.waitForTimeout(150).catch(() => {});
       await this.markAtmVisibleBaseline();
       control = (await this.findAtmPresetControl()) ?? control;
-      await control.click({ timeout: 8_000 });
+      await control.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+      // Force skips the "hold still / not covered" waits that a still-settling
+      // ticket fails during simultaneous multi-lane arming — the click resolves
+      // but never becomes actionable. We've already located the exact ATM
+      // control, so firing a real press straight at it is safe here (arm time,
+      // off the Buy/Sell path).
+      await control.click({ force: true, timeout: 6_000 });
     }
-    const option = await this.waitForNewVisibleAtmOption(want, 1_500);
+    const option = await this.waitForNewVisibleAtmOption(want, 2_500);
 
     if (!option) {
       await p.keyboard.press("Escape").catch(() => {});
@@ -1109,7 +1116,13 @@ export class TradovateBrowser {
       throw new Error(`ATM preset "${want}" wasn't in the dropdown — check the name matches exactly.`);
     }
 
-    await option.click({ timeout: 8_000 });
+    await option.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+    try {
+      await option.click({ timeout: 6_000 });
+    } catch {
+      // Same churn tolerance for picking the option out of the open list.
+      await option.click({ force: true, timeout: 6_000 });
+    }
     await p.waitForTimeout(200).catch(() => {});
     if (!(await this.atmPresetShown(want))) {
       await this.snapshot("atm-preset-not-applied", true);
