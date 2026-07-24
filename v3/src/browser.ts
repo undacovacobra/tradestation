@@ -1108,12 +1108,19 @@ export class TradovateBrowser {
       // off the Buy/Sell path).
       await control.click({ force: true, timeout: 6_000 });
     }
-    const option = await this.waitForNewVisibleAtmOption(want, 2_500);
+    let option = await this.findOpenAtmOption(want);
+    const deadline = Date.now() + 2_500;
+    while (!option && Date.now() < deadline) {
+      await p.waitForTimeout(75).catch(() => {});
+      option = await this.findOpenAtmOption(want);
+    }
 
     if (!option) {
+      const seen = await this.dumpAtmOptions();
       await p.keyboard.press("Escape").catch(() => {});
       await this.snapshot("atm-preset-not-in-dropdown", true);
-      throw new Error(`ATM preset "${want}" wasn't in the dropdown — check the name matches exactly.`);
+      const list = seen.length ? ` The dropdown showed: [${seen.join(", ")}].` : "";
+      throw new Error(`ATM preset "${want}" wasn't in the dropdown.${list} Check the name matches exactly.`);
     }
 
     await option.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
@@ -1227,100 +1234,99 @@ export class TradovateBrowser {
     });
   }
 
-  /** Find an exact match that became visible only after the ATM control click. */
-  private async findNewVisibleAtmOption(name: string): Promise<Locator | null> {
+  /**
+   * Find the matching option in the OPEN ATM dropdown. Robust and simple: try
+   * real listbox/menu semantics first (and the test fixture), then fall back to
+   * plain geometry — a visible leaf whose EXACT text is the preset, sitting in
+   * the ATM control's column just below it. No fragile "what became visible"
+   * diffing, which is what kept missing a preset that was plainly in the list.
+   */
+  private async findOpenAtmOption(want: string): Promise<Locator | null> {
     if (!this.page) return null;
+    for (const role of ["option", "menuitem"] as const) {
+      const byRole = this.page.getByRole(role, { name: want, exact: true }).first();
+      if (
+        (await byRole.count().then((n) => n > 0).catch(() => false)) &&
+        (await byRole.isVisible().catch(() => false))
+      ) {
+        return byRole;
+      }
+    }
     const marked = await this.page
-      .evaluate((want) => {
+      .evaluate((wanted) => {
         document.querySelectorAll("[data-bot-atm-option]").forEach((el) =>
           el.removeAttribute("data-bot-atm-option"),
         );
-        document.querySelectorAll("[data-bot-atm-popup-surface]").forEach((el) =>
-          el.removeAttribute("data-bot-atm-popup-surface"),
-        );
-        const control = document.querySelector("[data-bot-atm-preset-control]") as HTMLElement | null;
+        const control = (document.querySelector('[data-testid="atm-strategy-select"]') ||
+          document.querySelector("[data-bot-atm-preset-control]")) as HTMLElement | null;
         if (!control) return false;
         const cr = control.getBoundingClientRect();
-        const matches: HTMLElement[] = [];
+        const cx = cr.left + cr.width / 2;
+        let best: HTMLElement | null = null;
+        let bestTop = Number.POSITIVE_INFINITY;
         const all = document.querySelectorAll("body *");
         for (let i = 0; i < all.length; i++) {
           const el = all[i] as HTMLElement;
-          if (el.hasAttribute("data-bot-atm-visible-before")) continue;
-          if (el.closest("[data-bot-atm-preset-control]")) continue;
-          if ((el.textContent || "").replace(/\s+/g, " ").trim() !== want) continue;
+          const tag = el.tagName.toLowerCase();
+          if (tag === "input" || tag === "select" || tag === "textarea" || tag === "button") continue;
+          if (control.contains(el) || el.contains(control)) continue;
+          if ((el.textContent || "").replace(/\s+/g, " ").trim() !== wanted) continue;
+          // Leaf only, so the click lands on the item, not an enclosing wrapper.
+          const hasTextChild = Array.from(el.children).some(
+            (c) => (c.textContent || "").replace(/\s+/g, " ").trim().length > 0,
+          );
+          if (hasTextChild) continue;
           const r = el.getBoundingClientRect();
           const style = getComputedStyle(el);
           if (r.width <= 0 || r.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
-          matches.push(el);
+          // In the ATM control's column (excludes a stray "25" in the price
+          // ladder) and below it (the opened list drops down under the box).
+          const sameColumn = cx >= r.left - 20 && cx <= r.right + 20;
+          const below = r.top >= cr.top - 4 && r.top <= cr.bottom + 700;
+          if (!sameColumn || !below) continue;
+          if (r.top < bestTop) {
+            best = el;
+            bestTop = r.top;
+          }
         }
-        // Prefer the deepest exact-text node so a click targets the item (or a
-        // child that bubbles to it), not an enclosing popup surface.
-        const leaves = matches.filter((el) => !matches.some((other) => other !== el && el.contains(other)));
-        for (const leaf of leaves) {
-          const r = leaf.getBoundingClientRect();
-          const horizontallyAssociated =
-            Math.abs(r.left + r.width / 2 - (cr.left + cr.width / 2)) <= Math.max(400, cr.width * 3);
-          const verticallyAssociated = r.top >= cr.top - 30 && r.top <= cr.bottom + 600;
-          if (!horizontallyAssociated || !verticallyAssociated) continue;
-
-          // A legitimate role-less dropdown item sits inside a popup subtree
-          // that was hidden (or absent) before the opener click. A changing
-          // ladder/quantity cell remains inside a previously-visible parent.
-          const firstSurface = leaf.parentElement;
-          if (!firstSurface || firstSurface === document.body || firstSurface.hasAttribute("data-bot-atm-visible-before")) {
-            continue;
-          }
-          let surface: HTMLElement = firstSurface;
-          while (surface.parentElement && surface.parentElement !== document.body) {
-            const parent: HTMLElement = surface.parentElement;
-            const pr = parent.getBoundingClientRect();
-            const ps = getComputedStyle(parent);
-            if (
-              parent.hasAttribute("data-bot-atm-visible-before") ||
-              parent.contains(control) ||
-              pr.width <= 0 ||
-              pr.height <= 0 ||
-              ps.display === "none" ||
-              ps.visibility === "hidden"
-            ) break;
-            surface = parent;
-          }
-
-          const itemTexts = new Set<string>();
-          const descendants = surface.querySelectorAll("*");
-          for (let i = 0; i < descendants.length; i++) {
-            const item = descendants[i] as HTMLElement;
-            const text = (item.textContent || "").replace(/\s+/g, " ").trim();
-            if (!text || text.length > 80) continue;
-            const ir = item.getBoundingClientRect();
-            const is = getComputedStyle(item);
-            if (ir.width <= 0 || ir.height <= 0 || is.display === "none" || is.visibility === "hidden") continue;
-            const hasTextChild = Array.from(item.children).some(
-              (child) => (child.textContent || "").replace(/\s+/g, " ").trim().length > 0,
-            );
-            if (!hasTextChild) itemTexts.add(text);
-          }
-          if (itemTexts.size < 2) continue;
-
-          surface.setAttribute("data-bot-atm-popup-surface", "1");
-          leaf.setAttribute("data-bot-atm-option", "1");
-          return true;
-        }
-        return false;
-      }, name)
+        if (!best) return false;
+        best.setAttribute("data-bot-atm-option", "1");
+        return true;
+      }, want)
       .catch(() => false);
     return marked ? this.page.locator("[data-bot-atm-option]") : null;
   }
 
-  private async waitForNewVisibleAtmOption(name: string, timeoutMs: number): Promise<Locator | null> {
-    const deadline = Date.now() + timeoutMs;
-    do {
-      const option = await this.findNewVisibleAtmOption(name);
-      if (option) return option;
-      if (Date.now() >= deadline) return null;
-      await this.p.waitForTimeout(75).catch(() => {});
-    } while (Date.now() < deadline);
-    return null;
+  /** The visible option texts in the ATM column — for a helpful miss message. */
+  private async dumpAtmOptions(): Promise<string[]> {
+    if (!this.page) return [];
+    return await this.page
+      .evaluate(() => {
+        const control = (document.querySelector('[data-testid="atm-strategy-select"]') ||
+          document.querySelector("[data-bot-atm-preset-control]")) as HTMLElement | null;
+        if (!control) return [];
+        const cr = control.getBoundingClientRect();
+        const cx = cr.left + cr.width / 2;
+        const seen: string[] = [];
+        const all = document.querySelectorAll("body *");
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLElement;
+          const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (!text || text.length > 40) continue;
+          const hasTextChild = Array.from(el.children).some(
+            (c) => (c.textContent || "").replace(/\s+/g, " ").trim().length > 0,
+          );
+          if (hasTextChild) continue;
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          if (r.width <= 0 || r.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          const sameColumn = cx >= r.left - 20 && cx <= r.right + 20;
+          const below = r.top >= cr.top - 4 && r.top <= cr.bottom + 700;
+          if (sameColumn && below && !seen.includes(text)) seen.push(text);
+        }
+        return seen.slice(0, 15);
+      })
+      .catch(() => []);
   }
 
   /**
