@@ -127,6 +127,34 @@ test("setQuantity finds Tradovate's 'Select value' form-control box, not the sea
   }
 });
 
+test("setQuantity skips the rewrite when the box already shows the wanted size", async (t) => {
+  const browser = await launch();
+  if (!browser) return t.skip("no Chromium available");
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+    await page.goto(fixture);
+    const b = fake(page);
+    // Put the wanted size in the box and spy for any click (the rewrite path
+    // starts by clicking into the box). lastQty is null so ONLY the on-screen
+    // read can short-circuit — and it's forced, proving force still skips a
+    // box that already reads correctly.
+    await page.evaluate(() => {
+      const input = document.querySelector("order-ticket")!.shadowRoot!
+        .querySelector('input[aria-label="Order Qty"]') as HTMLInputElement;
+      input.value = "7";
+      (window as unknown as { __qtyClicked: boolean }).__qtyClicked = false;
+      input.addEventListener("click", () => ((window as unknown as { __qtyClicked: boolean }).__qtyClicked = true));
+    });
+    await b.setQuantity(7, true);
+    assert.equal(await qtyValue(page), "7");
+    assert.equal(b.lastQty, 7);
+    const clicked = await page.evaluate(() => (window as unknown as { __qtyClicked: boolean }).__qtyClicked);
+    assert.equal(clicked, false, "a box already at the wanted size must not be rewritten");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("setQuantity rejects a bad size before touching the page", async (t) => {
   const browser = await launch();
   if (!browser) return t.skip("no Chromium available");

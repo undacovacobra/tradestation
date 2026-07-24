@@ -130,3 +130,20 @@ test("selectAtmPreset throws for a name that isn't in the dropdown", async (t) =
     await browser.close();
   }
 });
+
+test("selectAtmPreset works when the dropdown is ALREADY open (doesn't toggle it shut)", async (t) => {
+  const browser = await launch();
+  if (!browser) return t.skip("no Chromium available");
+  try {
+    const page = await browser.newPage({ viewport: { width: 900, height: 500 } });
+    await page.goto(fixture);
+    const b = fake(page);
+    // Leave the ATM list open, as if a prior action left it that way. The
+    // control is a toggle, so a naive click would close it — the old bug.
+    await page.evaluate(() => { (document.getElementById("atmlist") as HTMLElement).style.display = "block"; });
+    await b.selectAtmPreset("25", true);
+    assert.equal(await shown(page), "25", "should select 25 even though the dropdown started open");
+  } finally {
+    await browser.close();
+  }
+});

@@ -1026,11 +1026,20 @@ export class TradovateBrowser {
 
     let value: number | null = null;
     if (found) {
+      const box = this.p.locator("[data-bot-qty]").first();
+      // Already the wanted size? Don't rewrite it. Reading the box is far faster
+      // than click + select-all + type + verify, and re-typing the same number
+      // just wastes time on the entry path. This also covers a fresh account
+      // whose ticket already shows the right size (lastQty was cleared on switch).
+      const current = await box.evaluate((el) => Number((el as HTMLInputElement).value)).catch(() => null);
+      if (current === want) {
+        this.lastQty = want;
+        return;
+      }
       // Step 2: REPLACE the value the way a person does — click into the box,
       // select ALL of it, then type the new number OVER the selection. Typing
       // over a full selection overwrites it, so it can never append or add.
       // Commit with Tab (never Enter — Enter could place an order).
-      const box = this.p.locator("[data-bot-qty]").first();
       try {
         await box.click({ timeout: 3_000 });
         await box.press("ControlOrMeta+a");
@@ -1073,14 +1082,6 @@ export class TradovateBrowser {
       return;
     }
 
-    // Normalize any previous open-menu state, then remember exact-text matches
-    // that are already visible. Only a NEW match revealed by clicking the ATM
-    // control can be an ATM option; this prevents a numeric preset such as 25
-    // from ever matching quantity, ladder, or other order-ticket UI.
-    await p.keyboard.press("Escape").catch(() => {});
-    await p.waitForTimeout(100).catch(() => {});
-    await this.markAtmVisibleBaseline();
-
     // Tradovate has several nearby controls (quantity, ATM, DAY/GTC). Anchor
     // to the exact visible ATM label and accept only a preset-bearing select /
     // combobox / dropdown control on that same row, never a generic icon.
@@ -1089,32 +1090,21 @@ export class TradovateBrowser {
       await this.snapshot("atm-dropdown-not-found", true);
       throw new Error(`Couldn't find the ATM dropdown to pick preset "${want}".`);
     }
-    // Open the dropdown, tolerating a transient block: after several lanes close
-    // and re-arm at once the screen churns, and an overlay or a still-settling
-    // ticket can briefly intercept the click. Clear popups and retry once with a
-    // generous timeout (this is arm time, off the Buy/Sell click path).
-    try {
-      await control.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
-      await control.click({ timeout: 6_000 });
-    } catch {
-      await this.dismissPopups().catch(() => false);
-      await p.keyboard.press("Escape").catch(() => {});
-      await p.waitForTimeout(150).catch(() => {});
-      await this.markAtmVisibleBaseline();
-      control = (await this.findAtmPresetControl()) ?? control;
-      await control.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
-      // Force skips the "hold still / not covered" waits that a still-settling
-      // ticket fails during simultaneous multi-lane arming — the click resolves
-      // but never becomes actionable. We've already located the exact ATM
-      // control, so firing a real press straight at it is safe here (arm time,
-      // off the Buy/Sell path).
-      await control.click({ force: true, timeout: 6_000 });
-    }
+    // Get the list OPEN and find the option. The control is a TOGGLE, so if the
+    // dropdown is ALREADY open (e.g. left open from before) a plain click would
+    // close it — that was the "wasn't in the dropdown" error. ensureAtmOpen
+    // checks the real open-state and clicks only when needed; the loop re-opens
+    // if the list closes under churn while we look.
+    control = await this.ensureAtmOpen(control);
     let option = await this.findOpenAtmOption(want);
     const deadline = Date.now() + 2_500;
     while (!option && Date.now() < deadline) {
       await p.waitForTimeout(75).catch(() => {});
       option = await this.findOpenAtmOption(want);
+      if (!option && !(await this.atmDropdownOpen())) {
+        control = (await this.findAtmPresetControl()) ?? control;
+        control = await this.ensureAtmOpen(control);
+      }
     }
 
     if (!option) {
@@ -1217,23 +1207,65 @@ export class TradovateBrowser {
     return marked ? this.page.locator("[data-bot-atm-preset-control]") : null;
   }
 
-  /** Mark every visible element before the ATM popup opens. */
-  private async markAtmVisibleBaseline(): Promise<void> {
-    if (!this.page) return;
-    await this.page.evaluate(() => {
-      const all = document.querySelectorAll("body *");
-      for (let i = 0; i < all.length; i++) {
-        const el = all[i] as HTMLElement;
-        el.removeAttribute("data-bot-atm-visible-before");
-        el.removeAttribute("data-bot-atm-option");
-        el.removeAttribute("data-bot-atm-popup-surface");
-        const r = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        if (r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden") {
-          el.setAttribute("data-bot-atm-visible-before", "1");
+  /** Is the ATM dropdown open? True when 2+ option-like leaves sit in the
+   *  control's column strictly below it (a closed control shows none below). */
+  private async atmDropdownOpen(): Promise<boolean> {
+    if (!this.page) return false;
+    return await this.page
+      .evaluate(() => {
+        const control = (document.querySelector('[data-testid="atm-strategy-select"]') ||
+          document.querySelector("[data-bot-atm-preset-control]")) as HTMLElement | null;
+        if (!control) return false;
+        const cr = control.getBoundingClientRect();
+        const cx = cr.left + cr.width / 2;
+        let count = 0;
+        const all = document.querySelectorAll("body *");
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLElement;
+          if (control.contains(el) || el.contains(control)) continue;
+          const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (!text || text.length > 40) continue;
+          const hasTextChild = Array.from(el.children).some(
+            (c) => (c.textContent || "").replace(/\s+/g, " ").trim().length > 0,
+          );
+          if (hasTextChild) continue;
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          if (r.width <= 0 || r.height <= 0 || style.display === "none" || style.visibility === "hidden") continue;
+          const sameColumn = cx >= r.left - 20 && cx <= r.right + 20;
+          const strictlyBelow = r.top >= cr.bottom - 2;
+          if (sameColumn && strictlyBelow && ++count >= 2) return true;
         }
+        return false;
+      })
+      .catch(() => false);
+  }
+
+  /**
+   * Ensure the ATM dropdown is OPEN. The control is a toggle, so we never blindly
+   * click: if it's already open we leave it (a click would shut it — the cause of
+   * the "wasn't in the dropdown" error when it was pre-opened). Otherwise we click
+   * to open, tolerating a churned/still-settling ticket, and re-click if the list
+   * didn't appear. Arm time only, off the Buy/Sell path.
+   */
+  private async ensureAtmOpen(control: Locator): Promise<Locator> {
+    if (await this.atmDropdownOpen()) return control;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await control.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+        await control.click({ timeout: 5_000, force: attempt > 0 });
+      } catch {
+        await this.dismissPopups().catch(() => false);
+        control = (await this.findAtmPresetControl()) ?? control;
+        await control.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+        await control.click({ force: true, timeout: 5_000 }).catch(() => {});
       }
-    });
+      for (let i = 0; i < 15; i++) {
+        if (await this.atmDropdownOpen()) return control;
+        await this.p.waitForTimeout(60).catch(() => {});
+      }
+    }
+    return control;
   }
 
   /**
