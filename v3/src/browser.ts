@@ -1150,6 +1150,13 @@ export class TradovateBrowser {
   /** Locate the actual ATM preset control, not the quantity or DAY/GTC controls. */
   private async findAtmPresetControl(): Promise<Locator | null> {
     if (!this.page) return null;
+    // Tradovate's ATM strategy selector carries a stable test id. Prefer it: a
+    // self-re-resolving locator survives the order ticket re-mounting mid-arm
+    // (the heuristic marker below can be lost when React re-renders the row).
+    const byTestId = this.page.locator('[data-testid="atm-strategy-select"]').first();
+    if (await byTestId.count().then((n) => n > 0).catch(() => false)) {
+      return byTestId;
+    }
     const marked = await this.page
       .evaluate(() => {
         const old = document.querySelectorAll("[data-bot-atm-preset-control]");
