@@ -402,6 +402,38 @@ export class CredentialWorker {
     });
   }
 
+  /**
+   * Full no-order arm for a stress test: switch to the account, select its saved
+   * ATM preset, and set the size — exactly what a live entry does minus the
+   * Buy/Sell click, FORCED so nothing is skipped by a cache. Enqueued at entry
+   * priority so, fired for every account at once, it recreates the heaviest
+   * real churn. Places NO order.
+   */
+  async stressArm(group: Group, account: StoredAccount, quantity: number): Promise<EntryTiming> {
+    const requestedAt = Date.now();
+    if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Quantity must be a positive whole number.");
+    this.invalidateReady(group);
+    const kind: CredentialTaskKind = entryKind(group);
+    return this.enqueue(kind, async () => {
+      const status = this.adapter.status();
+      if (!status.connected || !status.loggedIn) {
+        throw new Error(`${this.definition.name} is not connected and logged in.`);
+      }
+      const queueWaitMs = Date.now() - requestedAt;
+      const executionStarted = Date.now();
+      if (this.executionMode === "dual-ticket") {
+        await this.adapter.armForLane!(group, account.tradovateLabel);
+        if (account.atmPreset.trim()) await this.adapter.selectLaneAtmPreset!(group, account.atmPreset);
+        await this.adapter.setLaneQuantity!(group, quantity);
+      } else {
+        await this.adapter.armFor(account.tradovateLabel);
+        if (account.atmPreset.trim()) await this.adapter.selectAtmPreset(account.atmPreset, true);
+        await this.adapter.setQuantity(quantity, true);
+      }
+      return { queueWaitMs, executionMs: Date.now() - executionStarted, totalMs: Date.now() - requestedAt };
+    });
+  }
+
   async connect(): Promise<AdapterStatus> {
     this.invalidateReady();
     this.capabilityInspection = undefined;

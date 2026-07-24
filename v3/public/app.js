@@ -767,6 +767,61 @@ $("#btn-testwebhook").addEventListener("click", () => {
   });
 });
 
+$("#btn-stress").addEventListener("click", () => {
+  if (!status) return;
+  showModal(`
+    <h2>🏋️ Stress test — all lanes at once</h2>
+    <p>Fires a full arm — <strong>switch account → set its ATM preset → set the size</strong> — for <strong>every enabled account in every lane, all at the same time</strong>. This recreates the heaviest churn a real trade storm could throw at it. <strong>No orders are placed.</strong></p>
+    <p style="color:var(--muted);font-size:13px">Run this only when everything is flat (no open trades). The browser must be connected and logged in. Each row shows whether that account set its account + ATM + size cleanly, and how long it took.</p>
+    <form id="stress-form" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0">
+      <label>Size <input id="stress-qty" type="number" min="1" step="1" value="20" style="width:80px;padding:8px;border-radius:8px;border:1px solid var(--line)"/></label>
+      <label>Rounds <input id="stress-rounds" type="number" min="1" max="5" step="1" value="1" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--line)"/></label>
+      <button class="btn primary" type="submit">Run stress test</button>
+    </form>
+    <div id="stress-result" style="font-size:14px;min-height:24px"></div>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>`);
+  const form = $("#stress-form");
+  const result = $("#stress-result");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const quantity = Math.floor(Number($("#stress-qty").value));
+    const rounds = Math.floor(Number($("#stress-rounds").value));
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      result.innerHTML = `<span style="color:var(--red)">Enter a whole-number size of 1 or more.</span>`;
+      return;
+    }
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    result.innerHTML = `Running the storm… <span style="color:var(--muted)">this takes a few seconds per account</span>`;
+    try {
+      const r = await api("/tests/stress-all", { quantity, rounds });
+      const rows = r.results || [];
+      const fails = rows.filter((x) => !x.ok);
+      let html = r.passed
+        ? `<div style="font-size:18px;color:var(--green);font-weight:600">✅ PASSED — all ${rows.length} arms set account + ATM + size cleanly.</div>`
+        : `<div style="font-size:18px;color:var(--red);font-weight:600">⚠️ ${fails.length} of ${rows.length} arms failed.</div>`;
+      html += `<div style="color:var(--muted);font-size:13px;margin:4px 0 10px">Total ${r.totalMs}ms · slowest single arm ${r.slowestMs}ms · ${r.rounds} round(s) · no orders placed.</div>`;
+      html += `<div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px"><table style="width:100%;font-size:12px;border-collapse:collapse">`;
+      html += `<tr style="text-align:left;color:var(--muted)"><th style="padding:4px 8px">Lane</th><th style="padding:4px 8px">Account</th><th style="padding:4px 8px">Result</th><th style="padding:4px 8px">ms</th></tr>`;
+      for (const x of rows) {
+        const tag = stageInfo(x.group).tag;
+        const res = x.ok
+          ? `<span style="color:var(--green)">✅ ok</span>`
+          : `<span style="color:var(--red)">⚠️ ${esc(x.error || "failed")}</span>`;
+        html += `<tr style="border-top:1px solid var(--line)"><td style="padding:4px 8px">${esc(tag)}</td><td style="padding:4px 8px">${esc(x.account)}</td><td style="padding:4px 8px">${res}</td><td style="padding:4px 8px">${x.ms ?? "—"}</td></tr>`;
+      }
+      html += `</table></div>`;
+      result.innerHTML = html;
+    } catch (err) {
+      result.innerHTML = `<span style="color:var(--red)">⚠️ ${esc(err.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+      lastStatusJson = "";
+      refresh();
+    }
+  });
+});
+
 $("#btn-tunnel").addEventListener("click", () => {
   if (!status) return;
   const on = (status.tunnel || {}).state === "on";

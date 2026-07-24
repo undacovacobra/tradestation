@@ -1346,6 +1346,73 @@ api.post("/tests/simultaneous", async (req, res) => {
   }
 });
 
+/**
+ * Worst-case, no-order stress test: for EVERY enabled account in EVERY lane,
+ * fire a full arm (switch account -> select its ATM preset -> set the size) all
+ * at once, optionally for several rounds. This recreates the heaviest real
+ * churn — the exact conditions that broke the ATM/size setting — WITHOUT placing
+ * any orders, and reports per-account pass/fail with timings.
+ */
+api.post("/tests/stress-all", async (req, res) => {
+  const quantity = Math.max(1, Math.floor(Number(req.body?.quantity) || 20));
+  const rounds = Math.min(5, Math.max(1, Math.floor(Number(req.body?.rounds) || 1)));
+
+  const openLanes = currentLanes().filter((lane) => !ensureLaneRotation(lane).isFlat);
+  if (openLanes.length > 0) {
+    return res.status(409).json({
+      ok: false,
+      error: "A trade is open right now — the stress test switches accounts, so run it only when everything is flat.",
+    });
+  }
+
+  const targets: Array<{ lane: CredentialLane; account: StoredAccount; worker: LoginWorker }> = [];
+  for (const lane of currentLanes()) {
+    for (const account of accountsForLane(lane)) {
+      const worker = sessions.get(account.loginId);
+      if (worker) targets.push({ lane, account, worker });
+    }
+  }
+  if (targets.length === 0) {
+    return res.status(400).json({ ok: false, error: "No enabled accounts to test. Add or enable accounts first." });
+  }
+  if (!targets.some((t) => t.worker.status().loggedIn)) {
+    return res.status(400).json({ ok: false, error: "Connect the browser and log into Tradovate first." });
+  }
+
+  pushEvent("info", `🏋️ Stress test starting: ${targets.length} account${targets.length === 1 ? "" : "s"} across all lanes, ${rounds} round${rounds === 1 ? "" : "s"}, size ${quantity} — no orders will be placed.`);
+  const startedAll = Date.now();
+  type RowResult = { lane: string; group: Group; account: string; ok: boolean; ms?: number; error?: string };
+  const results: RowResult[] = [];
+  for (let round = 1; round <= rounds; round++) {
+    const settled = await Promise.allSettled(
+      targets.map(async ({ lane, account, worker }) => {
+        const started = Date.now();
+        try {
+          const timing = await worker.stressArm(lane.stage, account, quantity);
+          return { lane: lane.key, group: lane.stage, account: account.name, ok: true, ms: timing.totalMs } as RowResult;
+        } catch (error) {
+          return { lane: lane.key, group: lane.stage, account: account.name, ok: false, ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) } as RowResult;
+        }
+      }),
+    );
+    for (const s of settled) if (s.status === "fulfilled") results.push(s.value);
+  }
+
+  const failures = results.filter((r) => !r.ok);
+  const totalMs = Date.now() - startedAll;
+  const slowest = results.reduce((max, r) => Math.max(max, r.ms ?? 0), 0);
+  if (failures.length === 0) {
+    pushEvent("info", `🏋️ Stress test PASSED: all ${results.length} arms set account + ATM + size cleanly in ${totalMs}ms (slowest ${slowest}ms). No orders placed.`);
+  } else {
+    pushEvent("warn", `🏋️ Stress test found ${failures.length} of ${results.length} arms failed: ${failures.map((f) => `${f.account} (${f.error})`).slice(0, 6).join("; ")}`);
+  }
+  // Re-arm the real rotation so the bot is left ready after all the churn.
+  for (const lane of currentLanes()) armLane(lane);
+  // Always 200 for a completed run (ok:true) so the per-account table renders;
+  // `passed` says whether every arm succeeded. Pre-run guards above still error.
+  return res.json({ ok: true, passed: failures.length === 0, placedTrade: false, rounds, quantity, totalMs, slowestMs: slowest, results });
+});
+
 api.post("/browser/connect", async (req, res) => {
   const worker = requestedWorker(req.body?.loginId);
   if (!worker) return res.status(404).json({ ok: false, error: "Unknown login" });
