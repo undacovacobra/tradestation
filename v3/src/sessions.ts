@@ -37,7 +37,7 @@ export interface TradingSessionAdapter {
   readSelectedEquity(): Promise<number | null>;
   readSelectedPosition(): Promise<BrokerPosition>;
   diagnosePosition?(): Promise<{ position: BrokerPosition; nearby: Array<Record<string, string>> }>;
-  selectAtmPreset(name: string): Promise<void>;
+  selectAtmPreset(name: string, force?: boolean): Promise<void>;
   setQuantity(quantity: number, force?: boolean): Promise<void>;
   clickOrder(action: "buy" | "sell", label: string): Promise<void>;
   clickExit(label: string): Promise<void>;
@@ -424,7 +424,7 @@ export class CredentialWorker {
   }
   disconnect(): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.disconnect()); }
   discoverAccounts(): Promise<string[]> { return this.enqueue("diagnostic", () => this.adapter.discoverAccounts()); }
-  testAtmPreset(name: string): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.selectAtmPreset(name)); }
+  testAtmPreset(name: string): Promise<void> { this.invalidateReady(); return this.enqueue("diagnostic", () => this.adapter.selectAtmPreset(name, true)); }
   testQuantity(quantity: number): Promise<void> { return this.enqueue("diagnostic", () => this.adapter.setQuantity(quantity, true)); }
   inspectFields(): Promise<Array<Record<string, string>>> { return this.enqueue("diagnostic", () => this.adapter.inspectFields?.() ?? Promise.resolve([])); }
   async close(group: Group, label: string): Promise<void> {
@@ -539,7 +539,7 @@ export class TradovateSessionAdapter implements TradingSessionAdapter {
   readSelectedEquity() { return this.browser.readSelectedEquity(); }
   readSelectedPosition() { return this.browser.readSelectedPosition(); }
   diagnosePosition() { return this.browser.diagnosePosition(); }
-  selectAtmPreset(name: string) { return this.browser.selectAtmPreset(name); }
+  selectAtmPreset(name: string, force = false) { return this.browser.selectAtmPreset(name, force); }
   setQuantity(quantity: number, force = false) { return this.browser.setQuantity(quantity, force); }
   clickOrder(action: "buy" | "sell", label: string) { return this.browser.clickOrder(action, label); }
   clickExit(label: string) { return this.browser.clickExit(label); }

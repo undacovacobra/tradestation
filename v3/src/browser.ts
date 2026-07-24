@@ -413,6 +413,7 @@ export class TradovateBrowser {
     if (current === label) {
       this.currentAccount = label;
       this.lastQty = null; // new account — ticket size unknown, re-set on next order
+      this.lastPreset = null; // and its ATM preset — per-account, must be re-set
       return;
     }
     log.info(`Switching active account to ${label}`);
@@ -439,6 +440,7 @@ export class TradovateBrowser {
         if (lastObserved === label) {
           this.currentAccount = label;
           this.lastQty = null; // new account — ticket size unknown, re-set on next order
+          this.lastPreset = null; // and its ATM preset — per-account, must be re-set
           return;
         }
         this.currentAccount = null;
